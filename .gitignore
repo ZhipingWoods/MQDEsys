@@ -26,3 +26,6 @@ credentials
 .DS_Store
 *.so
 *.dylib
+runs/
+web/node_modules/
+web/dist/

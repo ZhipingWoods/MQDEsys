@@ -9,6 +9,7 @@
 
 #include "mqde/common/log.h"
 #include "mqde/estimator/estimator.h"
+#include "mqde/server/server.h"
 #include "mqde_probe.h"
 
 namespace {
@@ -230,6 +231,19 @@ int main(int argc, char** argv) {
   est->add_option("--util", ea.util, "usable fraction of device memory");
   est->add_option("--also-quantize", ea.extra, "extra modalities to quantize, e.g. action");
 
+  auto* serve = app.add_subcommand("serve", "start the REST/SSE API server (+ web UI)");
+  mqde::server::ServerOptions so;
+  std::string gpus;
+  std::vector<std::string> allow;
+  serve->add_option("--host", so.host, "bind address (default loopback; use ssh -L for remote access)");
+  serve->add_option("--port", so.port);
+  serve->add_option("--runs", so.runs_dir, "job directory");
+  serve->add_option("--web", so.web_dir, "built frontend directory (web/dist)");
+  serve->add_option("--repo", so.repo_root, "repository root (python/ and data/)")->required();
+  serve->add_option("--python", so.python, "python executable for the executor");
+  serve->add_option("--gpus", gpus, "GPU pool for jobs, e.g. 2,3");
+  serve->add_option("--allow", allow, "allowed root for model/dataset paths (repeatable)");
+
   auto* recipes = app.add_subcommand("recipes", "list quantization recipes");
   auto* hardware = app.add_subcommand("hardware", "list hardware profiles");
 
@@ -238,6 +252,13 @@ int main(int argc, char** argv) {
   ea.json = json;
 
   if (*probe) return cmd_probe(json);
+  if (*serve) {
+    mqde::log::init(log_level == "warn" ? "info" : log_level);
+    for (auto g : parse_list(gpus)) so.gpus.push_back(static_cast<int>(g));
+    so.allowed_roots = allow;
+    auto r = mqde::server::serve(so);
+    return r ? 0 : fail(r.error());
+  }
   if (*inspect) return cmd_inspect(model_path, json, with_tensors);
   if (*est) return cmd_estimate(ea);
   if (*recipes) return cmd_list("recipes", json);

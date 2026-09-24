@@ -1,8 +1,8 @@
 find_package(nlohmann_json 3.11 REQUIRED)
 find_package(yaml-cpp REQUIRED)
-find_package(spdlog REQUIRED)
 find_package(fmt REQUIRED)
 find_package(CLI11 REQUIRED)
+find_package(httplib REQUIRED)
 
 # ---- probe (pure C99, vendor libraries are dlopen'ed at runtime) ----
 add_library(mqde_probe STATIC probe_c/src/probe.c)
@@ -12,7 +12,7 @@ target_link_libraries(mqde_probe PRIVATE ${CMAKE_DL_LIBS})
 # ---- common ----
 add_library(mqde_common STATIC src/common/log.cpp src/common/config.cpp)
 target_include_directories(mqde_common PUBLIC include)
-target_link_libraries(mqde_common PUBLIC nlohmann_json::nlohmann_json yaml-cpp::yaml-cpp spdlog::spdlog fmt::fmt)
+target_link_libraries(mqde_common PUBLIC nlohmann_json::nlohmann_json yaml-cpp::yaml-cpp fmt::fmt)
 target_compile_definitions(mqde_common PUBLIC MQDE_DEFAULT_DATA_DIR="${MQDE_DATA_DIR}"
                                               MQDE_VERSION="${PROJECT_VERSION}")
 
@@ -32,9 +32,13 @@ add_library(mqde_estimator STATIC src/estimator/recipe.cpp src/estimator/hardwar
                                   src/estimator/estimator.cpp)
 target_link_libraries(mqde_estimator PUBLIC mqde_modelspec mqde_quant)
 
+# ---- server (REST + SSE, job runner) ----
+add_library(mqde_server STATIC src/server/server.cpp src/server/job_runner.cpp)
+target_link_libraries(mqde_server PUBLIC mqde_estimator mqde_probe PRIVATE httplib::httplib)
+
 # ---- CLI ----
 add_executable(mqde apps/mqde_cli/main.cpp)
-target_link_libraries(mqde PRIVATE mqde_estimator mqde_probe CLI11::CLI11)
+target_link_libraries(mqde PRIVATE mqde_server mqde_estimator mqde_probe CLI11::CLI11)
 set_target_properties(mqde PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # ---- Python extension mqde._core ----

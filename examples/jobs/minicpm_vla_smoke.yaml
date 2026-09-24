@@ -1,0 +1,13 @@
+apiVersion: mqde/v1
+kind: Job
+metadata: {name: minicpm-vla-smoke}
+model:
+  source: local
+  path: /cache/wuzhiping/hub/MiniCPM-RobotManip
+  modality: vla
+quant:
+  recipe: [w4a16]
+calibration: {dataset: synthetic, n_samples: 4}
+evaluation: {dataset: synthetic, n_samples: 4, concurrency: [1, 8], attribution: true}
+deploy: {hardware: nvidia/rtx4090, device: "cuda:0"}
+output_dir: runs
