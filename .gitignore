@@ -1,0 +1,26 @@
+# build
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+web/node_modules/
+web/dist/
+compile_commands.json
+# runtime outputs
+runs/
+.mqde/
+# large / sensitive files never go into git
+*.safetensors
+*.gguf
+*.bin
+*.pt
+*.pth
+*.npz
+!data/golden/**/*.npz
+credentials
+.env
+.DS_Store
