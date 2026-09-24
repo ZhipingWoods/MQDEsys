@@ -1,0 +1,8 @@
+name: W4A16
+description: 4-bit integer weights (per-group), 16-bit activations. Production default for memory-bound decoding.
+maturity: production
+default_algorithm: gptq
+modalities: [vision, language]      # components with these modalities are quantized; others keep precision
+weight: {format: int, bits: 4, symmetric: false, granularity: per_group, group_size: 128, calib: mse}
+act: {format: none}
+kv: {format: none}

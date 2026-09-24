@@ -1,0 +1,7 @@
+# PyTorch eager (Hugging Face transformers) runtime, used for fake-quant evaluation.
+id: hf_transformers
+runtime_overhead_bytes: 536870912   # CUDA context + cuBLAS workspace (invisible to torch.cuda.max_memory_allocated)
+allocator_factor: 1.05              # caching-allocator fragmentation headroom
+# Efficiency coefficients for the roofline floor; refined later by measured feedback (stage S15).
+eta_bw: 0.6
+mfu: 0.35

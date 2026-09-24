@@ -1,0 +1,56 @@
+# Architecture template: MiniCPM-RobotManip (MiniCPM-V 4.6 VLM + flow-matching DiT action head).
+# Shared by the C++ ModelSpec/estimator and the Python model adapter (python/mqde/models).
+family: minicpm_vla
+modality: vla
+match:
+  model_type: [minicpm_vla]
+
+# Where the sub-configs live inside config.json (list = JSON path).
+config_paths:
+  text: [vlm_config, text_config]
+  vision: [vlm_config, vision_config]
+  root_vlm: [vlm_config]
+
+# Visual tokens per image slice after MiniCPM-V 4.6 compression:
+# (448/14)^2 = 1024 patches -> 16x downsample -> 64 tokens.
+tokens_per_image: 64
+
+# Action head (DiT) runtime shape; values are read from config.json when present.
+action_head:
+  horizon_key: action_horizon
+  steps_key: num_inference_timesteps
+  num_query_tokens: 32          # future_tokens in action_head.py
+
+# Components in match order: the first prefix that matches a tensor name wins.
+components:
+  - name: vision
+    modality: vision
+    prefix: vlm.model.vision_tower.
+    block_regex: 'encoder\.layers\.(\d+)\.'
+  - name: merger
+    modality: vision
+    prefix: vlm.model.merger.
+  - name: language
+    modality: language
+    prefix: vlm.model.language_model.
+    block_regex: 'layers\.(\d+)\.'
+  - name: lm_head
+    modality: language
+    prefix: vlm.lm_head.
+  - name: action_head
+    modality: action
+    prefix: action_head.
+    block_regex: 'transformer_blocks\.(\d+)\.'
+
+# Tensors that stay in their original precision by default (regex, searched in the full name).
+# Only 2-D "*.weight" tensors are quantization candidates in the first place.
+default_keep_fp:
+  - 'embed_tokens'
+  - 'lm_head'
+  - 'patch_embedding'
+  - 'position_embedding'
+  - 'future_tokens'
+  - 'linear_attn\.in_proj_[ab]\.'   # 16-row gate projections of GatedDeltaNet: tiny and sensitive
+  - 'timestep_encoder'
+  - 'norm1\.linear'                 # adaLN modulation in the DiT
+  - 'proj_out_1'

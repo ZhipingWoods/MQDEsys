@@ -24,3 +24,5 @@ runs/
 credentials
 .env
 .DS_Store
+*.so
+*.dylib

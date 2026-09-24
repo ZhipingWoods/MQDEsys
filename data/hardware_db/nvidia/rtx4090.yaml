@@ -1,0 +1,11 @@
+id: nvidia/rtx4090
+vendor: nvidia
+name: GeForce RTX 4090
+arch: sm_89
+match_names: ["RTX 4090"]
+mem_bytes: 25757220864          # 24564 MiB as reported by NVML
+mem_bw_gbps: 1008
+# Dense tensor-core peak TFLOPS (FP32 accumulate where applicable)
+peak_tflops: {fp32: 82.6, bf16: 165.2, fp16: 165.2, fp8: 330.3, int8: 660.6, int4: 1321.2}
+native_formats: [bf16, fp16, fp8_e4m3, fp8_e5m2, int8, int4]
+source: https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf

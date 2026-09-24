@@ -1,0 +1,8 @@
+name: W2A16
+description: 2-bit integer weights (small groups), 16-bit activations. Experimental.
+maturity: experimental
+default_algorithm: gptq
+modalities: [vision, language]
+weight: {format: int, bits: 2, symmetric: false, granularity: per_group, group_size: 64, calib: mse}
+act: {format: none}
+kv: {format: none}

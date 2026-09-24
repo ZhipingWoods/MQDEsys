@@ -1,0 +1,8 @@
+name: FP8
+description: FP8 E4M3 weights (per-channel) and activations (dynamic per-token). Needs sm_89+ / MI300 for native kernels.
+maturity: production
+default_algorithm: rtn
+modalities: [vision, language]
+weight: {format: fp8_e4m3, bits: 8, granularity: per_channel, calib: minmax}
+act: {format: fp8_e4m3, bits: 8, granularity: per_token, dynamic: true}
+kv: {format: none}

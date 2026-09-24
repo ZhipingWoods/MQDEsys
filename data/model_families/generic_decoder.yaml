@@ -1,0 +1,39 @@
+# Fallback template for Hugging Face decoder-only / simple VLM checkpoints.
+# Used when no other family matches config.json's model_type.
+family: generic_decoder
+modality: llm
+match:
+  model_type: []
+
+config_paths:
+  text: [text_config]
+  vision: [vision_config]
+
+tokens_per_image: 0
+
+components:
+  - name: vision
+    modality: vision
+    prefix: visual.
+    block_regex: 'blocks\.(\d+)\.'
+  - name: vision
+    modality: vision
+    prefix: model.vision_tower.
+    block_regex: 'layers\.(\d+)\.'
+  - name: language
+    modality: language
+    prefix: model.language_model.
+    block_regex: 'layers\.(\d+)\.'
+  - name: language
+    modality: language
+    prefix: model.
+    block_regex: 'layers\.(\d+)\.'
+  - name: lm_head
+    modality: language
+    prefix: lm_head.
+
+default_keep_fp:
+  - 'embed_tokens'
+  - 'lm_head'
+  - 'patch_embed'
+  - 'position_embedding'

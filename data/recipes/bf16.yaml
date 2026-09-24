@@ -1,0 +1,8 @@
+name: BF16
+description: No quantization (baseline).
+maturity: production
+default_algorithm: none
+modalities: []
+weight: {format: none}
+act: {format: none}
+kv: {format: none}

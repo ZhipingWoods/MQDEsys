@@ -1,0 +1,10 @@
+id: nvidia/a100-80g
+vendor: nvidia
+name: A100-SXM4-80GB
+arch: sm_80
+match_names: ["A100-SXM4-80GB", "A100 80GB"]
+mem_bytes: 85899345920
+mem_bw_gbps: 2039
+peak_tflops: {fp32: 19.5, bf16: 312, fp16: 312, int8: 624, int4: 1248}
+native_formats: [bf16, fp16, int8, int4]
+source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet-us-nvidia-1758950-r4-web.pdf

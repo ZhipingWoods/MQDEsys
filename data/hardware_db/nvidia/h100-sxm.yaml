@@ -1,0 +1,10 @@
+id: nvidia/h100-sxm
+vendor: nvidia
+name: H100 SXM5 80GB
+arch: sm_90
+match_names: ["H100 80GB HBM3", "H100 SXM"]
+mem_bytes: 85899345920
+mem_bw_gbps: 3350
+peak_tflops: {fp32: 67, bf16: 989, fp16: 989, fp8: 1979, int8: 1979}
+native_formats: [bf16, fp16, fp8_e4m3, fp8_e5m2, int8]
+source: https://www.nvidia.com/en-us/data-center/h100/
