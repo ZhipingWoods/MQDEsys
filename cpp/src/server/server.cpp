@@ -446,7 +446,11 @@ Result<void> serve(const ServerOptions& o) {
     auto ids = estimator::list_data_entries("hardware_db");
     if (!ids) return send_error(res, ids.error());
     const auto r = fit_request(*body);
+
+    // Collect all per-hardware rows.
     Json rows = Json::array();
+    std::optional<Json> min_hw, rec_hw;
+    double best_score = -1;
     for (const auto& id : *ids) {
       Json b = *body;
       b["hardware"] = id;
@@ -462,8 +466,94 @@ Result<void> serve(const ServerOptions& o) {
       j["hardware"] = id;
       j["system"] = fit::to_json(*sys);
       rows.push_back(j);
+
+      // Minimum hardware: first row that isn't TooTight.
+      if (!min_hw && f->fit_level != fit::FitLevel::kTooTight)
+        min_hw = j;
+      // Recommended hardware: highest score.
+      if (f->score > best_score) { best_score = f->score; rec_hw = j; }
     }
-    send_json(res, {{"model", path}, {"rows", rows}});
+
+    // Run paths for the requested hardware: try all run modes for the chosen quant.
+    Json run_paths = Json::array();
+    {
+      Json b = *body;
+      auto sys = system_from(b);
+      if (sys) {
+        const std::vector<std::string> modes = {"gpu", "tensor_parallel", "moe_offload", "cpu_offload", "cpu_only"};
+        for (const auto& mode : modes) {
+          fit::Request rr = r;
+          rr.force_run_mode = mode;
+          auto f = fit::analyze(*s, *sys, *fit_cfg, *be, rr);
+          if (!f || f->fit_level == fit::FitLevel::kTooTight) continue;
+          Json j;
+          j["run_mode"] = mode;
+          j["best_quant"] = f->best_quant;
+          j["memory_required_gb"] = f->memory_required_gb;
+          j["estimated_tps"] = f->estimated_tps;
+          j["speed_unit"] = f->speed_unit;
+          j["fit_level"] = fit::to_string(f->fit_level);
+          j["runtime"] = fit::to_string(f->runtime);
+          run_paths.push_back(j);
+        }
+      }
+    }
+
+    // Upgrades: for each hardware row, compare to the current hardware row.
+    Json upgrades = Json::array();
+    {
+      Json b = *body;
+      auto cur_sys = system_from(b);
+      if (cur_sys) {
+        auto cur_f = fit::analyze(*s, *cur_sys, *fit_cfg, *be, r);
+        if (cur_f) {
+          for (const auto& row : rows) {
+            const std::string hw_id = row["hardware"];
+            if (hw_id == body->value("hardware", "nvidia/rtx4090")) continue;
+            const double vram = row["system"].value("vram_gb", 0.0);
+            if (vram <= cur_sys->vram_gb * cur_sys->gpu_count) continue;  // not bigger
+            Json upg;
+            upg["hardware"] = hw_id;
+            upg["vram_delta_gb"] = vram - cur_sys->vram_gb * cur_sys->gpu_count;
+            upg["tps_delta"] = static_cast<double>(row["estimated_tps"]) - cur_f->estimated_tps;
+            upg["best_quant"] = row["best_quant"];
+            upgrades.push_back(upg);
+          }
+        }
+      }
+    }
+
+    // KV alternatives: vary kv quant (fp8 / q8) to show context/memory tradeoff.
+    Json kv_alts = Json::array();
+    {
+      Json b = *body;
+      auto sys = system_from(b);
+      if (sys) {
+        auto base_f = fit::analyze(*s, *sys, *fit_cfg, *be, r);
+        for (const auto& kv_fmt : std::vector<std::string>{"fp8", "q8_0"}) {
+          auto kv_recipe = estimator::load_recipe(kv_fmt);
+          if (!kv_recipe) continue;
+          estimator::RuntimeParams rt1;
+          rt1.concurrency = r.concurrency;
+          rt1.context_tokens = r.context > 0 ? r.context : 4096;
+          auto e = estimator::estimate(*s, *kv_recipe, *(estimator::load_hardware(body->value("hardware","nvidia/rtx4090"))), *be, rt1);
+          Json alt;
+          alt["kv_quant"] = kv_fmt;
+          alt["kv_bytes_per_token"] = static_cast<int64_t>(e.kv_bytes_per_token);
+          alt["memory_delta_gb"] = base_f
+              ? static_cast<double>(e.kv_bytes) / (1ull<<30) - static_cast<double>(base_f->detail.kv_bytes) / (1ull<<30)
+              : 0.0;
+          kv_alts.push_back(alt);
+        }
+      }
+    }
+
+    send_json(res, {{"model", path}, {"rows", rows},
+                    {"run_paths", run_paths},
+                    {"minimum_hardware", min_hw ? *min_hw : Json(nullptr)},
+                    {"recommended_hardware", rec_hw ? *rec_hw : Json(nullptr)},
+                    {"upgrades", upgrades},
+                    {"kv_alternatives", kv_alts}});
   });
 
   // ---------------- fit:concurrency ----------------
