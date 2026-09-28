@@ -173,6 +173,24 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-09-28 · T-R19 置信度阶梯与本地校准
+
+- **状态**：DONE（d9f51d8）
+- **本次完成**：
+  1. `Confidence` 枚举扩展为五级阶梯：`kMeasuredLocal > kMeasuredCommunity > kCalibrated > kEstimated > kUnsupported`。
+  2. `EstimateBasis` 结构体加入 `ModelFit`：记录 `method`（formula/calibrated/measured_local/measured_community）、`gpu_bandwidth_gbps`、`ddr_bandwidth_gbps`、`efficiency`、`assumed_context`、`local_calibration`（校准系数，默认 1.0）。
+  3. `apply_local_calibration(fits)`：锚点 = 稠密、≥1B、有本地实测；按 `speed_unit` 分组各自校准（tok/s 和 steps/s 不混用）；< 2 个锚点时 no-op；中位数比值截断 [0.05, 3.0]；幂等。
+  4. `to_json(ModelFit)` 导出 `estimate_basis` 对象。
+  5. `web/src/api.ts`：`ModelFit` 加 `estimate_basis` 类型。
+  6. `Fit.tsx`：详情面板展示估算依据（方法、带宽、效率、上下文、校准系数）；置信度徽标加 "本机校准"（accent 色）。
+  7. 7 个新测试（`fit_calibration.*`）：< 2 锚点 noop、双锚点校准、截断上下界、幂等性、MoE 排除、跨 unit 隔离、`estimate_basis` 字段非空。
+- **校验结果**：
+  - `ctest --preset dev` → 63/63 通过（较 T-R20 新增 7 个）。
+  - Web build（tsc + vite）→ 通过（修复了 CONF_LABEL 重复键）。
+- **VLA 注意**：steps/s 目前只有 1 个本地锚点（4.41 steps/s），< 2 个，校准 no-op。这是正确行为；等 ADR-0001 批准、快路径安装后，重跑 `mqde bench` 增加锚点。
+- **下一步**：T-R21 并发反解（`max_users` / `max_context_for`）。
+
+
 ### 2026-09-28 · T-R20 后续 + ADR-0001（VLA 上限标注 + flash-linear-attention 提案）
 
 - **状态**：DONE（8f07c25）

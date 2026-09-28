@@ -832,7 +832,7 @@
 | T-R16 | 前端深色控制台风格（token 化、主题切换） | refero / evalscope | L1 | DONE (7f2c8a7) |
 | **T-R17** | **评分常数校准**：质量分档、量化惩罚、家族/时效/任务加分、TTFT 返回 null | llmfit A.1–A.3, A.6 | L2 | DONE (2026-09-28, 39/39 ctest) |
 | **T-R18** | **MoE 两级速度模型** + 显存压力惩罚 | llmfit A.5 | L1 | DONE (2026-09-28, 45/45 ctest; 256 专家 MoE Tier-1) |
-| **T-R19** | **置信度阶梯 + 本地校准**（calibrated 档） | llmfit A.7 | L1 | TODO |
+| **T-R19** | **置信度阶梯 + 本地校准**（calibrated 档） | llmfit A.7 | L1 | DONE (2026-09-28, d9f51d8; 63/63 ctest) |
 | **T-R20** | **实测基线库**：格式、相同硬件匹配、中位数归并 | llmfit A.8 | L1 | DONE (2026-09-28, 56/56 ctest; 4090 实测 4.41 steps/s) |
 | **T-R21** | **并发反解**：max_users / max_context_for | llmfit A.9 | L1 | TODO |
 | **T-R22** | **完整 plan**：run paths、最低/推荐硬件、升级增量、KV 替代 | llmfit A.10 | L1 | TODO |
