@@ -105,6 +105,18 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 ---
 
 
+### 2026-09-28 · T-R17 评分校准 + T-R18 MoE 两级速度模型
+
+- **完成**：
+  - T-R17：质量分档改为 llmfit 的 30/45/60/75/82/89/95（严格小于，按活跃参数）；家族/时效/任务加分；W2 惩罚 −12；embedding 用途；多核 ×1.1；TTFT/prefill 在算力未知或纯 CPU 时为 null。
+  - T-R18：`moe_decomposition()`（Tier-1 输入）；GPU 模式 Tier-1 / Tier-2 + 显存压力惩罚；MoE 卸载模式 DDR + GPU 时间；`ModelFit` 新增 `moe_tier`、`moe_vram_pressure`、`moe_offloaded_gb`。常数在 `data/fit/fit.yaml` 的 `moe:` 段。
+- **校验**：ctest 45/45。4090 上 MiniCPM-o：233.5 → 129.8 tok/s（Tier-1，压力 ×0.856，手算一致）；两个稠密模型不变。
+- **已知偏差**：
+  - llmfit 的 Tier-1 把所有层都按全注意力计参数，MiniCPM-o 实际是线性/全注意力混合层，固定项略偏大。
+  - llmfit 把 embedding 和 lm_head 都记入固定项（其源码注释承认对大词表模型偏保守）。两处都与 llmfit 保持一致，未自行修正。
+  - 时效加分用文件 mtime，反映的是下载时间，T-R25 接入 HF 发布日期后修正。
+- **下一步**：T-R20 实测基线库。
+
 ### 2026-09-28 · 文档化 llmfit 对齐方案（无代码改动）
 
 - **完成**：

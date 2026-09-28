@@ -194,3 +194,103 @@ TEST(fit, many_cores_bonus_on_k_constant_path) {
   ASSERT_TRUE(few && many);
   EXPECT_NEAR(many->estimated_tps / few->estimated_tps, 1.1, 1e-9);
 }
+
+// ---- T-R18: MoE two-tier decode model (docs/REFERENCES.md A.5) ----
+
+namespace {
+// dense_llm geometry turned into a Mixtral-like MoE: 8 experts, top-2, expert FFN 14336.
+modelspec::ModelSpec moe_llm(double params_b, bool with_expert_width = true, const char* model_type = "mixtral") {
+  auto s = dense_llm(params_b);
+  s.model_type = model_type;
+  s.text.n_experts = 8;
+  s.text.experts_per_tok = 2;
+  s.text.moe_intermediate = with_expert_width ? 14336 : 0;
+  return s;
+}
+}  // namespace
+
+TEST(fit, moe_decomposition_matches_llmfit_formula) {
+  auto s = moe_llm(4.0);
+  auto d = moe_decomposition(s);
+  ASSERT_TRUE(d);
+  const double H = 4096, L = 32, hd = 128, V = 128256;
+  EXPECT_NEAR(d->active_ffn_b, L * 2 * 3 * H * 14336 / 1e9, 1e-9);
+  const double attn = L * (2 * 32 * hd * H + 2 * 8 * hd * H);
+  EXPECT_NEAR(d->fixed_b, (attn + L * 8 * H + 2 * V * H) / 1e9, 1e-9);
+  s.text.moe_intermediate = 0;
+  EXPECT_FALSE(moe_decomposition(s)) << "missing expert width -> Tier-2";
+  EXPECT_FALSE(moe_decomposition(dense_llm(4.0))) << "dense model has no decomposition";
+}
+
+TEST(fit, moe_tier1_speed_formula) {
+  auto c = load_fit_config();
+  ASSERT_TRUE(c);
+  auto s = moe_llm(4.0);  // BF16 ~8 GB on 24 GB -> util ~0.33, below the pressure threshold
+  auto f = analyze(s, gpu24(), *c, estimator::BackendProfile{}, Request{});
+  ASSERT_TRUE(f) << f.error().to_string();
+  ASSERT_EQ(f->run_mode, RunMode::kGpu);
+  EXPECT_EQ(f->moe_tier, 1);
+  EXPECT_DOUBLE_EQ(f->moe_vram_pressure, 1.0);
+  auto d = moe_decomposition(s);
+  const double want = 1008.0 / (d->active_ffn_b * 2.0 + d->fixed_b * 3.2);  // BF16 memory bpp 2.0, K=3.2
+  EXPECT_NEAR(f->estimated_tps, want, 1e-6);
+}
+
+TEST(fit, moe_tier2_overhead_table) {
+  auto c = load_fit_config();
+  ASSERT_TRUE(c);
+  const auto& mc = c->moe;
+  EXPECT_DOUBLE_EQ(moe_tier2_overhead(8, mc), 0.90);
+  EXPECT_DOUBLE_EQ(moe_tier2_overhead(16, mc), 0.85);
+  EXPECT_DOUBLE_EQ(moe_tier2_overhead(32, mc), 0.80);
+  EXPECT_DOUBLE_EQ(moe_tier2_overhead(60, mc), 0.70);
+  EXPECT_DOUBLE_EQ(moe_tier2_overhead(64, mc), 0.70);
+  EXPECT_DOUBLE_EQ(moe_tier2_overhead(128, mc), 0.40);
+  EXPECT_DOUBLE_EQ(moe_tier2_overhead(256, mc), 0.40);
+  EXPECT_DOUBLE_EQ(moe_tier2_overhead(0, mc), 0.60) << "unknown";
+}
+
+TEST(fit, moe_tier2_speed_formula_and_arch_calibration) {
+  auto c = load_fit_config();
+  ASSERT_TRUE(c);
+  // Generic arch: default efficiency 0.55, overhead by expert count (8 -> 0.90).
+  auto f = analyze(moe_llm(4.0, false), gpu24(), *c, estimator::BackendProfile{}, Request{});
+  ASSERT_TRUE(f);
+  EXPECT_EQ(f->moe_tier, 2);
+  EXPECT_NEAR(f->estimated_tps, 1008.0 / (f->active_params_b * 2.0) * 0.55 * 0.90, 1e-6);
+  // deepseek_v3: per-arch calibration (0.62, 0.70) replaces both factors.
+  auto g = analyze(moe_llm(4.0, false, "deepseek_v3"), gpu24(), *c, estimator::BackendProfile{}, Request{});
+  ASSERT_TRUE(g);
+  EXPECT_EQ(g->moe_tier, 2);
+  EXPECT_NEAR(g->estimated_tps, 1008.0 / (g->active_params_b * 2.0) * 0.62 * 0.70, 1e-6);
+}
+
+TEST(fit, moe_vram_pressure_boundaries) {
+  auto c = load_fit_config();
+  ASSERT_TRUE(c);
+  const auto& mc = c->moe;
+  const double inactive = 1.0 - 8.0 / 256.0;  // 256-expert top-8 MoE geometry
+  EXPECT_DOUBLE_EQ(moe_vram_pressure(0.59, 256, 8, mc), 1.0) << "below threshold";
+  EXPECT_DOUBLE_EQ(moe_vram_pressure(0.60, 256, 8, mc), 1.0) << "at threshold";
+  EXPECT_NEAR(moe_vram_pressure(0.80, 256, 8, mc), 1.0 - 0.20 * inactive, 1e-12);
+  EXPECT_NEAR(moe_vram_pressure(1.00, 256, 8, mc), 1.0 - 0.40 * inactive, 1e-12);
+  EXPECT_DOUBLE_EQ(moe_vram_pressure(1.20, 256, 8, mc), 1.0) << "util > 1 cannot be GPU mode";
+  EXPECT_NEAR(moe_vram_pressure(0.80, 0, 0, mc), 1.0 - 0.20 * 0.50, 1e-12) << "unknown experts -> default ratio";
+  // With the default threshold (0.60) the factor bottoms out at 1 - 0.4 * inactive >= 0.6, so the
+  // 0.30 floor is only reachable with a lower threshold.
+  MoeConfig low = mc;
+  low.vram_pressure_threshold = 0.0;
+  EXPECT_DOUBLE_EQ(moe_vram_pressure(0.95, 256, 8, low), 0.30);
+}
+
+TEST(fit, moe_pressure_applied_in_gpu_mode) {
+  auto c = load_fit_config();
+  ASSERT_TRUE(c);
+  auto f = analyze(moe_llm(8.0), gpu24(), *c, estimator::BackendProfile{}, Request{});  // BF16 ~16 GB -> util ~0.67
+  ASSERT_TRUE(f);
+  ASSERT_EQ(f->run_mode, RunMode::kGpu);
+  ASSERT_EQ(f->best_quant, "BF16");
+  const double util = f->params_b * 2.0 / 24.0;
+  EXPECT_NEAR(f->moe_vram_pressure, 1.0 - (util - 0.60) * 0.75, 1e-9);
+  EXPECT_LT(f->moe_vram_pressure, 1.0);
+}

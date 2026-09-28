@@ -145,3 +145,29 @@ reasoning_large_min_b: 13
 # Multiplier applied to the K-constant speed path when the host has many CPU cores (A.4).
 many_cores_threshold: 8
 many_cores_speed_bonus: 1.1
+
+# MoE two-tier decode model (docs/REFERENCES.md A.5; llmfit fit.rs:1360-1510 and 1720-1845).
+# Applies in GPU and MoE-offload run modes only (tensor-parallel MoE uses the dense formula, as llmfit).
+moe:
+  # Tier 1 (expert geometry known): tps = bw / (active_ffn_B * memory_bpp + fixed_B * fixed_bpp).
+  # No bandwidth-efficiency factor: fixed_bpp is a bandwidth-equivalent width that already absorbs it.
+  tier1_fixed_bpp: 3.2
+  tier1_fixed_bpp_by_arch: {gpt_oss: 1.43}
+  # Tier 2 (fallback): tps = bw / (active_B * memory_bpp) * efficiency * overhead.
+  tier2_by_arch:                  # [efficiency, overhead], matched by model_type prefix
+    gpt_oss: [0.72, 0.80]
+    deepseek_v3: [0.62, 0.70]
+    deepseek_v4: [0.62, 0.70]
+  tier2_overhead_by_experts:      # [max experts, overhead]; first row whose bound >= n_experts
+    - [8, 0.90]
+    - [16, 0.85]
+    - [32, 0.80]
+    - [64, 0.70]
+  tier2_overhead_many: 0.40       # more than the last bound (128+ experts)
+  tier2_overhead_unknown: 0.60
+  # VRAM cache-pressure penalty (GPU mode only): util = total_params * memory_bpp / VRAM.
+  #   util > 1.0 or util < threshold -> 1.0
+  #   else max(floor, 1 - (util - threshold) * inactive_ratio), inactive_ratio = 1 - active/n_experts
+  vram_pressure_threshold: 0.60
+  vram_pressure_floor: 0.30
+  default_expert_ratio: 0.50      # inactive_ratio when n_experts is unknown

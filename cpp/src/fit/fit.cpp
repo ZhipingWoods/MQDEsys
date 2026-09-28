@@ -90,7 +90,34 @@ double task_bonus_for(const modelspec::ModelSpec& spec, const std::string& use_c
   return 0;
 }
 
+// Longest model_type prefix match (e.g. "deepseek_v3" beats "deepseek").
+template <class V>
+const V* arch_lookup(const std::map<std::string, V>& m, const std::string& model_type) {
+  const std::string mt = lower(model_type);
+  const V* best = nullptr;
+  size_t best_len = 0;
+  for (const auto& [k, v] : m)
+    if (mt.starts_with(lower(k)) && k.size() > best_len) best = &v, best_len = k.size();
+  return best;
+}
+
 }  // namespace
+
+double moe_tier2_overhead(int64_t n_experts, const MoeConfig& mc) {
+  if (n_experts <= 0) return mc.tier2_overhead_unknown;
+  for (const auto& [bound, ov] : mc.tier2_overhead_by_experts)
+    if (static_cast<double>(n_experts) <= bound) return ov;
+  return mc.tier2_overhead_many;
+}
+
+double moe_vram_pressure(double util, int64_t n_experts, int64_t experts_per_tok, const MoeConfig& mc) {
+  // util > 1.0 cannot happen in GPU mode (routing sends such models elsewhere); llmfit returns 1.0.
+  if (util > 1.0 || util < mc.vram_pressure_threshold) return 1.0;
+  const double inactive = n_experts > 0 ? 1.0 - static_cast<double>(std::max<int64_t>(experts_per_tok, 1)) /
+                                                    static_cast<double>(n_experts)
+                                        : mc.default_expert_ratio;
+  return std::max(mc.vram_pressure_floor, 1.0 - (util - mc.vram_pressure_threshold) * inactive);
+}
 
 std::string_view to_string(FitLevel f) {
   switch (f) {
@@ -161,7 +188,40 @@ Result<FitConfig> load_fit_config() {
   c.reasoning_large_min_b = get_or<double>(j, "reasoning_large_min_b", c.reasoning_large_min_b);
   c.many_cores_threshold = get_or<int64_t>(j, "many_cores_threshold", c.many_cores_threshold);
   c.many_cores_speed_bonus = get_or<double>(j, "many_cores_speed_bonus", c.many_cores_speed_bonus);
+  if (auto m = j.find("moe"); m != j.end() && m->is_object()) {
+    auto& mc = c.moe;
+    mc.tier1_fixed_bpp = get_or<double>(*m, "tier1_fixed_bpp", mc.tier1_fixed_bpp);
+    mc.tier1_fixed_bpp_by_arch = read_map(*m, "tier1_fixed_bpp_by_arch");
+    if (auto t = m->find("tier2_by_arch"); t != m->end() && t->is_object())
+      for (auto e = t->begin(); e != t->end(); ++e)
+        if (e->is_array() && e->size() == 2) mc.tier2_by_arch[e.key()] = {(*e)[0].get<double>(), (*e)[1].get<double>()};
+    for (const auto& row : m->value("tier2_overhead_by_experts", Json::array()))
+      if (row.is_array() && row.size() == 2) mc.tier2_overhead_by_experts.emplace_back(row[0].get<double>(), row[1].get<double>());
+    mc.tier2_overhead_many = get_or<double>(*m, "tier2_overhead_many", mc.tier2_overhead_many);
+    mc.tier2_overhead_unknown = get_or<double>(*m, "tier2_overhead_unknown", mc.tier2_overhead_unknown);
+    mc.vram_pressure_threshold = get_or<double>(*m, "vram_pressure_threshold", mc.vram_pressure_threshold);
+    mc.vram_pressure_floor = get_or<double>(*m, "vram_pressure_floor", mc.vram_pressure_floor);
+    mc.default_expert_ratio = get_or<double>(*m, "default_expert_ratio", mc.default_expert_ratio);
+  }
   return c;
+}
+
+std::optional<MoeDecomposition> moe_decomposition(const modelspec::ModelSpec& spec) {
+  const auto& t = spec.text;
+  if (t.n_experts <= 0 || t.hidden <= 0 || t.n_layers <= 0 || t.experts_per_tok <= 0 || t.moe_intermediate <= 0 ||
+      t.vocab <= 0)
+    return std::nullopt;
+  const double hidden = static_cast<double>(t.hidden), layers = static_cast<double>(t.n_layers);
+  const double n_heads = static_cast<double>(t.n_heads > 0 ? t.n_heads : 1);
+  const double n_kv = static_cast<double>(t.n_kv_heads > 0 ? t.n_kv_heads : (t.n_heads > 0 ? t.n_heads : 1));
+  const double hd = t.head_dim > 0 ? static_cast<double>(t.head_dim) : hidden / n_heads;
+  // SwiGLU: gate + up + down per expert.
+  const double active_ffn = layers * static_cast<double>(t.experts_per_tok) * 3.0 * hidden * static_cast<double>(t.moe_intermediate);
+  const double attn = layers * (2.0 * n_heads * hd * hidden + 2.0 * n_kv * hd * hidden);  // Q + O, K + V
+  const double shared = layers * 3.0 * hidden * static_cast<double>(t.shared_expert_intermediate);
+  const double router = layers * static_cast<double>(t.n_experts) * hidden;
+  const double head_and_embed = 2.0 * static_cast<double>(t.vocab) * hidden;  // llmfit counts both
+  return MoeDecomposition{active_ffn / 1e9, (attn + shared + router + head_and_embed) / 1e9};
 }
 
 System system_from_profile(const estimator::HardwareProfile& hw, double ram_gb) {
@@ -251,6 +311,7 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
       std::string k = f.best_quant; std::transform(k.begin(), k.end(), k.begin(), ::tolower); return k; }(), 2.0) / kGiB;
     if (req_gb - expert_gb <= vram_avail * cfg.th_marginal && expert_gb <= sys.ram_gb * cfg.th_marginal) {
       f.run_mode = RunMode::kMoeOffload;
+      f.moe_offloaded_gb = expert_gb;
       pool = vram_avail + sys.ram_gb;
     } else f.run_mode = RunMode::kCpuOffload, pool = vram_avail + sys.ram_gb;
   } else if (sys.ram_gb > 0 && !sys.unified_memory) {
@@ -282,13 +343,43 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
     if (t_mem > 0 && t_cmp > 0 && f.run_mode != RunMode::kCpuOnly) f.ttft_ms = t * 1e3 / std::max(mode_factor, 1e-9);
   } else {
     if (sys.mem_bw_gbps > 0) {
-      f.estimated_tps = sys.mem_bw_gbps / std::max(1e-9, f.active_params_b * bpp) * cfg.bw_efficiency * mode_factor;
-      if (f.run_mode == RunMode::kCpuOffload || f.run_mode == RunMode::kMoeOffload) {
-        // Offloaded bytes stream from DDR (llmfit moe offload path).
-        const double gb_per_tok = f.active_params_b * bpp;
-        const double ddr = sys.ram_gb > 0 ? cfg.ddr_bw_gbps : 1e9;
-        const double t = gb_per_tok / ddr * 0.5 + gb_per_tok / (sys.mem_bw_gbps * cfg.bw_efficiency) * 0.5;
-        f.estimated_tps = 1.0 / std::max(1e-9, t) * mode_factor;
+      const double bw = sys.mem_bw_gbps;
+      const double mem_bpp = lookup(cfg.memory_bpp, qkey, 2.0);
+      if (f.is_moe && f.run_mode == RunMode::kMoeOffload) {
+        // llmfit fit.rs:1700: active experts are read from DDR by the CPU, then the GPU computes.
+        const double active_gb = f.active_params_b * bpp;
+        const double t = active_gb / cfg.ddr_bw_gbps + active_gb / (bw * cfg.bw_efficiency);
+        f.estimated_tps = std::max(0.1, 1.0 / std::max(1e-9, t) * mode_factor);
+      } else if (f.is_moe && f.run_mode == RunMode::kGpu) {
+        // VRAM cache-pressure penalty (llmfit fit.rs:1764): inactive experts crowd the L2 cache.
+        const auto& mc = cfg.moe;
+        const double vram = sys.vram_gb * std::max(1, sys.gpu_count);
+        if (vram > 0)
+          f.moe_vram_pressure =
+              moe_vram_pressure(f.params_b * mem_bpp / vram, spec.text.n_experts, spec.text.experts_per_tok, mc);
+        if (auto d = moe_decomposition(spec)) {
+          // Tier 1: scalable expert bytes + fixed bytes at a bandwidth-equivalent width (no efficiency factor).
+          const double* fb = arch_lookup(mc.tier1_fixed_bpp_by_arch, spec.model_type);
+          const double per_tok = d->active_ffn_b * mem_bpp + d->fixed_b * (fb ? *fb : mc.tier1_fixed_bpp);
+          f.estimated_tps = std::max(0.1, bw / std::max(1e-9, per_tok) * mode_factor * f.moe_vram_pressure);
+          f.moe_tier = 1;
+        } else {
+          // Tier 2: active params x memory bpp, corrected by per-architecture or expert-count calibration.
+          double eff = cfg.bw_efficiency, ov = moe_tier2_overhead(spec.text.n_experts, mc);
+          if (const auto* a = arch_lookup(mc.tier2_by_arch, spec.model_type)) eff = a->first, ov = a->second;
+          f.estimated_tps = std::max(
+              0.1, bw / std::max(1e-9, f.active_params_b * mem_bpp) * eff * ov * mode_factor * f.moe_vram_pressure);
+          f.moe_tier = 2;
+        }
+      } else {
+        f.estimated_tps = bw / std::max(1e-9, f.active_params_b * bpp) * cfg.bw_efficiency * mode_factor;
+        if (f.run_mode == RunMode::kCpuOffload) {
+          // Offloaded bytes stream from DDR (MQDEsys heuristic; llmfit has no dense CPU-offload split).
+          const double gb_per_tok = f.active_params_b * bpp;
+          const double ddr = sys.ram_gb > 0 ? cfg.ddr_bw_gbps : 1e9;
+          const double t = gb_per_tok / ddr * 0.5 + gb_per_tok / (bw * cfg.bw_efficiency) * 0.5;
+          f.estimated_tps = 1.0 / std::max(1e-9, t) * mode_factor;
+        }
       }
     } else {
       const double k = lookup(cfg.speed_k, sys.backend, 70);
@@ -330,8 +421,11 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
     f.notes.push_back(fmt::format("checkpoint is already quantized ({} {}); estimates re-quantize from logical params",
                                   spec.checkpoint_quant->method, spec.checkpoint_quant->algo));
   if (f.is_moe)
-    f.notes.push_back(fmt::format("MoE: {} experts, {} active; speed uses {:.2f}B active params", spec.text.n_experts,
-                                  spec.text.experts_per_tok, f.active_params_b));
+    f.notes.push_back(fmt::format("MoE: {} experts, {} active; speed uses {:.2f}B active params{}", spec.text.n_experts,
+                                  spec.text.experts_per_tok, f.active_params_b,
+                                  f.moe_tier == 1   ? fmt::format(" (Tier-1, VRAM pressure x{:.2f})", f.moe_vram_pressure)
+                                  : f.moe_tier == 2 ? fmt::format(" (Tier-2 fallback, VRAM pressure x{:.2f})", f.moe_vram_pressure)
+                                                    : ""));
   for (const auto& r : e.reasons)
     if (r.find("native kernel") != std::string::npos || r.find("natively") != std::string::npos) f.notes.push_back(r);
   (void)vram_total;
@@ -360,6 +454,9 @@ Json to_json(const ModelFit& f) {
           {"params_b", f.params_b},
           {"active_params_b", f.active_params_b},
           {"is_moe", f.is_moe},
+          {"moe_tier", f.moe_tier},
+          {"moe_vram_pressure", f.moe_vram_pressure},
+          {"moe_offloaded_gb", f.moe_offloaded_gb},
           {"best_quant", f.best_quant},
           {"fitting_quants", f.fitting_quants},
           {"run_mode", to_string(f.run_mode)},

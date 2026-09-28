@@ -27,6 +27,29 @@ struct UseCase {
   int64_t context_target = 4096;
 };
 
+// MoE two-tier decode model (docs/REFERENCES.md A.5).
+struct MoeConfig {
+  double tier1_fixed_bpp = 3.2;
+  std::map<std::string, double> tier1_fixed_bpp_by_arch;            // model_type prefix -> bpp
+  std::map<std::string, std::pair<double, double>> tier2_by_arch;   // prefix -> (efficiency, overhead)
+  std::vector<std::pair<double, double>> tier2_overhead_by_experts; // (max experts, overhead)
+  double tier2_overhead_many = 0.40, tier2_overhead_unknown = 0.60;
+  double vram_pressure_threshold = 0.60, vram_pressure_floor = 0.30, default_expert_ratio = 0.50;
+};
+
+// Per-token bandwidth decomposition of a MoE model (llmfit moe_bandwidth_decomposition), billions.
+struct MoeDecomposition {
+  double active_ffn_b = 0;  // routed experts actually read per token
+  double fixed_b = 0;       // attention + shared expert + router + lm_head + embedding
+};
+// nullopt unless the model is MoE and hidden/layers/top-k/expert width/vocab are all known.
+std::optional<MoeDecomposition> moe_decomposition(const modelspec::ModelSpec& spec);
+// Tier-2 overhead by expert count (n_experts <= 0 means unknown).
+double moe_tier2_overhead(int64_t n_experts, const MoeConfig& mc);
+// VRAM cache-pressure factor for GPU-mode MoE. util = total weights / VRAM.
+// 1.0 when util > 1.0 or util < threshold; else max(floor, 1 - (util - threshold) * inactive_ratio).
+double moe_vram_pressure(double util, int64_t n_experts, int64_t experts_per_tok, const MoeConfig& mc);
+
 struct FitConfig {
   std::map<std::string, double> memory_bpp, speed_bpp, quality_penalty, speed_k, quant_speed_mult, run_mode_factor;
   std::vector<std::string> quant_hierarchy;
@@ -44,6 +67,7 @@ struct FitConfig {
   // K-constant speed path bonus for many-core hosts (A.4).
   int64_t many_cores_threshold = 8;
   double many_cores_speed_bonus = 1.1;
+  MoeConfig moe;
 };
 
 Result<FitConfig> load_fit_config();  // data/fit/fit.yaml
@@ -98,6 +122,10 @@ struct ModelFit {
   double score = 0;
   int64_t context = 0;
   std::vector<std::string> notes;
+  // MoE speed path actually taken: 0 = not MoE / dense formula, 1 = Tier-1, 2 = Tier-2.
+  int moe_tier = 0;
+  double moe_vram_pressure = 1.0;  // cache-pressure factor applied (GPU mode), 1.0 = none
+  double moe_offloaded_gb = 0;     // expert weights placed in system RAM (MoE offload mode)
   estimator::Estimate detail;  // full memory breakdown for the chosen quant
 };
 

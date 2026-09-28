@@ -66,6 +66,8 @@ struct TextSpec {
   // Mixture-of-experts (0 = dense)
   int64_t n_experts = 0;
   int64_t experts_per_tok = 0;
+  int64_t moe_intermediate = 0;            // per-expert FFN width (moe_intermediate_size)
+  int64_t shared_expert_intermediate = 0;  // shared-expert FFN width, 0 = none
 };
 
 struct VisionSpec {

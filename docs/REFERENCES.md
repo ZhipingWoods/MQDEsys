@@ -174,7 +174,7 @@ Q8_0 / F16 / MXFP4 / 8-bit 0；Q6_K −1；Q5_K_M −2；Q4_K_M −5；Q3_K_M �
 
 DDR 带宽解析顺序：配置 → 环境变量 `LLMFIT_DDR_BANDWIDTH` → 实测 → 50 GB/s。
 
-## A.5 MoE 两级速度模型 **[待实现，T-R17]**
+## A.5 MoE 两级速度模型 **[已实现，T-R18：`cpp/src/fit/fit.cpp`，常数在 `data/fit/fit.yaml` 的 `moe:` 段]**
 
 我们当前只按 `active/total` 线性缩放，llmfit 分两级：
 

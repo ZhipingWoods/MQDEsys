@@ -45,6 +45,8 @@ TextSpec parse_text(const Json& t) {
   s.linear_state_dtype = get_or<std::string>(t, "mamba_ssm_dtype", "float32");
   s.n_experts = get_or<int64_t>(t, "num_experts", get_or<int64_t>(t, "n_routed_experts", get_or<int64_t>(t, "num_local_experts", 0)));
   s.experts_per_tok = get_or<int64_t>(t, "num_experts_per_tok", get_or<int64_t>(t, "moe_topk", 0));
+  s.moe_intermediate = get_or<int64_t>(t, "moe_intermediate_size", 0);
+  s.shared_expert_intermediate = get_or<int64_t>(t, "shared_expert_intermediate_size", 0);
   return s;
 }
 
@@ -251,7 +253,9 @@ Json to_json(const ModelSpec& s, bool include_tensors) {
                {"sliding_window", t.sliding_window},
                {"tie_word_embeddings", t.tie_word_embeddings},
                {"n_experts", t.n_experts},
-               {"experts_per_tok", t.experts_per_tok}};
+               {"experts_per_tok", t.experts_per_tok},
+               {"moe_intermediate", t.moe_intermediate},
+               {"shared_expert_intermediate", t.shared_expert_intermediate}};
   if (s.vision)
     j["vision"] = {{"n_layers", s.vision->n_layers},
                    {"hidden", s.vision->hidden},
