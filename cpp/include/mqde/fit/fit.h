@@ -36,6 +36,14 @@ struct FitConfig {
   double bw_efficiency = 0.55, prefill_util = 0.35, ddr_bw_gbps = 50;
   std::map<std::string, UseCase> use_cases;
   std::vector<std::pair<double, double>> quality_tiers;  // (upper bound B, score)
+  // Quality adjustments (see docs/REFERENCES.md A.1).
+  std::map<std::string, double> family_bonus;            // family substring -> bonus
+  std::vector<std::pair<double, double>> recency_bonus;  // (age months upper bound, bonus)
+  std::map<std::string, double> task_bonus;              // coding_name_match | reasoning_large | vision_multimodal
+  double reasoning_large_min_b = 13;
+  // K-constant speed path bonus for many-core hosts (A.4).
+  int64_t many_cores_threshold = 8;
+  double many_cores_speed_bonus = 1.1;
 };
 
 Result<FitConfig> load_fit_config();  // data/fit/fit.yaml
@@ -50,6 +58,7 @@ struct System {
   double ram_gb = 0;
   double mem_bw_gbps = 0;        // per GPU, 0 = unknown
   double peak_tflops_bf16 = 0;
+  int cpu_cores = 0;             // 0 = unknown (no many-core bonus)
   bool unified_memory = false;
   std::vector<std::string> native_formats;
 };
@@ -80,7 +89,9 @@ struct ModelFit {
   FitLevel fit_level = FitLevel::kTooTight;
   double memory_required_gb = 0, memory_available_gb = 0, utilization_pct = 0;
   double estimated_tps = 0;   // decode tok/s (LLM) or decision steps/s (VLA)
-  double prefill_tps = 0, ttft_ms = 0;
+  // Null when the hardware profile has no compute figure, or on CPU-only: llmfit reports no TTFT
+  // rather than a fabricated one (docs/REFERENCES.md A.6).
+  std::optional<double> prefill_tps, ttft_ms;
   std::string speed_unit = "tok/s";
   Confidence confidence = Confidence::kEstimated;
   ScoreComponents components;

@@ -211,6 +211,8 @@ int cmd_fit(const FitArgs& a) {
     for (const auto& d : probe_json())
       if (d["kind"] == "cpu") sys.ram_gb = d["mem_total_bytes"].get<double>() / (1024.0 * 1024.0 * 1024.0);
   }
+  for (const auto& d : probe_json())
+    if (d["kind"] == "cpu") sys.cpu_cores = d["compute_units"].get<int>();
   mqde::fit::Request req;
   req.use_case = a.use_case;
   req.context = a.context;

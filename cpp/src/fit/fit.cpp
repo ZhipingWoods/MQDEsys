@@ -1,7 +1,9 @@
 #include "mqde/fit/fit.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <filesystem>
 
 #include <fmt/ranges.h>
 
@@ -30,10 +32,62 @@ FitLevel level_for(double ratio, const FitConfig& c) {
   return FitLevel::kTooTight;
 }
 
+// Strict upper bounds, as llmfit (fit.rs:1969): "< 1B -> 30, < 3B -> 45, ...", so 1.0B lands in 45.
 double quality_base(double params_b, const FitConfig& c) {
   for (const auto& [ub, score] : c.quality_tiers)
-    if (params_b <= ub) return score;
+    if (params_b < ub) return score;
   return c.quality_tiers.empty() ? 60.0 : c.quality_tiers.back().second;
+}
+
+std::string lower(std::string s) {
+  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char ch) { return static_cast<char>(::tolower(ch)); });
+  return s;
+}
+
+// Family bonus: the LARGEST matching entry, not the sum — "MiniCPM-o" would otherwise collect
+// several overlapping keywords. Matched against family / model_type / path (lower-cased).
+double family_bonus_for(const modelspec::ModelSpec& spec, const FitConfig& c) {
+  const std::string hay = lower(spec.family) + "\n" + lower(spec.model_type) + "\n" + lower(spec.path);
+  double best = 0;
+  for (const auto& [key, bonus] : c.family_bonus)
+    if (hay.find(lower(key)) != std::string::npos) best = std::max(best, bonus);
+  return best;
+}
+
+// Local checkpoints carry no release date, so age comes from the newest mtime of config.json /
+// the model directory. Returns 0 when the path is unreadable (no bonus, never a penalty).
+double recency_bonus_for(const modelspec::ModelSpec& spec, const FitConfig& c) {
+  if (c.recency_bonus.empty() || spec.path.empty()) return 0;
+  std::error_code ec;
+  auto newest = std::filesystem::file_time_type::min();
+  for (const char* name : {"config.json", ""}) {
+    const auto p = name[0] ? std::filesystem::path(spec.path) / name : std::filesystem::path(spec.path);
+    const auto t = std::filesystem::last_write_time(p, ec);
+    if (!ec) newest = std::max(newest, t);
+  }
+  if (newest == std::filesystem::file_time_type::min()) return 0;
+  const auto age = std::filesystem::file_time_type::clock::now() - newest;
+  const double months = std::chrono::duration<double, std::ratio<2629746>>(age).count();  // mean Gregorian month
+  if (months < 0) return 0;
+  for (const auto& [ub, bonus] : c.recency_bonus)
+    if (months < ub) return bonus;
+  return 0;
+}
+
+// Heuristic task bonus (llmfit A.1); we have no per-model benchmark table yet, so only the
+// heuristic branch exists. Keyed off the resolved use case, not the model's own modality.
+double task_bonus_for(const modelspec::ModelSpec& spec, const std::string& use_case, double active_b,
+                      const FitConfig& c) {
+  const auto get = [&](const char* k) { return lookup(c.task_bonus, k, 0.0); };
+  if (use_case == "coding") {
+    const std::string hay = lower(spec.path) + "\n" + lower(spec.model_type);
+    for (const char* kw : {"coder", "coding", "code", "starcoder", "deepseek-v"})
+      if (hay.find(kw) != std::string::npos) return get("coding_name_match");
+    return 0;
+  }
+  if (use_case == "reasoning") return active_b >= c.reasoning_large_min_b ? get("reasoning_large") : 0;
+  if (use_case == "multimodal") return spec.vision ? get("vision_multimodal") : 0;
+  return 0;
 }
 
 }  // namespace
@@ -100,6 +154,13 @@ Result<FitConfig> load_fit_config() {
     }
   for (const auto& row : j.value("quality_tiers", Json::array()))
     if (row.is_array() && row.size() == 2) c.quality_tiers.emplace_back(row[0].get<double>(), row[1].get<double>());
+  c.family_bonus = read_map(j, "family_quality_bonus");
+  c.task_bonus = read_map(j, "task_quality_bonus");
+  for (const auto& row : j.value("recency_quality_bonus", Json::array()))
+    if (row.is_array() && row.size() == 2) c.recency_bonus.emplace_back(row[0].get<double>(), row[1].get<double>());
+  c.reasoning_large_min_b = get_or<double>(j, "reasoning_large_min_b", c.reasoning_large_min_b);
+  c.many_cores_threshold = get_or<int64_t>(j, "many_cores_threshold", c.many_cores_threshold);
+  c.many_cores_speed_bonus = get_or<double>(j, "many_cores_speed_bonus", c.many_cores_speed_bonus);
   return c;
 }
 
@@ -217,7 +278,8 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
     const double t_cmp = sys.peak_tflops_bf16 > 0 ? e.flops_per_step / (sys.peak_tflops_bf16 * 1e12 * cfg.prefill_util) : 0;
     const double t = std::max(t_mem, t_cmp);
     f.estimated_tps = t > 0 ? mode_factor / t : 0;
-    f.ttft_ms = t * 1e3 / std::max(mode_factor, 1e-9);
+    // A VLA step latency is only meaningful when both bandwidth and compute are known.
+    if (t_mem > 0 && t_cmp > 0 && f.run_mode != RunMode::kCpuOnly) f.ttft_ms = t * 1e3 / std::max(mode_factor, 1e-9);
   } else {
     if (sys.mem_bw_gbps > 0) {
       f.estimated_tps = sys.mem_bw_gbps / std::max(1e-9, f.active_params_b * bpp) * cfg.bw_efficiency * mode_factor;
@@ -231,11 +293,14 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
     } else {
       const double k = lookup(cfg.speed_k, sys.backend, 70);
       f.estimated_tps = k / std::max(1e-9, f.active_params_b) * lookup(cfg.quant_speed_mult, qkey, 1.0) * mode_factor;
+      if (sys.cpu_cores >= cfg.many_cores_threshold) f.estimated_tps *= cfg.many_cores_speed_bonus;
     }
     const int64_t ctx = e.context_tokens > 0 ? e.context_tokens : cfg.default_context;
-    if (sys.peak_tflops_bf16 > 0) {
-      f.prefill_tps = sys.peak_tflops_bf16 * 1e12 * cfg.prefill_util / (2.0 * f.active_params_b * 1e9);
-      f.ttft_ms = static_cast<double>(ctx) / f.prefill_tps * 1e3;
+    // llmfit A.6: null unless compute is known and we are not CPU-only.
+    if (sys.peak_tflops_bf16 > 0 && f.run_mode != RunMode::kCpuOnly) {
+      const double ptps = sys.peak_tflops_bf16 * 1e12 * cfg.prefill_util / (2.0 * f.active_params_b * 1e9);
+      f.prefill_tps = ptps;
+      f.ttft_ms = static_cast<double>(ctx) / ptps * 1e3;
     }
   }
   if (req.measured_tps > 0) {
@@ -251,7 +316,8 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
   const int64_t ctx_have = vla ? uc.context_target : std::max<int64_t>(spec.text.max_position_embeddings, e.context_tokens);
   f.components.context = ctx_have >= uc.context_target ? 100 : ctx_have >= uc.context_target / 2 ? 70 : 30;
   f.components.quality = std::clamp(quality_base(f.active_params_b, cfg) + lookup(cfg.quality_penalty, qkey, 0) +
-                                        (f.modality == uc.name || (uc.name == "multimodal" && spec.vision) ? 3.0 : 0.0),
+                                        family_bonus_for(spec, cfg) + recency_bonus_for(spec, cfg) +
+                                        task_bonus_for(spec, uc_name, f.active_params_b, cfg),
                                     0.0, 100.0);
   f.score = std::round((uc.w_quality * f.components.quality + uc.w_speed * f.components.speed +
                         uc.w_fit * f.components.fit + uc.w_context * f.components.context) * 10.0) / 10.0;
@@ -303,8 +369,8 @@ Json to_json(const ModelFit& f) {
           {"utilization_pct", f.utilization_pct},
           {"estimated_tps", f.estimated_tps},
           {"speed_unit", f.speed_unit},
-          {"prefill_tps", f.prefill_tps},
-          {"ttft_ms", f.ttft_ms},
+          {"prefill_tps", f.prefill_tps ? Json(*f.prefill_tps) : Json(nullptr)},
+          {"ttft_ms", f.ttft_ms ? Json(*f.ttft_ms) : Json(nullptr)},
           {"context", f.context},
           {"estimate_confidence", to_string(f.confidence)},
           {"score", f.score},

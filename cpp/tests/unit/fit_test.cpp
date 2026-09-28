@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include <gtest/gtest.h>
 
 #include "mqde/fit/fit.h"
@@ -123,4 +125,72 @@ TEST(fit, measured_speed_overrides_estimate) {
   ASSERT_TRUE(f);
   EXPECT_DOUBLE_EQ(f->estimated_tps, 123.0);
   EXPECT_EQ(f->confidence, Confidence::kMeasuredLocal);
+}
+
+// ---- T-R17: llmfit score calibration (docs/REFERENCES.md A.1-A.6) ----
+
+TEST(fit, quality_tiers_match_llmfit_strict_bounds) {
+  auto c = load_fit_config();
+  ASSERT_TRUE(c);
+  // (active params B, expected base) — strict "<" upper bounds.
+  const std::vector<std::pair<double, double>> cases = {
+      // dense_llm() truncates columns, so "N B" is slightly under N·1e9; use N+0.01 to land just above a bound.
+      {0.9, 30}, {1.01, 45}, {3.01, 60}, {7.01, 75}, {10.01, 82}, {20.01, 89}, {40.01, 95}, {70.0, 95}};
+  const double family = c->family_bonus.at("llama");  // dense_llm() is model_type=llama
+  for (const auto& [b, want] : cases) {
+    auto f = analyze(dense_llm(b), gpu24(), *c, estimator::BackendProfile{}, Request{});
+    ASSERT_TRUE(f) << b;
+    // test/dense path does not exist on disk -> no recency bonus; general use case -> no task bonus.
+    std::string q = f->best_quant;
+    std::transform(q.begin(), q.end(), q.begin(), ::tolower);
+    const double pen = c->quality_penalty.contains(q) ? c->quality_penalty.at(q) : 0;
+    EXPECT_DOUBLE_EQ(f->components.quality, want + pen + family) << b << "B " << f->best_quant;
+  }
+}
+
+TEST(fit, w2_penalty_is_llmfit_q2k) {
+  auto c = load_fit_config();
+  ASSERT_TRUE(c);
+  EXPECT_DOUBLE_EQ(c->quality_penalty.at("w2a16"), -12);
+}
+
+TEST(fit, embedding_use_case_exists) {
+  auto c = load_fit_config();
+  ASSERT_TRUE(c);
+  ASSERT_TRUE(c->use_cases.contains("embedding"));
+  const auto& e = c->use_cases.at("embedding");
+  EXPECT_DOUBLE_EQ(e.w_quality, 0.30);
+  EXPECT_DOUBLE_EQ(e.w_speed, 0.40);
+  EXPECT_DOUBLE_EQ(e.speed_target, 200);
+  EXPECT_EQ(e.context_target, 512);
+}
+
+TEST(fit, ttft_is_null_without_compute_figure) {
+  auto c = load_fit_config();
+  ASSERT_TRUE(c);
+  auto sys = gpu24();
+  sys.peak_tflops_bf16 = 0;
+  auto f = analyze(dense_llm(1.0), sys, *c, estimator::BackendProfile{}, Request{});
+  ASSERT_TRUE(f);
+  EXPECT_FALSE(f->ttft_ms.has_value());
+  EXPECT_FALSE(f->prefill_tps.has_value());
+  EXPECT_TRUE(to_json(*f)["ttft_ms"].is_null());
+  // With compute known it is present.
+  auto g = analyze(dense_llm(1.0), gpu24(), *c, estimator::BackendProfile{}, Request{});
+  ASSERT_TRUE(g && g->ttft_ms.has_value());
+}
+
+TEST(fit, many_cores_bonus_on_k_constant_path) {
+  auto c = load_fit_config();
+  ASSERT_TRUE(c);
+  System cpu;
+  cpu.name = "cpu";
+  cpu.backend = "cpu_x86";
+  cpu.ram_gb = 256;
+  cpu.cpu_cores = 4;
+  auto few = analyze(dense_llm(1.0), cpu, *c, estimator::BackendProfile{}, Request{});
+  cpu.cpu_cores = 16;
+  auto many = analyze(dense_llm(1.0), cpu, *c, estimator::BackendProfile{}, Request{});
+  ASSERT_TRUE(few && many);
+  EXPECT_NEAR(many->estimated_tps / few->estimated_tps, 1.1, 1e-9);
 }

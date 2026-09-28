@@ -42,7 +42,10 @@ speed_bpp:
 # Quant hierarchy walked from best quality to smallest (llmfit choose_quant).
 quant_hierarchy: [bf16, fp8, w8a16, w4a16, w4a8, w2a16]
 
-# Quality penalty per quant (added to the quality score; llmfit quant_quality_penalty).
+# Quality penalty per quant (added to the quality score; llmfit quant_quality_penalty,
+# see docs/REFERENCES.md A.2). llmfit's 4-bit GPTQ/AWQ is -3 and its Q4_K_M is -5; our W4A16
+# means GPTQ/AWQ-style group quantization, but we keep -5 as the conservative value because
+# our recipes also cover activation quantization. W2 follows llmfit's Q2_K at -12.
 quant_quality_penalty:
   f32: 0
   bf16: 0
@@ -52,8 +55,8 @@ quant_quality_penalty:
   w8a8: -2
   w4a16: -5
   w4a8: -6
-  w2a16: -18
-  w2a8: -20
+  w2a16: -12
+  w2a8: -14
 
 overhead_gb: 0.5
 default_context: 8192
@@ -92,22 +95,53 @@ quant_speed_multiplier:
   w2a8: 1.35
 default_ddr_bandwidth_gbps: 50
 
-# Score weights [quality, speed, fit, context] and targets per use case.
+# Score weights [quality, speed, fit, context] and targets per use case (A.3).
 use_cases:
   general:    {weights: [0.45, 0.30, 0.15, 0.10], speed_target: 40,  context_target: 4096}
   chat:       {weights: [0.40, 0.35, 0.15, 0.10], speed_target: 40,  context_target: 4096}
   coding:     {weights: [0.50, 0.20, 0.15, 0.15], speed_target: 40,  context_target: 8192}
   reasoning:  {weights: [0.55, 0.15, 0.15, 0.15], speed_target: 25,  context_target: 8192}
   multimodal: {weights: [0.50, 0.20, 0.15, 0.15], speed_target: 40,  context_target: 4096}
+  embedding:  {weights: [0.30, 0.40, 0.20, 0.10], speed_target: 200, context_target: 512}
   # MQDEsys extension: robot policies care about control frequency; speed = decision steps / s.
   vla:        {weights: [0.40, 0.35, 0.15, 0.10], speed_target: 10,  context_target: 512}
 
-# Quality base tiers by (active) parameter count in billions (upper bound -> score).
+# Quality base tiers by ACTIVE parameter count in billions (upper bound -> score); llmfit A.1.
 quality_tiers:
-  - [1, 45]
-  - [3, 55]
-  - [8, 65]
-  - [14, 72]
-  - [34, 80]
-  - [80, 87]
-  - [1000000, 92]
+  - [1, 30]
+  - [3, 45]
+  - [7, 60]
+  - [10, 75]
+  - [20, 82]
+  - [40, 89]
+  - [1000000, 95]
+
+# Added to the quality score when the model family matches (llmfit A.1). Matched as a
+# case-insensitive substring of family / model_type / path.
+family_quality_bonus:
+  deepseek: 3
+  qwen: 2
+  llama: 2
+  minicpm: 2      # MQDEsys extension: our primary family, same tier as qwen/llama
+  mistral: 1
+  mixtral: 1
+  gemma: 1
+  starcoder: 1
+  phi: 0
+
+# Added when the checkpoint is recent. Age comes from the newest mtime of the model's
+# config/weights, since local checkpoints carry no release date.
+recency_quality_bonus:
+  - [3, 3.0]      # < 3 months -> +3
+  - [9, 1.5]      # < 9 months -> +1.5
+
+# Heuristic task bonus when no benchmark record exists (llmfit A.1).
+task_quality_bonus:
+  coding_name_match: 6    # use_case=coding and the name says coding
+  reasoning_large: 5      # use_case=reasoning and >= 13B active params
+  vision_multimodal: 6    # use_case=multimodal and the model has a vision tower
+reasoning_large_min_b: 13
+
+# Multiplier applied to the K-constant speed path when the host has many CPU cores (A.4).
+many_cores_threshold: 8
+many_cores_speed_bonus: 1.1

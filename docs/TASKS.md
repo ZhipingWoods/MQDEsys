@@ -867,7 +867,7 @@
   - `cpp/src/fit/fit.cpp`：叠加家族/时效/任务加分并截断 [0,100]；核数 ≥ 8 时 K 常数路径乘 1.1（A.4）。
   - **TTFT**：算力未知或纯 CPU 时 `ttft_ms` / `prefill_tps` 返回 null 而非算出假值（A.6）。`ModelFit` 对应字段改 `std::optional<double>`。
 - **验收**：
-  - 1B 模型质量分 = 30 + 家族加分（此前为 45），7B = 60，27B = 89。
+  - 质量分档按 llmfit 的**严格小于**：0.9B → 30，1B → 45，7B → 75，27B → 89（再加家族加分）。
   - `fit_test.cpp` 新增：质量分档边界（0.9B/1B/3B/7B/10B/20B/40B/70B）、W2 惩罚值、embedding 用途、TTFT 在无算力画像时为 null。
   - 现有 6 个 fit 测试中因分档变化而失效的断言同步更新，并在 PR 中说明新旧值。
 - **校验**：`ctest --preset dev`；`mqde fit /cache/wuzhiping/hub --hw nvidia/rtx4090` 前后对比表贴进 PR。

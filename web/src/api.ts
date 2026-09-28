@@ -237,7 +237,7 @@ export interface ModelFit {
   model: string; family: string; modality: string; params_b: number; active_params_b: number; is_moe: boolean;
   best_quant: string; fitting_quants: string[]; run_mode: string; fit_level: FitLevel;
   memory_required_gb: number; memory_available_gb: number; utilization_pct: number;
-  estimated_tps: number; speed_unit: string; prefill_tps: number; ttft_ms: number; context: number;
+  estimated_tps: number; speed_unit: string; prefill_tps: number | null; ttft_ms: number | null; context: number;
   estimate_confidence: string; score: number;
   score_components: { quality: number; speed: number; fit: number; context: number };
   notes: string[]; detail?: Estimate; hardware?: string; system?: FitSystem;

@@ -347,11 +347,18 @@ Result<void> serve(const ServerOptions& o) {
     if (mqde_probe_all(devs, 32, &n) == 0 && n > 0) return static_cast<double>(devs[0].mem_total_bytes) / (1024.0 * 1024.0 * 1024.0);
     return 0.0;
   };
+  auto host_cores = [] {
+    mqde_device_info devs[32];
+    int n = 0;
+    if (mqde_probe_all(devs, 32, &n) == 0 && n > 0) return static_cast<int>(devs[0].compute_units);
+    return 0;
+  };
   // System from a hardware profile id, overridable field by field (llmfit "plan" what-if).
   auto system_from = [&](const Json& b) -> Result<fit::System> {
     MQDE_ASSIGN_OR_RETURN(auto hw, estimator::load_hardware(b.value("hardware", "nvidia/rtx4090")));
     auto sys = fit::system_from_profile(hw, b.value("ram_gb", host_ram_gb()));
     sys.gpu_count = b.value("gpu_count", 1);
+    sys.cpu_cores = b.value("cpu_cores", host_cores());
     if (b.contains("vram_gb")) sys.vram_gb = b["vram_gb"].get<double>();
     if (b.contains("mem_bw_gbps")) sys.mem_bw_gbps = b["mem_bw_gbps"].get<double>();
     return sys;
