@@ -1,7 +1,9 @@
 // mqde - command line entry point (docs/ARCHITECTURE.md §6.16).
 // stdout carries command output (tables or --json); diagnostics go to stderr.
 
+#include <algorithm>
 #include <cstdio>
+#include <filesystem>
 #include <iostream>
 #include <sstream>
 
@@ -9,6 +11,7 @@
 
 #include "mqde/common/log.h"
 #include "mqde/estimator/estimator.h"
+#include "mqde/fit/fit.h"
 #include "mqde/server/server.h"
 #include "mqde_probe.h"
 
@@ -170,6 +173,79 @@ int cmd_estimate(const EstimateArgs& a) {
   return 0;
 }
 
+// Local model library: every sub-directory of `root` (or `root` itself) with a config.json.
+std::vector<std::filesystem::path> scan_models(const std::vector<std::string>& roots) {
+  std::vector<std::filesystem::path> out;
+  for (const auto& r : roots) {
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(std::filesystem::path(r) / "config.json")) {
+      out.emplace_back(r);
+      continue;
+    }
+    for (const auto& e : std::filesystem::directory_iterator(r, ec))
+      if (e.is_directory() && std::filesystem::is_regular_file(e.path() / "config.json")) out.push_back(e.path());
+  }
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
+struct FitArgs {
+  std::vector<std::string> models;
+  std::string hw = "nvidia/rtx4090", use_case = "auto", quant, sort = "score";
+  int64_t context = 0, concurrency = 1;
+  int gpus = 1;
+  double ram_gb = 0;
+  bool json = false;
+};
+
+int cmd_fit(const FitArgs& a) {
+  auto cfg = mqde::fit::load_fit_config();
+  if (!cfg) return fail(cfg.error());
+  auto hw = mqde::estimator::load_hardware(a.hw);
+  if (!hw) return fail(hw.error());
+  auto be = mqde::estimator::load_backend("hf_transformers");
+  if (!be) return fail(be.error());
+  auto sys = mqde::fit::system_from_profile(*hw, a.ram_gb);
+  sys.gpu_count = a.gpus;
+  if (sys.ram_gb == 0) {
+    for (const auto& d : probe_json())
+      if (d["kind"] == "cpu") sys.ram_gb = d["mem_total_bytes"].get<double>() / (1024.0 * 1024.0 * 1024.0);
+  }
+  mqde::fit::Request req;
+  req.use_case = a.use_case;
+  req.context = a.context;
+  req.concurrency = a.concurrency;
+  req.force_quant = a.quant;
+  std::vector<mqde::fit::ModelFit> fits;
+  for (const auto& m : scan_models(a.models)) {
+    auto spec = mqde::modelspec::inspect_local(m);
+    if (!spec) {
+      std::cerr << "skip " << m << ": " << spec.error().to_string() << "\n";
+      continue;
+    }
+    auto f = mqde::fit::analyze(*spec, sys, *cfg, *be, req);
+    if (!f) return fail(f.error());
+    fits.push_back(*f);
+  }
+  mqde::fit::rank(fits, a.sort);
+  if (a.json) {
+    Json arr = Json::array();
+    for (const auto& f : fits) arr.push_back(mqde::fit::to_json(f));
+    std::cout << Json{{"system", mqde::fit::to_json(sys)}, {"models", arr}}.dump(2) << "\n";
+    return 0;
+  }
+  fmt::print("{} x{} | {:.1f} GiB VRAM | {:.0f} GB/s | RAM {:.0f} GiB\n\n", sys.name, sys.gpu_count, sys.vram_gb,
+             sys.mem_bw_gbps, sys.ram_gb);
+  fmt::print("{:<40} {:>8} {:>8} {:>9} {:>16} {:>10} {:>18} {:>7}\n", "model", "params", "quant", "fit", "mode",
+             "mem GiB", "speed", "score");
+  for (const auto& f : fits)
+    fmt::print("{:<40} {:>7.2f}B {:>8} {:>9} {:>16} {:>10.2f} {:>11.1f} {:<6} {:>7.1f}\n",
+               std::filesystem::path(f.model).filename().string().substr(0, 40), f.params_b, f.best_quant,
+               mqde::fit::to_string(f.fit_level), mqde::fit::to_string(f.run_mode), f.memory_required_gb, f.estimated_tps,
+               f.speed_unit, f.score);
+  return 0;
+}
+
 int cmd_list(const std::string& sub, bool json) {
   auto names = mqde::estimator::list_data_entries(sub);
   if (!names) return fail(names.error());
@@ -231,6 +307,18 @@ int main(int argc, char** argv) {
   est->add_option("--util", ea.util, "usable fraction of device memory");
   est->add_option("--also-quantize", ea.extra, "extra modalities to quantize, e.g. action");
 
+  auto* fitc = app.add_subcommand("fit", "llmfit-style deployment pre-evaluation over a local model library");
+  FitArgs fa;
+  fitc->add_option("models", fa.models, "model directories or library roots")->required();
+  fitc->add_option("--hw", fa.hw, "hardware profile id");
+  fitc->add_option("--gpus", fa.gpus, "number of identical GPUs");
+  fitc->add_option("--ram", fa.ram_gb, "system RAM in GiB (default: probed)");
+  fitc->add_option("--use-case", fa.use_case, "auto|general|chat|coding|reasoning|multimodal|vla");
+  fitc->add_option("--ctx", fa.context, "context tokens");
+  fitc->add_option("--conc", fa.concurrency, "concurrent sequences");
+  fitc->add_option("--quant", fa.quant, "force a recipe instead of choosing the best that fits");
+  fitc->add_option("--sort", fa.sort, "score|tps|params|mem");
+
   auto* serve = app.add_subcommand("serve", "start the REST/SSE API server (+ web UI)");
   mqde::server::ServerOptions so;
   std::string gpus;
@@ -261,6 +349,10 @@ int main(int argc, char** argv) {
   }
   if (*inspect) return cmd_inspect(model_path, json, with_tensors);
   if (*est) return cmd_estimate(ea);
+  if (*fitc) {
+    fa.json = json;
+    return cmd_fit(fa);
+  }
   if (*recipes) return cmd_list("recipes", json);
   if (*hardware) return cmd_list("hardware_db", json);
   return 0;

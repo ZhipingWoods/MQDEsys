@@ -63,6 +63,9 @@ struct TextSpec {
   int64_t linear_value_head_dim = 0;
   int64_t linear_conv_kernel = 0;
   std::string linear_state_dtype = "float32";
+  // Mixture-of-experts (0 = dense)
+  int64_t n_experts = 0;
+  int64_t experts_per_tok = 0;
 };
 
 struct VisionSpec {
@@ -87,6 +90,21 @@ struct UnitInfo {  // one quantization candidate or kept-FP tensor, grouped for 
   std::string modality;
   int64_t block = -1;
   bool quantizable = false;  // 2-D weight not matched by default_keep_fp
+  // Unpacked view of the tensor. For pre-quantized checkpoints (U8/I32 packed int4, FP8) this is the
+  // logical [out, in] shape and element count; `aux` marks scale/zero/g_idx tensors that disappear when
+  // the model is re-quantized from its logical BF16 weights.
+  std::vector<int64_t> logical_shape;
+  int64_t logical_numel = 0;
+  bool aux = false;
+};
+
+// Quantization already present in the checkpoint (config.json quantization_config).
+struct CheckpointQuant {
+  std::string method;  // fp8 | modelopt | gptq | awq | compressed-tensors | ...
+  std::string algo;    // e.g. W4A16_AWQ, e4m3
+  int bits = 16;
+  int64_t group_size = 0;
+  std::vector<std::string> ignored;  // modules_to_not_convert / ignore
 };
 
 struct ComponentStat {
@@ -115,6 +133,12 @@ struct ModelSpec {
   int64_t total_params = 0;
   uint64_t total_bytes = 0;
   std::vector<std::string> keep_fp_patterns;
+  std::optional<CheckpointQuant> checkpoint_quant;
+  // Parameter count before packing: packed int weights (U8/I32) are counted as logical params.
+  int64_t logical_params = 0;
+  // Params touched per token: dense params + (experts_per_tok / n_experts) of routed-expert params.
+  int64_t active_params = 0;
+  int64_t expert_params = 0;
   std::vector<std::string> warnings;
 };
 

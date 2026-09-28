@@ -43,6 +43,8 @@ TextSpec parse_text(const Json& t) {
   s.linear_value_head_dim = get_or<int64_t>(t, "linear_value_head_dim", 0);
   s.linear_conv_kernel = get_or<int64_t>(t, "linear_conv_kernel_dim", 0);
   s.linear_state_dtype = get_or<std::string>(t, "mamba_ssm_dtype", "float32");
+  s.n_experts = get_or<int64_t>(t, "num_experts", get_or<int64_t>(t, "n_routed_experts", get_or<int64_t>(t, "num_local_experts", 0)));
+  s.experts_per_tok = get_or<int64_t>(t, "num_experts_per_tok", get_or<int64_t>(t, "moe_topk", 0));
   return s;
 }
 
@@ -63,7 +65,7 @@ Result<ModelSpec> build_model_spec(const Json& config, std::vector<TensorInfo> t
 
   if (const Json* v = family.vision_config_path.empty() ? nullptr : walk(config, family.vision_config_path)) {
     VisionSpec vs;
-    vs.n_layers = get_or<int64_t>(*v, "num_hidden_layers", 0);
+    vs.n_layers = get_or<int64_t>(*v, "num_hidden_layers", get_or<int64_t>(*v, "depth", 0));
     vs.hidden = get_or<int64_t>(*v, "hidden_size", 0);
     vs.intermediate = get_or<int64_t>(*v, "intermediate_size", 0);
     vs.patch_size = get_or<int64_t>(*v, "patch_size", 0);
@@ -135,6 +137,67 @@ Result<ModelSpec> build_model_spec(const Json& config, std::vector<TensorInfo> t
     s.n_blocks = static_cast<int64_t>(blocks[name].size());
     spec.components.push_back(s);
   }
+  // Pre-quantized checkpoints: record the scheme and recover logical parameter counts.
+  if (auto qc = config.find("quantization_config"); qc != config.end() && qc->is_object()) {
+    CheckpointQuant cq;
+    cq.method = get_or<std::string>(*qc, "quant_method", "unknown");
+    cq.algo = get_or<std::string>(*qc, "quant_algo", get_or<std::string>(*qc, "fmt", ""));
+    cq.bits = static_cast<int>(get_or<int64_t>(*qc, "bits", 16));
+    cq.group_size = get_or<int64_t>(*qc, "group_size", 0);
+    if (cq.method == "fp8") cq.bits = 8;
+    if (cq.algo.find("W4") == 0) cq.bits = 4;
+    if (cq.algo.find("W8") == 0) cq.bits = 8;
+    for (const char* key : {"ignore", "modules_to_not_convert"}) {
+      auto it = qc->find(key);
+      if (it != qc->end() && it->is_array())
+        for (const auto& v : *it)
+          if (v.is_string()) cq.ignored.push_back(v.get<std::string>());
+    }
+    spec.checkpoint_quant = cq;
+  }
+  spec.logical_params = 0;
+  const int ck_bits = spec.checkpoint_quant ? spec.checkpoint_quant->bits : 16;
+  for (size_t i = 0; i < tensors.size(); ++i) {
+    const auto& t = tensors[i];
+    auto& u = spec.units[i];
+    // Packed sub-byte weights: U8 holds 8/bits values, I32 holds 32/bits (GPTQ/AWQ qweight).
+    int64_t mult = 1;
+    if ((t.name.ends_with(".weight") || t.name.ends_with(".qweight")) && ck_bits < 8) {
+      if (t.dtype == "U8" || t.dtype == "I8") mult = 8 / ck_bits;
+      if (t.dtype == "I32" || t.dtype == "U32") mult = 32 / ck_bits;
+    }
+    u.aux = t.name.ends_with("_scale") || t.name.ends_with(".scales") || t.name.ends_with(".qzeros") ||
+            t.name.ends_with(".g_idx") || t.name.ends_with("pre_quant_scale") || t.name.ends_with("weight_scale_inv") ||
+            t.name.ends_with("input_scale");
+    u.logical_shape = t.shape;
+    if (!u.logical_shape.empty()) u.logical_shape.back() *= mult;
+    u.logical_numel = t.numel * mult;
+    if (u.aux) {
+      u.quantizable = false;
+      continue;
+    }
+    spec.logical_params += u.logical_numel;
+    if (t.name.find(".experts.") != std::string::npos) spec.expert_params += u.logical_numel;
+  }
+  spec.active_params = spec.logical_params;
+  if (spec.text.n_experts > 0 && spec.text.experts_per_tok > 0 && spec.expert_params > 0) {
+    const double frac = static_cast<double>(spec.text.experts_per_tok) / static_cast<double>(spec.text.n_experts);
+    spec.active_params = spec.logical_params - spec.expert_params +
+                         static_cast<int64_t>(static_cast<double>(spec.expert_params) * frac);
+  }
+  // modelopt / AWQ group size: in_features / scale columns of any quantized weight.
+  if (spec.checkpoint_quant && spec.checkpoint_quant->group_size == 0) {
+    std::map<std::string, const TensorInfo*> by_name;
+    for (const auto& t : tensors) by_name[t.name] = &t;
+    for (const auto& t : tensors) {
+      if (!t.name.ends_with(".weight_scale") || t.shape.size() != 2 || t.shape[1] == 0) continue;
+      auto w = by_name.find(t.name.substr(0, t.name.size() - 6));  // strip "_scale"
+      if (w == by_name.end() || w->second->shape.size() != 2) continue;
+      spec.checkpoint_quant->group_size = w->second->shape[1] / t.shape[1];
+      break;
+    }
+  }
+
   if (unassigned > 0)
     spec.warnings.push_back(fmt::format("{} tensors did not match any component of family '{}'", unassigned, family.family));
   spec.tensors = std::move(tensors);
@@ -164,6 +227,15 @@ Json to_json(const ModelSpec& s, bool include_tensors) {
   j["architectures"] = s.architectures;
   j["total_params"] = s.total_params;
   j["total_bytes"] = s.total_bytes;
+  j["logical_params"] = s.logical_params;
+  j["active_params"] = s.active_params;
+  j["expert_params"] = s.expert_params;
+  if (s.checkpoint_quant)
+    j["checkpoint_quant"] = {{"method", s.checkpoint_quant->method},
+                             {"algo", s.checkpoint_quant->algo},
+                             {"bits", s.checkpoint_quant->bits},
+                             {"group_size", s.checkpoint_quant->group_size},
+                             {"n_ignored", s.checkpoint_quant->ignored.size()}};
   const auto& t = s.text;
   j["text"] = {{"n_layers", t.n_layers},
                {"hidden", t.hidden},
@@ -177,7 +249,9 @@ Json to_json(const ModelSpec& s, bool include_tensors) {
                {"n_linear_attention", t.n_linear_attention},
                {"n_sliding_attention", t.n_sliding_attention},
                {"sliding_window", t.sliding_window},
-               {"tie_word_embeddings", t.tie_word_embeddings}};
+               {"tie_word_embeddings", t.tie_word_embeddings},
+               {"n_experts", t.n_experts},
+               {"experts_per_tok", t.experts_per_tok}};
   if (s.vision)
     j["vision"] = {{"n_layers", s.vision->n_layers},
                    {"hidden", s.vision->hidden},

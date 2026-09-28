@@ -100,29 +100,40 @@ Estimate estimate(const ModelSpec& spec, const Recipe& recipe, const HardwarePro
     const auto& t = spec.tensors[i];
     const auto& u = spec.units[i];
     auto& c = comp_of(u.component, u.modality);
-    c.params += t.numel;
-    c.original_bytes += t.nbytes;
+    // Estimates are "re-quantize from the logical 16-bit model": packed checkpoint tensors are expanded to
+    // their logical size and existing scale/zero tensors are dropped (the recipe adds its own qmeta).
+    if (u.aux) continue;
+    const int64_t numel = u.logical_numel > 0 ? u.logical_numel : t.numel;
+    const bool packed = numel != t.numel || t.dtype.starts_with("F8");
+    const double orig = packed ? static_cast<double>(numel) * 2.0 : static_cast<double>(t.nbytes);
+    const auto& shape = u.logical_shape.empty() ? t.shape : u.logical_shape;
+    c.params += numel;
+    c.original_bytes += static_cast<uint64_t>(orig);
     const bool quantize = u.quantizable && recipe.weight.enabled() && quant_modalities.contains(u.modality);
-    double bytes = static_cast<double>(t.nbytes);
+    double bytes = orig;
     if (quantize) {
-      const double qm = qmeta_bytes(recipe.weight, t.shape[0], t.shape[1]);
-      bytes = std::ceil(static_cast<double>(t.numel) * elem_bytes(recipe.weight, 2.0));
+      const double qm = qmeta_bytes(recipe.weight, shape[0], shape[1]);
+      bytes = std::ceil(static_cast<double>(numel) * elem_bytes(recipe.weight, 2.0));
       c.qmeta_bytes += static_cast<uint64_t>(qm);
       qmeta_total += qm;
       bytes += qm;
-      c.quantized_params += t.numel;
+      c.quantized_params += numel;
       c.quantized = true;
     }
     c.weight_bytes += static_cast<uint64_t>(bytes);
     // Matmul work: 2-D weights (embeddings are lookups); category-specific 3-D weights use one slice.
     const double tokens = component_tokens(u.component, sh);
-    if (t.name.ends_with(".weight") && !is_embedding(t.name) && t.shape.size() >= 2) {
-      const double eff_params = t.shape.size() == 3 ? static_cast<double>(t.numel / t.shape[0]) : static_cast<double>(t.numel);
-      flops += 2.0 * eff_params * tokens;
+    // MoE routed experts: only experts_per_tok / n_experts of them are touched per token.
+    const double moe_frac = (t.name.find(".experts.") != std::string::npos && spec.text.n_experts > 0 && spec.text.experts_per_tok > 0)
+                                ? static_cast<double>(spec.text.experts_per_tok) / static_cast<double>(spec.text.n_experts)
+                                : 1.0;
+    if (t.name.ends_with(".weight") && !is_embedding(t.name) && shape.size() >= 2) {
+      const double eff_params = shape.size() == 3 ? static_cast<double>(numel / shape[0]) : static_cast<double>(numel);
+      flops += 2.0 * eff_params * tokens * moe_frac;
     }
     if (tokens > 0) {
       // Category-specific (per-embodiment) 3-D weights: only one slice is touched per step.
-      const double touched = t.shape.size() == 3 ? bytes / static_cast<double>(t.shape[0]) : bytes;
+      const double touched = (shape.size() == 3 ? bytes / static_cast<double>(shape[0]) : bytes) * moe_frac;
       const double rereads = u.component == "action_head" ? static_cast<double>(sh.action_steps) : 1.0;
       bytes_read += touched * rereads;
     }

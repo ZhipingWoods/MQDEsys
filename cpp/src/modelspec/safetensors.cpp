@@ -73,8 +73,13 @@ Result<std::vector<TensorInfo>> read_model_tensors(const fs::path& model_dir) {
     const auto name = e.path().filename().string();
     if (name.ends_with(".safetensors.index.json")) {
       MQDE_ASSIGN_OR_RETURN(Json idx, load_structured_file(e.path()));
-      for (const auto& [_, shard] : idx.value("weight_map", Json::object()).items())
-        shards.insert(model_dir / shard.get<std::string>());
+      // Keep the map alive: iterating items() of the temporary returned by value() dangles.
+      const Json weight_map = idx.value("weight_map", Json::object());
+      for (auto it = weight_map.begin(); it != weight_map.end(); ++it) {
+        if (!it->is_string())
+          return make_error(Errc::kParse, "'{}': weight_map entry for '{}' is not a file name", name, it.key());
+        shards.insert(model_dir / it->get<std::string>());
+      }
     }
   }
   if (shards.empty()) {

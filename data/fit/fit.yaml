@@ -1,0 +1,113 @@
+# Deployment pre-evaluation constants — ported from llmfit (3rdpart/llmfit/llmfit-core/src/{fit,models}.rs).
+# Changing a value here changes every fit verdict; treat as L2 (see docs/REFERENCES.md §1).
+
+# Bytes per parameter for MEMORY (llmfit models.rs quant_bpp), keyed by our quant labels.
+memory_bpp:
+  f32: 4.0
+  bf16: 2.0
+  f16: 2.0
+  w8a16: 1.0      # int8 weight-only (llmfit "8-bit")
+  w8a8: 1.0
+  fp8: 1.0
+  w4a16: 0.5      # GPTQ/AWQ-4bit (llmfit 0.5); group metadata is added exactly by the estimator
+  w4a8: 0.5
+  w2a16: 0.25
+  w2a8: 0.25
+  q8_0: 1.05
+  q6_k: 0.80
+  q5_k_m: 0.68
+  q4_k_m: 0.58
+  q3_k_m: 0.48
+  q2_k: 0.37
+
+# Bytes per parameter streamed per token for SPEED (llmfit models.rs speed bpp).
+speed_bpp:
+  f32: 4.0
+  bf16: 2.0
+  f16: 2.0
+  w8a16: 1.0
+  w8a8: 1.0
+  fp8: 1.0
+  w4a16: 0.5
+  w4a8: 0.5
+  w2a16: 0.25
+  w2a8: 0.25
+  q8_0: 1.0
+  q6_k: 0.75
+  q5_k_m: 0.625
+  q4_k_m: 0.5
+  q3_k_m: 0.375
+  q2_k: 0.25
+
+# Quant hierarchy walked from best quality to smallest (llmfit choose_quant).
+quant_hierarchy: [bf16, fp8, w8a16, w4a16, w4a8, w2a16]
+
+# Quality penalty per quant (added to the quality score; llmfit quant_quality_penalty).
+quant_quality_penalty:
+  f32: 0
+  bf16: 0
+  f16: 0
+  fp8: -1
+  w8a16: -1
+  w8a8: -2
+  w4a16: -5
+  w4a8: -6
+  w2a16: -18
+  w2a8: -20
+
+overhead_gb: 0.5
+default_context: 8192
+
+fit_thresholds:    # ratio = required / available
+  perfect: 0.60
+  good: 0.85
+  marginal: 0.98
+
+bandwidth_efficiency: 0.55
+prefill_compute_utilization: 0.35
+run_mode_factor:
+  gpu: 1.0
+  tensor_parallel: 0.9
+  moe_offload: 0.8
+  cpu_offload: 0.5
+  cpu_only: 0.3
+
+# tok/s = K / params_B * quant_speed_multiplier   (used when GPU bandwidth is unknown)
+backend_speed_k:
+  cuda: 220
+  metal: 160
+  rocm: 180
+  vulkan: 150
+  sycl: 100
+  cpu_arm: 90
+  cpu_x86: 70
+  ascend: 390
+quant_speed_multiplier:
+  bf16: 0.6
+  fp8: 0.8
+  w8a16: 0.8
+  w4a16: 1.15
+  w4a8: 1.15
+  w2a16: 1.35
+  w2a8: 1.35
+default_ddr_bandwidth_gbps: 50
+
+# Score weights [quality, speed, fit, context] and targets per use case.
+use_cases:
+  general:    {weights: [0.45, 0.30, 0.15, 0.10], speed_target: 40,  context_target: 4096}
+  chat:       {weights: [0.40, 0.35, 0.15, 0.10], speed_target: 40,  context_target: 4096}
+  coding:     {weights: [0.50, 0.20, 0.15, 0.15], speed_target: 40,  context_target: 8192}
+  reasoning:  {weights: [0.55, 0.15, 0.15, 0.15], speed_target: 25,  context_target: 8192}
+  multimodal: {weights: [0.50, 0.20, 0.15, 0.15], speed_target: 40,  context_target: 4096}
+  # MQDEsys extension: robot policies care about control frequency; speed = decision steps / s.
+  vla:        {weights: [0.40, 0.35, 0.15, 0.10], speed_target: 10,  context_target: 512}
+
+# Quality base tiers by (active) parameter count in billions (upper bound -> score).
+quality_tiers:
+  - [1, 45]
+  - [3, 55]
+  - [8, 65]
+  - [14, 72]
+  - [34, 80]
+  - [80, 87]
+  - [1000000, 92]
