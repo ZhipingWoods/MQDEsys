@@ -446,3 +446,31 @@ TEST(fit_calibration, estimate_basis_fields_non_empty_after_analyze) {
   EXPECT_GT(f->estimate_basis.gpu_bandwidth_gbps, 0.0);
   EXPECT_GT(f->estimate_basis.efficiency, 0.0);
 }
+
+// T-R26: supports_tp is a model property (head divisibility), independent of the local GPU count.
+TEST(fit, supports_tp_follows_kv_heads) {
+  auto spec = dense_llm(7.01);
+  spec.text.n_heads = 32;
+  spec.text.n_kv_heads = 4;
+  const auto cfg = load_fit_config();
+  ASSERT_TRUE(cfg);
+  auto f = analyze(spec, gpu24(), *cfg, estimator::BackendProfile{}, Request{});
+  ASSERT_TRUE(f);
+  EXPECT_EQ(f->supports_tp, (std::vector<int64_t>{1, 2, 4}));
+  EXPECT_FALSE(f->verify_command.empty());
+  EXPECT_EQ(f->fit_label, std::string(to_string(f->fit_level)));
+  EXPECT_EQ(f->run_mode_label, std::string(to_string(f->run_mode)));
+  EXPECT_EQ(f->estimate_confidence_label, std::string(to_string(f->confidence)));
+  EXPECT_EQ(f->runtime, InferenceRuntime::kHfTransformers);  // BF16, not pre-quantized
+}
+
+TEST(fit, runtime_cpu_only_is_llama_cpp) {
+  const auto cfg = load_fit_config();
+  ASSERT_TRUE(cfg);
+  Request r;
+  r.force_run_mode = "cpu_only";
+  auto f = analyze(dense_llm(1.01), gpu24(), *cfg, estimator::BackendProfile{}, r);
+  ASSERT_TRUE(f);
+  EXPECT_EQ(f->runtime, InferenceRuntime::kLlamaCpp);
+  EXPECT_NE(f->verify_command.find("-ngl 0"), std::string::npos);
+}

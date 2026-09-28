@@ -1,0 +1,55 @@
+# Runtime detection configuration (docs/REFERENCES.md A.11).
+# Paths and ports are user-configurable; detection logic is in cpp/src/fit/installed.cpp.
+
+http_timeout_ms: 400
+overall_deadline_ms: 2000
+
+sources:
+  ollama:
+    kind: http
+    url: "http://127.0.0.1:11434/api/tags"
+    field: models[].name   # extract name from each entry
+
+  lm_studio:
+    kind: http
+    url: "http://127.0.0.1:1234/v1/models"
+    field: data[].id
+
+  vllm:
+    kind: http
+    url: "http://127.0.0.1:8000/v1/models"
+    field: data[].id
+
+  llama_cpp:
+    kind: fs
+    paths:
+      - "~/.cache/llama.cpp"
+      - "~/models"
+      - "/opt/models"
+    ext: ".gguf"
+    depth: 3
+
+  mlx:
+    kind: fs
+    paths:
+      - "~/.cache/huggingface/hub"
+    marker: "config.json"  # MLX models have a config.json
+    depth: 2
+
+  ramalama:
+    kind: fs
+    paths:
+      - "~/.local/share/ramalama/models"
+    depth: 2
+
+  hf_cache:
+    kind: fs
+    paths:
+      - "~/.cache/huggingface/hub"
+    marker: "config.json"
+    depth: 3
+
+  docker_model_runner:
+    kind: cmd
+    command: "docker"
+    args: ["model", "ls", "--format", "{{.Name}}"]

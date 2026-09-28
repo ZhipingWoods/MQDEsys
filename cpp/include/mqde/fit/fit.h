@@ -156,6 +156,8 @@ struct ModelFit {
   // T-R26: A.15 supplementary fields.
   InferenceRuntime runtime = InferenceRuntime::kHfTransformers;
   bool installed = false;              // a local runtime can serve this model right now (filled by T-R24)
+  std::vector<std::string> installed_providers;  // runtimes/caches that hold this model (T-R24)
+  bool forced_mode_rejected = false;  // Request::force_run_mode was impossible here and was ignored
   int64_t usable_context = 0;         // largest context that fits with current concurrency
   double disk_size_gb = 0;            // estimated on-disk size (weight bytes, unquantized BF16)
   std::vector<int64_t> supports_tp;   // legal tensor-parallel sizes (divisors of n_kv_heads, ≥1)

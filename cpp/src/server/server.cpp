@@ -1,6 +1,8 @@
 #include "mqde/server/server.h"
 
 #include <chrono>
+#include <filesystem>
+#include <mutex>
 #include <fstream>
 #include <thread>
 
@@ -11,6 +13,7 @@
 #include "mqde/common/log.h"
 #include "mqde/estimator/estimator.h"
 #include "mqde/fit/claim.h"
+#include "mqde/fit/installed.h"
 #include "mqde/fit/concurrency.h"
 #include "mqde/fit/fit.h"
 #include "mqde/quant/metrics.h"
@@ -396,6 +399,20 @@ Result<void> serve(const ServerOptions& o) {
     r.force_quant = b.value("quant", "");
     return r;
   };
+  // Runtime probing costs up to 2 s, so cache it for 30 s across /fit calls.
+  std::mutex installed_mu;
+  std::optional<fit::InstalledIndex> installed_cache;
+  auto installed_at = std::chrono::steady_clock::time_point{};
+  auto installed_index = [&]() -> fit::InstalledIndex {
+    std::lock_guard lk(installed_mu);
+    const auto now = std::chrono::steady_clock::now();
+    if (!installed_cache || now - installed_at > std::chrono::seconds(30)) {
+      installed_cache = fit::probe_installed();
+      installed_at = now;
+    }
+    return *installed_cache;
+  };
+
   svr.Post("/api/v1/fit", [&](const httplib::Request& req, httplib::Response& res) {
     auto body = parse_body(req, res);
     if (!body) return;
@@ -426,6 +443,12 @@ Result<void> serve(const ServerOptions& o) {
         errors.push_back({{"model", m}, {"error", f.error().message}});
         continue;
       }
+      // T-R24: a model is installed when a local runtime/cache holds it. A model directory on this
+      // machine also counts ("local_dir"): the HF-transformers runtime can load it as-is.
+      f->installed_providers = installed_index().installed_providers(m);
+      if (std::filesystem::exists(std::filesystem::path(m) / "config.json"))
+        f->installed_providers.insert(f->installed_providers.begin(), "local_dir");
+      f->installed = !f->installed_providers.empty();
       fits.push_back(*f);
     }
     fit::rank(fits, body->value("sort", "score"));
@@ -486,9 +509,10 @@ Result<void> serve(const ServerOptions& o) {
           fit::Request rr = r;
           rr.force_run_mode = mode;
           auto f = fit::analyze(*s, *sys, *fit_cfg, *be, rr);
-          if (!f || f->fit_level == fit::FitLevel::kTooTight) continue;
+          if (!f || f->forced_mode_rejected) continue;
           Json j;
           j["run_mode"] = mode;
+          j["utilization_pct"] = f->utilization_pct;
           j["best_quant"] = f->best_quant;
           j["memory_required_gb"] = f->memory_required_gb;
           j["estimated_tps"] = f->estimated_tps;
@@ -555,6 +579,17 @@ Result<void> serve(const ServerOptions& o) {
                     {"recommended_hardware", rec_hw ? *rec_hw : Json(nullptr)},
                     {"upgrades", upgrades},
                     {"kv_alternatives", kv_alts}});
+  });
+
+  // ---------------- installed runtimes (T-R24) ----------------
+  svr.Get("/api/v1/installed", [&](const httplib::Request&, httplib::Response& res) {
+    auto idx = fit::probe_installed();
+    {
+      std::lock_guard lk(installed_mu);
+      installed_cache = idx;
+      installed_at = std::chrono::steady_clock::now();
+    }
+    send_json(res, fit::to_json(idx));
   });
 
   // ---------------- fit:claim ----------------

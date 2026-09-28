@@ -331,7 +331,25 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
     f.run_mode = RunMode::kCpuOffload;
     pool = vram_avail + sys.ram_gb;
   }
-  if (!req.force_run_mode.empty()) f.notes.push_back("run mode forced: " + req.force_run_mode);
+  // Forced run mode (llmfit --run-mode / plan run paths): override the automatic choice and re-grade
+  // against the memory pool that mode actually uses. Impossible modes are reported, not faked.
+  if (!req.force_run_mode.empty()) {
+    const auto& m = req.force_run_mode;
+    bool ok = true;
+    if (m == "gpu" && has_gpu) f.run_mode = RunMode::kGpu, pool = vram_avail;
+    else if (m == "tensor_parallel" && has_gpu && sys.gpu_count > 1) f.run_mode = RunMode::kTensorParallel, pool = vram_avail;
+    else if (m == "moe_offload" && has_gpu && f.is_moe && sys.ram_gb > 0) {
+      f.run_mode = RunMode::kMoeOffload;
+      f.moe_offloaded_gb = static_cast<double>(spec.expert_params) * lookup(cfg.memory_bpp, [&] {
+        std::string k = f.best_quant; std::transform(k.begin(), k.end(), k.begin(), ::tolower); return k; }(), 2.0) / kGiB;
+      pool = vram_avail + sys.ram_gb;
+    } else if (m == "cpu_offload" && has_gpu && sys.ram_gb > 0) f.run_mode = RunMode::kCpuOffload, pool = vram_avail + sys.ram_gb;
+    else if (m == "cpu_only" && sys.ram_gb > 0) f.run_mode = RunMode::kCpuOnly, pool = sys.ram_gb;
+    else ok = false;
+    f.notes.push_back(ok ? "run mode forced: " + m : "run mode '" + m + "' is not possible on this system; kept " +
+                                                         std::string(to_string(f.run_mode)));
+    f.forced_mode_rejected = !ok;
+  }
   f.memory_available_gb = pool;
   const double ratio = req_gb / std::max(1e-9, pool);
   f.utilization_pct = ratio * 100.0;
@@ -515,22 +533,33 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
                      : spec.text.max_position_embeddings > 0 ? spec.text.max_position_embeddings
                      : 0;
 
-  // --- disk_size_gb (unquantized BF16 weight bytes) ---
-  f.disk_size_gb = spec.total_params > 0 ? static_cast<double>(spec.total_params) * 2.0 / (1ull << 30) : 0;
+  // --- disk_size_gb: the checkpoint's actual safetensors bytes (already-quantized files are smaller) ---
+  f.disk_size_gb = static_cast<double>(spec.total_bytes) / (1ull << 30);
 
-  // --- supports_tp (legal TP sizes = divisors of n_kv_heads that are also ≤ gpu_count) ---
+  // --- supports_tp: TP sizes that split attention heads evenly. A property of the model, not of this
+  // machine: every size must divide both n_heads and n_kv_heads (GQA kv_heads=4 -> 1, 2, 4).
   {
-    const int64_t n_kv = spec.text.n_kv_heads > 0 ? spec.text.n_kv_heads : 1;
-    for (int64_t d = 1; d <= std::min<int64_t>(n_kv, std::max(1, sys.gpu_count)); ++d) {
-      if (n_kv % d == 0) f.supports_tp.push_back(d);
-    }
+    const int64_t nh = std::max<int64_t>(1, spec.text.n_heads);
+    const int64_t nkv = spec.text.n_kv_heads > 0 ? spec.text.n_kv_heads : nh;
+    for (int64_t d = 1; d <= nkv; ++d)
+      if (nkv % d == 0 && nh % d == 0) f.supports_tp.push_back(d);
   }
 
   // --- capability_ids ---
   {
     f.capability_ids.push_back("text");
-    if (spec.modality == "vla") { f.capability_ids.push_back("vision"); f.capability_ids.push_back("vla"); }
-    else if (spec.modality == "vlm" || spec.modality == "multimodal") f.capability_ids.push_back("vision");
+    const bool has_vision = spec.vision.has_value() ||
+        std::any_of(spec.components.begin(), spec.components.end(), [](const auto& c) { return c.modality == "vision"; });
+    const bool has_audio =
+        std::any_of(spec.components.begin(), spec.components.end(), [](const auto& c) { return c.modality == "audio"; });
+    if (has_vision || spec.modality == "vla" || spec.modality == "vlm") f.capability_ids.push_back("vision");
+    if (has_audio) f.capability_ids.push_back("audio");
+    if (std::any_of(spec.components.begin(), spec.components.end(), [](const auto& c) { return c.modality == "tts"; }))
+      f.capability_ids.push_back("speech_out");
+    if (std::any_of(spec.components.begin(), spec.components.end(), [](const auto& c) { return c.modality == "mtp"; }))
+      f.capability_ids.push_back("mtp");
+    if (spec.modality == "vla") f.capability_ids.push_back("vla");
+    if (f.is_moe) f.capability_ids.push_back("moe");
     if (!spec.text.layer_types.empty() &&
         std::find(spec.text.layer_types.begin(), spec.text.layer_types.end(), "linear_attention") != spec.text.layer_types.end())
       f.capability_ids.push_back("linear_attention");
@@ -556,6 +585,8 @@ void rank(std::vector<ModelFit>& fits, std::string_view sort_by) {
   std::stable_sort(fits.begin(), fits.end(), [&](const ModelFit& a, const ModelFit& b) {
     const bool ta = a.fit_level == FitLevel::kTooTight, tb = b.fit_level == FitLevel::kTooTight;
     if (ta != tb) return tb;
+    // llmfit: among runnable models, installed ones come first.
+    if (a.installed != b.installed) return a.installed;
     return key(a) > key(b);
   });
 }
@@ -636,6 +667,7 @@ Json to_json(const ModelFit& f) {
            {{"quality", f.components.quality}, {"speed", f.components.speed}, {"fit", f.components.fit}, {"context", f.components.context}}},
           {"runtime", to_string(f.runtime)},
           {"installed", f.installed},
+          {"installed_providers", f.installed_providers},
           {"usable_context", f.usable_context},
           {"disk_size_gb", f.disk_size_gb},
           {"supports_tp", f.supports_tp},

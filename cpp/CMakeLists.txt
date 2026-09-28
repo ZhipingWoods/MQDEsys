@@ -33,8 +33,9 @@ add_library(mqde_estimator STATIC src/estimator/recipe.cpp src/estimator/hardwar
 target_link_libraries(mqde_estimator PUBLIC mqde_modelspec mqde_quant)
 
 # ---- fit (llmfit-style deployment pre-evaluation) ----
-add_library(mqde_fit STATIC src/fit/fit.cpp src/fit/benchmarks.cpp src/fit/concurrency.cpp src/fit/claim.cpp)
-target_link_libraries(mqde_fit PUBLIC mqde_estimator)
+add_library(mqde_fit STATIC src/fit/fit.cpp src/fit/benchmarks.cpp src/fit/concurrency.cpp src/fit/claim.cpp
+                             src/fit/installed.cpp)
+target_link_libraries(mqde_fit PUBLIC mqde_estimator PRIVATE httplib::httplib)
 
 # ---- server (REST + SSE, job runner) ----
 add_library(mqde_server STATIC src/server/server.cpp src/server/job_runner.cpp)
@@ -71,7 +72,8 @@ if(MQDE_BUILD_TESTS)
     tests/unit/probe_test.cpp
     tests/unit/fit_test.cpp
     tests/unit/benchmarks_test.cpp
-    tests/unit/concurrency_test.cpp)
+    tests/unit/concurrency_test.cpp
+    tests/unit/installed_test.cpp)
   target_link_libraries(mqde_unit_tests PRIVATE mqde_fit mqde_estimator mqde_probe GTest::gtest_main)
   target_compile_definitions(mqde_unit_tests PRIVATE MQDE_TEST_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures")
   include(GoogleTest)
