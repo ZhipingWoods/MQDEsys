@@ -10,6 +10,7 @@
 #include "job_runner.h"
 #include "mqde/common/log.h"
 #include "mqde/estimator/estimator.h"
+#include "mqde/fit/concurrency.h"
 #include "mqde/fit/fit.h"
 #include "mqde/quant/metrics.h"
 #include "mqde/quant/ops.h"
@@ -463,6 +464,25 @@ Result<void> serve(const ServerOptions& o) {
       rows.push_back(j);
     }
     send_json(res, {{"model", path}, {"rows", rows}});
+  });
+
+  // ---------------- fit:concurrency ----------------
+  svr.Post("/api/v1/fit:concurrency", [&](const httplib::Request& req, httplib::Response& res) {
+    auto body = parse_body(req, res);
+    if (!body) return;
+    const auto path = body->value("model", "");
+    if (!path_allowed(o.allowed_roots, path)) return send_error(res, 403, "forbidden", "model path is outside allowed roots");
+    auto s = get_spec(path);
+    if (!s) return send_error(res, s.error());
+    auto hw = estimator::load_hardware(body->value("hardware", "nvidia/rtx4090"));
+    if (!hw) return send_error(res, hw.error());
+    auto be = estimator::load_backend(body->value("backend", "hf_transformers"));
+    if (!be) return send_error(res, be.error());
+    const std::string recipe = body->value("recipe", "bf16");
+    const int64_t users   = body->value("users", 1);
+    const int64_t context = body->value("context", 4096);
+    auto c = fit::estimate_concurrency(*s, recipe, *hw, *be, users, context);
+    send_json(res, fit::to_json(c));
   });
 
   // ---------------- jobs ----------------

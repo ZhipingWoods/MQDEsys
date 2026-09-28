@@ -271,6 +271,14 @@ export interface TensorView {
   quant_preview?: { recipe: string; metrics: { sqnr_db: number | null; cosine: number; rel_l2: number | null; max_abs: number } };
 }
 
+export interface ConcurrencyEstimate {
+  requested_users: number; max_users: number; context: number;
+  weights_gb: number; kv_per_user_gb: number; overhead_gb: number;
+  total_gb: number; capacity_gb: number; utilization_pct: number;
+  fits: boolean; high_pressure: boolean;
+  max_context_for_users: number;
+}
+
 export const api = {
   health: () => req<{ status: string; version: string }>("GET", "/health"),
   config: () => req<{ allowed_roots: string[]; gpus: number[]; runs_dir: string }>("GET", "/config"),
@@ -291,6 +299,8 @@ export const api = {
   tensor: (path: string, tensor: string, recipe = "") => req<TensorView>("POST", "/models:tensor", { path, tensor, recipe }),
   fit: (q: FitQuery) => req<{ system: FitSystem; models: ModelFit[]; errors: { model: string; error: string }[]; use_cases: string[] }>("POST", "/fit", q),
   plan: (model: string, q: Omit<FitQuery, "hardware">) => req<{ model: string; rows: ModelFit[] }>("POST", "/fit:plan", { model, ...q }),
+  concurrency: (model: string, hardware: string, recipe: string, users: number, context: number) =>
+    req<ConcurrencyEstimate>("POST", "/fit:concurrency", { model, hardware, recipe, users, context }),
 };
 
 /** Follows a job's event stream (SSE). Reconnects resume from the last seen seq. */

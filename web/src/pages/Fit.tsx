@@ -25,6 +25,45 @@ export function FitBadge({ level }: { level: FitLevel }) {
   return <span className={`status ${FIT_CLASS[level]}`}>{FIT_LABEL[level]}</span>;
 }
 
+function ConcurrencyPanel({ model, hardware, recipe, users, context }: {
+  model: string; hardware: string; recipe: string; users: number; context: number;
+}) {
+  const res = useAsync(
+    () => api.concurrency(model, hardware, recipe, users, context),
+    [model, hardware, recipe, users, context]
+  );
+  if (res.loading) return <div className="muted small" style={{ padding: "8px 0" }}>并发能力计算中…</div>;
+  if (res.error) return null;
+  const c = res.data!;
+  const pct = Math.round(c.utilization_pct);
+  return (
+    <div style={{ marginTop: 16 }}>
+      <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>并发能力</h3>
+      <dl className="detail-grid">
+        <dt>最大并发</dt>
+        <dd>
+          {c.max_users} 路
+          {c.high_pressure && <span className="badge warn" style={{ marginLeft: 6 }}>高压</span>}
+          {!c.fits && <span className="badge critical" style={{ marginLeft: 6 }}>放不下</span>}
+        </dd>
+        <dt>当前 {users} 路下的最大上下文</dt>
+        <dd>{c.max_context_for_users > 0 ? `${c.max_context_for_users.toLocaleString()} tokens` : "–"}</dd>
+        <dt>利用率（{users} 路 × {context} tok）</dt>
+        <dd>
+          <span style={{ marginRight: 8 }}>{fmt(c.total_gb, 2)} / {fmt(c.capacity_gb, 2)} GiB</span>
+          <span className={pct > 90 ? "badge warn" : "muted small"}>{pct}%</span>
+        </dd>
+        <dt>显存构成</dt>
+        <dd className="muted small">
+          权重 {fmt(c.weights_gb, 2)} GiB
+          {" · "} KV×用户 {fmt(c.kv_per_user_gb * users, 2)} GiB
+          {" · "} 运行时 {fmt(c.overhead_gb, 2)} GiB
+        </dd>
+      </dl>
+    </div>
+  );
+}
+
 export default function FitPage() {
   const profiles = useAsync(api.hardwareProfiles, []);
   const [q, setQ] = useState<FitQuery>({ hardware: "nvidia/rtx4090", gpu_count: 1, use_case: "auto", concurrency: 1, context: 0, sort: "score" });
@@ -295,6 +334,9 @@ function Detail({ m, query }: { m: ModelFit; query: FitQuery }) {
                   </>
                 )}
               </dl>
+              <ConcurrencyPanel model={m.model} hardware={query.hardware}
+                recipe={m.best_quant || "bf16"} users={query.concurrency || 1}
+                context={m.context || 4096} />
             </div>
           </div>
         </div>
