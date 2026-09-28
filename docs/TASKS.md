@@ -830,7 +830,7 @@
 | T-R02 | `/fit`、`/fit:plan` API + 部署预评估页 | llmfit-web | L1 | DONE (7f2c8a7) |
 | T-R04 | netron 式模型结构：`models:graph` / `models:tensor` + 结构页 | netron | L1 | DONE (7f2c8a7) |
 | T-R16 | 前端深色控制台风格（token 化、主题切换） | refero / evalscope | L1 | DONE (7f2c8a7) |
-| **T-R17** | **评分常数校准**：质量分档、量化惩罚、家族/时效/任务加分、TTFT 返回 null | llmfit A.1–A.3, A.6 | L2 | TODO |
+| **T-R17** | **评分常数校准**：质量分档、量化惩罚、家族/时效/任务加分、TTFT 返回 null | llmfit A.1–A.3, A.6 | L2 | DONE (2026-09-28, 39/39 ctest) |
 | **T-R18** | **MoE 两级速度模型** + 显存压力惩罚 | llmfit A.5 | L1 | TODO |
 | **T-R19** | **置信度阶梯 + 本地校准**（calibrated 档） | llmfit A.7 | L1 | TODO |
 | **T-R20** | **实测基线库**：格式、三级硬件匹配、中位数归并 | llmfit A.8 | L1 | TODO |
