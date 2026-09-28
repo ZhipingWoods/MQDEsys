@@ -173,6 +173,35 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-09-28 · T-R20 后续 + ADR-0001（VLA 上限标注 + flash-linear-attention 提案）
+
+- **状态**：DONE（8f07c25）
+- **本次完成**：
+  1. `ModelFit.speed_is_upper_bound`：在 VLA 分支（`formula_tps > 0`）置 true；有实测值时清除。
+  2. `fit.cpp` VLA notes：有上限标志时追加一条说明（公式 46.9 vs 实测 4.41 steps/s，eager 模式内核发射开销）。
+  3. `to_json(ModelFit)` 导出 `speed_is_upper_bound` 字段。
+  4. `web/src/api.ts`：`ModelFit` 类型增加 `speed_is_upper_bound: boolean`。
+  5. `Fit.tsx`：速度列加 "≤" 前缀 + 橙色 "上限" 徽标（含 hover tooltip）；详情面板速度条目加内联说明与 `mqde bench` 指引；跨硬件规划表同步 "≤" 前缀。
+  6. `styles.css`：新增 `.badge.warn`（warning hue，16% fill）。
+  7. `docs/adr/0001-flash-linear-attention.md`：ADR 提案（状态 Proposed），待负责人批准后安装 FLA + causal-conv1d。
+  8. `docs/STRUCTURE.md`：§7 docs 表新增 `adr/NNNN-*.md` 行；从"计划中未创建"列表移除 `docs/adr/`。
+- **校验结果**：
+  - `ctest --preset dev` → 56/56 通过。
+  - Web build（tsc + vite）→ 通过，无类型错误。
+  - `/api/v1/fit` POST → VLA 模型：`speed_is_upper_bound=false`（实测替换公式，标志清除）；
+    `formula_tps=46.89`，`estimated_tps=4.41`，`confidence=measured_local`。
+  - 其他稠密模型：`speed_is_upper_bound=false`（正确，从未置 true）。
+- **下一步**：T-R19 置信度阶梯与本地校准。
+  - ADR-0001 等负责人批准；批准后去 `pyproject.toml`（L3）加 `vla-fast` extra，
+    重跑 `mqde bench`，逐模块剖析验证快路径效果。
+- **注意**：
+  - `speed_is_upper_bound=true` 只在"有公式但无实测"时展示；本机已有 4.41 的实测，
+    所以目前在 VLA 卡片上**看不到**橙色上限徽标——这是正确行为。
+    换一台没有实测的机器或硬件画像，才会触发橙色标注。
+  - 当前 STRUCTURE.md 变更随本次 commit 一起提交（8f07c25 仅含 C++/ADR/Web；
+    STRUCTURE/PROGRESS 更新在下一个 commit）。
+
+
 ### 2026-09-24 · Claude（Opus 5.5） · VLA 纵向切片
 - **状态**：多任务 DONE / PARTIAL（见 TASKS.md）；git 提交在服务器仓库
 - **本次完成**：

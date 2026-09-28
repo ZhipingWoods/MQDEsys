@@ -173,10 +173,11 @@ MQDEsys/
 | `TASKS.md` | 任务清单：ID、标题、级别、验收标准、状态 | L1 |
 | `PROGRESS.md` | 会话日志：每次会话的完成项、校验方式、下一步、坑 | L1（**每次会话结束必须更新**） |
 | `DEVELOPMENT.md` | 环境搭建、构建、测试、调试、提交流程 | L1 |
+| `adr/NNNN-*.md` | 架构决策记录：背景、决策、替代方案、影响（**L3**，状态 Proposed → Accepted → Done） | L1 |
 
 ### 计划中但尚未创建
 
-`api/`（OpenAPI 契约）、`schemas/`（JSON Schema）、`deploy/`、`scripts/`、`docs/adr/`、
+`api/`（OpenAPI 契约）、`schemas/`（JSON Schema）、`deploy/`、`scripts/`、
 `data/benchmarks/`（实测基线）、`data/models/`（模型目录）、`data/compat/`、`data/golden/`、
 `cpp/src/hal/`（后端插件）、`cpp/plugins/<vendor>/`、`python/mqde/eval/`（评测）、
 `CHANGELOG.md`、`LICENSE`、`vcpkg.json`、`pyproject.toml`、`.github/`、`.clang-format`
