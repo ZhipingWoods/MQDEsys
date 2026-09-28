@@ -17,6 +17,7 @@
 #include "mqde/common/log.h"
 #include "mqde/estimator/estimator.h"
 #include "mqde/fit/benchmarks.h"
+#include "mqde/fit/claim.h"
 #include "mqde/fit/fit.h"
 #include "mqde/server/server.h"
 #include "mqde_probe.h"
@@ -463,6 +464,13 @@ int main(int argc, char** argv) {
   bench->add_option("--repo", ba.repo, "repository root (for python/)");
   bench->add_flag("--dry-run", ba.dry_run, "print the submission instead of writing it");
 
+  auto* claim = app.add_subcommand("claim", "compute conservative/optimistic throughput bounds for a model");
+  std::string claim_model, claim_hw, claim_quant;
+  double claim_min_tps = 1.0;
+  claim->add_option("model", claim_model, "local model directory")->required();
+  claim->add_option("--hardware,-H", claim_hw, "hardware profile (e.g. nvidia/rtx4090)")->default_val("nvidia/rtx4090");
+  claim->add_option("--min-tps", claim_min_tps, "minimum acceptable throughput")->default_val(1.0);
+
   auto* serve = app.add_subcommand("serve", "start the REST/SSE API server (+ web UI)");
   mqde::server::ServerOptions so;
   std::string gpus;
@@ -497,6 +505,30 @@ int main(int argc, char** argv) {
   if (*fitc) {
     fa.json = json;
     return cmd_fit(fa);
+  }
+  if (*claim) {
+    auto spec = mqde::modelspec::inspect_local(claim_model);
+    if (!spec) { fmt::print(stderr, "error: {}\n", spec.error().to_string()); return 1; }
+    auto hw = mqde::estimator::load_hardware(claim_hw);
+    if (!hw) { fmt::print(stderr, "error: {}\n", hw.error().to_string()); return 1; }
+    auto be = mqde::estimator::BackendProfile{};
+    auto cfg = mqde::fit::load_fit_config();
+    if (!cfg) { fmt::print(stderr, "error: {}\n", cfg.error().to_string()); return 1; }
+    auto sys = mqde::fit::system_from_profile(*hw);
+    auto b = mqde::fit::fit_bounds(*spec, sys, *cfg, be, claim_min_tps);
+    if (json) {
+      fmt::print("{}\n", mqde::fit::to_json(b).dump(2));
+    } else {
+      fmt::print("model: {}\n", spec->path);
+      fmt::print("hardware: {}\n", claim_hw);
+      fmt::print("quant: {}\n", b.best_quant);
+      fmt::print("conservative: {:.1f} tok/s  optimistic: {:.1f} tok/s\n", b.conservative_tps, b.optimistic_tps);
+      fmt::print("holds (>= {:.1f} tok/s): {}\n", claim_min_tps, b.holds ? "yes" : "no");
+      if (b.holds)
+        fmt::print("max context at threshold: {} tokens\n", b.max_context_at_min_tps);
+      fmt::print("memory: {:.2f} GiB  efficiency assumed: {:.0f}%%\n", b.memory_gb, b.efficiency_used * 100);
+    }
+    return 0;
   }
   if (*recipes) return cmd_list("recipes", json);
   if (*hardware) return cmd_list("hardware_db", json);

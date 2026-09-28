@@ -33,7 +33,7 @@ add_library(mqde_estimator STATIC src/estimator/recipe.cpp src/estimator/hardwar
 target_link_libraries(mqde_estimator PUBLIC mqde_modelspec mqde_quant)
 
 # ---- fit (llmfit-style deployment pre-evaluation) ----
-add_library(mqde_fit STATIC src/fit/fit.cpp src/fit/benchmarks.cpp src/fit/concurrency.cpp)
+add_library(mqde_fit STATIC src/fit/fit.cpp src/fit/benchmarks.cpp src/fit/concurrency.cpp src/fit/claim.cpp)
 target_link_libraries(mqde_fit PUBLIC mqde_estimator)
 
 # ---- server (REST + SSE, job runner) ----

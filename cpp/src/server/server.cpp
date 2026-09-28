@@ -10,6 +10,7 @@
 #include "job_runner.h"
 #include "mqde/common/log.h"
 #include "mqde/estimator/estimator.h"
+#include "mqde/fit/claim.h"
 #include "mqde/fit/concurrency.h"
 #include "mqde/fit/fit.h"
 #include "mqde/quant/metrics.h"
@@ -554,6 +555,23 @@ Result<void> serve(const ServerOptions& o) {
                     {"recommended_hardware", rec_hw ? *rec_hw : Json(nullptr)},
                     {"upgrades", upgrades},
                     {"kv_alternatives", kv_alts}});
+  });
+
+  // ---------------- fit:claim ----------------
+  svr.Post("/api/v1/fit:claim", [&](const httplib::Request& req, httplib::Response& res) {
+    auto body = parse_body(req, res);
+    if (!body) return;
+    const auto path = body->value("model", "");
+    if (!path_allowed(o.allowed_roots, path)) return send_error(res, 403, "forbidden", "model path is outside allowed roots");
+    auto s = get_spec(path);
+    if (!s) return send_error(res, s.error());
+    auto hw = estimator::load_hardware(body->value("hardware", "nvidia/rtx4090"));
+    if (!hw) return send_error(res, hw.error());
+    auto be = estimator::load_backend(body->value("backend", "hf_transformers"));
+    if (!be) return send_error(res, be.error());
+    auto sys = fit::system_from_profile(*hw);
+    auto b = fit::fit_bounds(*s, sys, *fit_cfg, *be, body->value("min_tps", 1.0));
+    send_json(res, fit::to_json(b));
   });
 
   // ---------------- fit:concurrency ----------------
