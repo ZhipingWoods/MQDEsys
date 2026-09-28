@@ -7,6 +7,10 @@
 
 ---
 
+## 0. 先读这个
+
+动手前先读 [docs/REFERENCES.md](docs/REFERENCES.md)：每个子系统模仿哪个开源项目、照搬什么、不照搬什么。任务清单附录 R 列出了剩余的对齐任务。
+
 ## 1. 项目一句话
 
 **MQDEsys（Model Quantization & Deployment Evaluation System）**：指定模型（HuggingFace 等）、量化配方（W4A8 / W4A16 / W2A16 / W2A8 / FP8）、评估数据/类型、部署硬件，系统自动完成 **预估 → 量化 → 评估 → 部署 → 压测 → 反馈**，并在 Web 前端可视化执行过程、量化误差（定位到层与转换环节）以及模型占用、KV Cache、单/多并发资源预估。

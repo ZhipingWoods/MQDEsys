@@ -10,6 +10,9 @@
 #include "job_runner.h"
 #include "mqde/common/log.h"
 #include "mqde/estimator/estimator.h"
+#include "mqde/fit/fit.h"
+#include "mqde/quant/metrics.h"
+#include "mqde/quant/ops.h"
 #include "mqde_probe.h"
 
 namespace mqde::server {
@@ -258,6 +261,173 @@ Result<void> serve(const ServerOptions& o) {
       }
     }
     send_json(res, {{"cells", cells}});
+  });
+
+  // ---------------- model library + graph (netron-style) ----------------
+  auto scan_library = [&]() {
+    std::vector<fs::path> out;
+    for (const auto& r : o.allowed_roots) {
+      std::error_code ec;
+      for (const auto& e : fs::directory_iterator(r, ec))
+        if (e.is_directory() && fs::is_regular_file(e.path() / "config.json")) out.push_back(e.path());
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+  };
+  svr.Get("/api/v1/models", [&](const httplib::Request&, httplib::Response& res) {
+    Json arr = Json::array();
+    for (const auto& p : scan_library()) {
+      auto s = get_spec(p.string());
+      if (!s) {
+        arr.push_back({{"path", p.string()}, {"name", p.filename().string()}, {"error", s.error().message}});
+        continue;
+      }
+      Json j = modelspec::to_json(*s, false);
+      j["name"] = p.filename().string();
+      arr.push_back(j);
+    }
+    send_json(res, arr);
+  });
+  svr.Post("/api/v1/models:graph", [&](const httplib::Request& req, httplib::Response& res) {
+    auto body = parse_body(req, res);
+    if (!body) return;
+    const auto path = body->value("path", "");
+    if (!path_allowed(o.allowed_roots, path)) return send_error(res, 403, "forbidden", "path is outside allowed roots");
+    auto s = get_spec(path);
+    if (!s) return send_error(res, s.error());
+    send_json(res, modelspec::to_graph_json(*s, body->value("focus", ""), body->value("depth", 2)));
+  });
+
+  // netron-style tensor inspector: stats + histogram (+ what a recipe would do to it).
+  svr.Post("/api/v1/models:tensor", [&](const httplib::Request& req, httplib::Response& res) {
+    auto body = parse_body(req, res);
+    if (!body) return;
+    const auto path = body->value("path", "");
+    if (!path_allowed(o.allowed_roots, path)) return send_error(res, 403, "forbidden", "path is outside allowed roots");
+    auto s = get_spec(path);
+    if (!s) return send_error(res, s.error());
+    const auto name = body->value("tensor", "");
+    auto it = std::find_if(s->tensors.begin(), s->tensors.end(), [&](const auto& t) { return t.name == name; });
+    if (it == s->tensors.end()) return send_error(res, 404, "not_found", "no such tensor");
+    auto vals = modelspec::read_tensor_f32(path, *it);
+    Json out = {{"name", it->name}, {"dtype", it->dtype}, {"shape", it->shape}, {"numel", it->numel}};
+    if (!vals) {
+      out["unsupported"] = vals.error().message;
+      return send_json(res, out);
+    }
+    out["sampled"] = vals->size();
+    out["stats"] = quant::to_json(quant::tensor_stats(vals->data(), static_cast<int64_t>(vals->size())));
+    // 64-bin histogram over [min, max] (log-count friendly for heavy tails).
+    const int bins = 64;
+    float mn = *std::min_element(vals->begin(), vals->end()), mx = *std::max_element(vals->begin(), vals->end());
+    if (!(mx > mn)) mx = mn + 1e-6f;
+    std::vector<int64_t> h(bins, 0);
+    for (float v : *vals) h[std::clamp(static_cast<int>((v - mn) / (mx - mn) * bins), 0, bins - 1)]++;
+    out["hist"] = {{"min", mn}, {"max", mx}, {"counts", h}};
+    // Optional: preview the quantization error of a recipe on this tensor (2-D only).
+    const auto recipe = body->value("recipe", "");
+    if (!recipe.empty() && it->shape.size() == 2 && static_cast<int64_t>(vals->size()) == it->numel) {
+      auto r = estimator::load_recipe(recipe);
+      if (r && r->weight.enabled()) {
+        std::vector<float> q(vals->size());
+        if (quant::fake_quant(vals->data(), it->shape[0], it->shape[1], r->weight, q.data()))
+          out["quant_preview"] = {{"recipe", r->name},
+                                  {"metrics", quant::to_json(quant::measure(vals->data(), q.data(), static_cast<int64_t>(q.size())))}};
+      }
+    }
+    send_json(res, out);
+  });
+
+  // ---------------- deployment pre-evaluation (llmfit-style) ----------------
+  auto fit_cfg = fit::load_fit_config();
+  if (!fit_cfg) return std::unexpected(fit_cfg.error().with_context("loading data/fit/fit.yaml"));
+  auto host_ram_gb = [] {
+    mqde_device_info devs[32];
+    int n = 0;
+    if (mqde_probe_all(devs, 32, &n) == 0 && n > 0) return static_cast<double>(devs[0].mem_total_bytes) / (1024.0 * 1024.0 * 1024.0);
+    return 0.0;
+  };
+  // System from a hardware profile id, overridable field by field (llmfit "plan" what-if).
+  auto system_from = [&](const Json& b) -> Result<fit::System> {
+    MQDE_ASSIGN_OR_RETURN(auto hw, estimator::load_hardware(b.value("hardware", "nvidia/rtx4090")));
+    auto sys = fit::system_from_profile(hw, b.value("ram_gb", host_ram_gb()));
+    sys.gpu_count = b.value("gpu_count", 1);
+    if (b.contains("vram_gb")) sys.vram_gb = b["vram_gb"].get<double>();
+    if (b.contains("mem_bw_gbps")) sys.mem_bw_gbps = b["mem_bw_gbps"].get<double>();
+    return sys;
+  };
+  auto fit_request = [](const Json& b) {
+    fit::Request r;
+    r.use_case = b.value("use_case", "auto");
+    r.context = b.value("context", int64_t{0});
+    r.concurrency = b.value("concurrency", int64_t{1});
+    r.force_quant = b.value("quant", "");
+    return r;
+  };
+  svr.Post("/api/v1/fit", [&](const httplib::Request& req, httplib::Response& res) {
+    auto body = parse_body(req, res);
+    if (!body) return;
+    auto sys = system_from(*body);
+    if (!sys) return send_error(res, sys.error());
+    auto be = estimator::load_backend(body->value("backend", "hf_transformers"));
+    if (!be) return send_error(res, be.error());
+    const auto r = fit_request(*body);
+    std::vector<std::string> models = body->value("models", std::vector<std::string>{});
+    if (models.empty())
+      for (const auto& p : scan_library()) models.push_back(p.string());
+    std::vector<fit::ModelFit> fits;
+    Json errors = Json::array();
+    for (const auto& m : models) {
+      if (!path_allowed(o.allowed_roots, m)) {
+        errors.push_back({{"model", m}, {"error", "outside allowed roots"}});
+        continue;
+      }
+      auto s = get_spec(m);
+      if (!s) {
+        errors.push_back({{"model", m}, {"error", s.error().message}});
+        continue;
+      }
+      auto f = fit::analyze(*s, *sys, *fit_cfg, *be, r);
+      if (!f) {
+        errors.push_back({{"model", m}, {"error", f.error().message}});
+        continue;
+      }
+      fits.push_back(*f);
+    }
+    fit::rank(fits, body->value("sort", "score"));
+    Json arr = Json::array();
+    for (const auto& f : fits) arr.push_back(fit::to_json(f));
+    send_json(res, {{"system", fit::to_json(*sys)}, {"models", arr}, {"errors", errors},
+                    {"use_cases", [&] { Json u = Json::array(); for (const auto& [k, _] : fit_cfg->use_cases) u.push_back(k); return u; }()}});
+  });
+  // One model across every hardware profile (llmfit "plan": which device should I buy / deploy to?).
+  svr.Post("/api/v1/fit:plan", [&](const httplib::Request& req, httplib::Response& res) {
+    auto body = parse_body(req, res);
+    if (!body) return;
+    const auto path = body->value("model", "");
+    if (!path_allowed(o.allowed_roots, path)) return send_error(res, 403, "forbidden", "model path is outside allowed roots");
+    auto s = get_spec(path);
+    if (!s) return send_error(res, s.error());
+    auto be = estimator::load_backend(body->value("backend", "hf_transformers"));
+    if (!be) return send_error(res, be.error());
+    auto ids = estimator::list_data_entries("hardware_db");
+    if (!ids) return send_error(res, ids.error());
+    const auto r = fit_request(*body);
+    Json rows = Json::array();
+    for (const auto& id : *ids) {
+      Json b = *body;
+      b["hardware"] = id;
+      auto sys = system_from(b);
+      if (!sys) continue;
+      auto f = fit::analyze(*s, *sys, *fit_cfg, *be, r);
+      if (!f) continue;
+      Json j = fit::to_json(*f);
+      j.erase("detail");
+      j["hardware"] = id;
+      j["system"] = fit::to_json(*sys);
+      rows.push_back(j);
+    }
+    send_json(res, {{"model", path}, {"rows", rows}});
   });
 
   // ---------------- jobs ----------------

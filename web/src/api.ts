@@ -227,6 +227,44 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   return data as T;
 }
 
+// ---- deployment pre-evaluation (llmfit-style) ----
+export interface FitSystem {
+  name: string; backend: string; gpu_count: number; vram_gb: number; vram_free_gb: number; ram_gb: number;
+  mem_bw_gbps: number; peak_tflops_bf16: number; unified_memory: boolean; native_formats: string[];
+}
+export type FitLevel = "perfect" | "good" | "marginal" | "too_tight";
+export interface ModelFit {
+  model: string; family: string; modality: string; params_b: number; active_params_b: number; is_moe: boolean;
+  best_quant: string; fitting_quants: string[]; run_mode: string; fit_level: FitLevel;
+  memory_required_gb: number; memory_available_gb: number; utilization_pct: number;
+  estimated_tps: number; speed_unit: string; prefill_tps: number; ttft_ms: number; context: number;
+  estimate_confidence: string; score: number;
+  score_components: { quality: number; speed: number; fit: number; context: number };
+  notes: string[]; detail?: Estimate; hardware?: string; system?: FitSystem;
+}
+export interface FitQuery {
+  hardware: string; gpu_count?: number; ram_gb?: number; vram_gb?: number; mem_bw_gbps?: number;
+  use_case?: string; context?: number; concurrency?: number; quant?: string; sort?: string; models?: string[];
+}
+// ---- model library + netron-style graph ----
+export interface LibraryModel {
+  name: string; path: string; family?: string; modality?: string; model_type?: string; total_params?: number;
+  logical_params?: number; active_params?: number; total_bytes?: number; error?: string;
+  checkpoint_quant?: { method: string; algo: string; bits: number; group_size: number; n_ignored: number };
+  text?: Record<string, number>; components?: { name: string; modality: string; params: number; bytes: number; n_blocks: number }[];
+}
+export interface GraphTensor { name: string; full: string; dtype: string; shape: number[]; logical_shape: number[]; quantizable: boolean; aux: boolean }
+export interface GraphNode {
+  name: string; path: string; kind: "model" | "component" | "block" | "module"; op?: string;
+  params: number; bytes: number; n_children?: number; children?: GraphNode[]; tensors?: GraphTensor[];
+}
+export interface TensorView {
+  name: string; dtype: string; shape: number[]; numel: number; sampled?: number; unsupported?: string;
+  stats?: { min: number; max: number; absmax: number; mean: number; std: number; kurtosis: number; outlier_ratio: number };
+  hist?: { min: number; max: number; counts: number[] };
+  quant_preview?: { recipe: string; metrics: { sqnr_db: number | null; cosine: number; rel_l2: number | null; max_abs: number } };
+}
+
 export const api = {
   health: () => req<{ status: string; version: string }>("GET", "/health"),
   config: () => req<{ allowed_roots: string[]; gpus: number[]; runs_dir: string }>("GET", "/config"),
@@ -242,6 +280,11 @@ export const api = {
   events: (id: string, after = 0) => req<JobEvent[]>("GET", `/jobs/${id}/events?after_seq=${after}`),
   submit: (job: unknown) => req<{ job_id: string }>("POST", "/jobs", job),
   cancel: (id: string) => req<{ state: string }>("POST", `/jobs/${id}:cancel`),
+  models: () => req<LibraryModel[]>("GET", "/models"),
+  graph: (path: string, focus = "", depth = 2) => req<GraphNode>("POST", "/models:graph", { path, focus, depth }),
+  tensor: (path: string, tensor: string, recipe = "") => req<TensorView>("POST", "/models:tensor", { path, tensor, recipe }),
+  fit: (q: FitQuery) => req<{ system: FitSystem; models: ModelFit[]; errors: { model: string; error: string }[]; use_cases: string[] }>("POST", "/fit", q),
+  plan: (model: string, q: Omit<FitQuery, "hardware">) => req<{ model: string; rows: ModelFit[] }>("POST", "/fit:plan", { model, ...q }),
 };
 
 /** Follows a job's event stream (SSE). Reconnects resume from the last seen seq. */

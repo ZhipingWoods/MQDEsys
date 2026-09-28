@@ -813,3 +813,26 @@
 - **产出**：`CHANGELOG.md` v1.0.0、发布说明、tag `v1.0.0`。
 - **验收**：M0–M7 全部演示场景复现通过；A§11.2 CI 门禁全绿；A§11.4 精度阈值达标；已知问题列表。
 - **校验**：发布检查清单（`docs/guides/release-checklist.md`）逐项勾选。
+
+---
+
+## 附录 R：参考架构对齐任务（2026-09-28 新增，依据 docs/REFERENCES.md）
+
+| ID | 标题 | 参考 | 级别 | 状态 |
+|----|------|------|------|------|
+| T-R01 | `fit` 模块：llmfit 适配等级/量化层级/运行模式/速度/评分（C++） | llmfit | L2 | DONE (2026-09-28, cpp/src/fit, data/fit/fit.yaml, 6 tests) |
+| T-R02 | `/fit`、`/fit:plan` API + 部署预评估页（System/Filter/Table/Detail/跨硬件规划） | llmfit-web | L1 | DONE (2026-09-28) |
+| T-R03 | 社区/本地实测回填（`data/benchmarks/community/<hw>/*.json` → measured_tps、置信度） | llmfit benchmarks.rs | L1 | TODO |
+| T-R04 | netron 式模型结构：`models:graph` / `models:tensor` API + 结构页（树/块图/属性/直方图/量化预览） | netron | L1 | DONE (2026-09-28) |
+| T-R05 | GGUF 结构解析（结构页第二种格式） | netron gguf.js | L1 | TODO |
+| T-R06 | QuantizeConfig（bits/group/sym/desc_act/damp/static_groups/dynamic）+ module_tree 定义（VLA/Qwen3.5/MiniCPM-o） | GPTQModel | L2 | TODO |
+| T-R07 | Looper/Processor：首层捕获 → 逐子集 Hessian → 量化 → true_sequential；每模块日志表 process/layer/module/loss/samples/damp/time/fwd_time | GPTQModel | L2 | TODO |
+| T-R08 | GPTQ 算法（damp 自增、act_order、static_groups）+ AWQ Processor | GPTQModel | L1 | TODO |
+| T-R09 | 导出：quantize_config.json + GPTQ v1/v2 qweight/qzeros/scales/g_idx；merged 16bit；GGUF（llama.cpp） | GPTQModel / unsloth | L2 | TODO |
+| T-R10 | 动态量化：由逐层误差自动生成 `dynamic` 跳过/高精度名单 | unsloth dynamic quants | L1 | TODO |
+| T-R11 | eval：TaskConfig + @register_benchmark + Adapter + Evaluator + outputs/<ts>/{predictions,reviews,reports} + Report schema | evalscope | L2 | TODO |
+| T-R12 | perf：parallel/number 扫描，TTFT/TPOT/ITL/吞吐 p50/p90/p99，benchmark_summary/percentile.json | evalscope perf | L1 | TODO |
+| T-R13 | 前端评测页：Reports（Overview/Details/Predictions 逐样本）、Compare 矩阵、Perf 报告 | evalscope web | L1 | TODO |
+| T-R14 | hal：Target{backend,arch,warp} + Backend 接口（is_active/supports_target/capabilities/deploy/benchmark）+ 插件发现 | FlagTree | L3 | TODO |
+| T-R15 | 后端插件 nvidia(vLLM/TRT-Edge-LLM)、ascend、metax + `data/benchmarks/ref/<backend>/*.yaml` 回归基线 | FlagTree CI ref.txt | L1 | TODO |
+| T-R16 | 前端统一深色控制台风格（token 化、主题切换） | refero Raycast/Linear + evalscope DESIGN.md | L1 | DONE (2026-09-28) |

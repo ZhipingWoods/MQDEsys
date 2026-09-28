@@ -104,6 +104,19 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 
 ---
 
+
+### 2026-09-28 · 参考架构对齐（第一批）
+- **完成**：
+  - T-R01/R02 llmfit 式 `fit`（C++，6 个单测）+ `/fit`、`/fit:plan` + 部署预评估页。
+  - T-R04 netron 式 `models:graph` / `models:tensor` + 结构页。
+  - T-R16 深色控制台 UI。
+  - modelspec 修复：分片 index 迭代器悬空导致 Qwen3.8 / MiniCPM-o 崩溃；支持 MoE 活跃参数、预量化 checkpoint 的逻辑参数。
+- **校验**：
+  - ctest 34/34。
+  - `mqde fit /cache/wuzhiping/hub --hw nvidia/rtx4090` 对 3 个本地模型给出结论。
+  - 前端 build 通过，截图人工核对。
+- **下一步**（按顺序）：T-R06→R07→R08（GPTQModel 式量化流程），T-R11→R12→R13（evalscope 式评测），T-R14→R15（FlagTree 式多硬件）。
+- **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
 ### 2026-09-24 · Claude（Opus 5.5） · VLA 纵向切片

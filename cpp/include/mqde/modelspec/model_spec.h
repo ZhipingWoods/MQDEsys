@@ -150,4 +150,8 @@ Result<ModelSpec> build_model_spec(const Json& config, std::vector<TensorInfo> t
 
 Json to_json(const ModelSpec& spec, bool include_tensors = false);
 
+// netron-style hierarchy: model -> component -> block -> module(op) -> tensors.
+// `focus` = "" | "<component>" | "<component>/<block>"; children deeper than max_depth are summarized.
+Json to_graph_json(const ModelSpec& spec, const std::string& focus = "", int max_depth = 2);
+
 }  // namespace mqde::modelspec

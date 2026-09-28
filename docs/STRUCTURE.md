@@ -326,3 +326,16 @@ $MQDE_HOME（默认 ~/.mqde）
 | 新 C++ 第三方库 | — | **先写 ADR** | L3 |
 
 文件命名：C++ `snake_case.cpp/.h`，类 `PascalCase`，函数/变量 `snake_case`，常量 `kPascalCase`，命名空间 `mqde::<module>`；Python 遵循 PEP 8；TS 组件 `PascalCase.tsx`，其他 `camelCase.ts`。
+
+
+## 附：2026-09-28 新增路径
+
+| 路径 | 职责 | 级别 |
+|------|------|------|
+| `cpp/src/fit/`、`cpp/include/mqde/fit/` | llmfit 式部署预评估（适配等级、运行模式、速度、评分） | L2 |
+| `data/fit/fit.yaml` | llmfit 常数表（bpp、阈值、效率、权重）。改一个值会改变所有结论 | L2 |
+| `cpp/src/modelspec/graph.cpp` | netron 式层级图（组件→块→模块→张量），只读 safetensors 头 | L1 |
+| `data/model_families/{qwen3_5,minicpmo}.yaml` | 新增架构模板 | L1 |
+| `web/src/pages/{Fit,Graph}.tsx` | 部署预评估页、模型结构页 | L0 |
+| `docs/REFERENCES.md` | 各子系统对应的开源参考与模仿边界 | L2 |
+| `3rdpart/`（仅开发机，git 忽略） | 参考源码只读副本，禁止修改、禁止被产品代码 import | L3 |

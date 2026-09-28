@@ -18,7 +18,7 @@ target_compile_definitions(mqde_common PUBLIC MQDE_DEFAULT_DATA_DIR="${MQDE_DATA
 
 # ---- modelspec (config.json + safetensors header -> ModelSpec) ----
 add_library(mqde_modelspec STATIC src/modelspec/safetensors.cpp src/modelspec/model_spec.cpp
-                                  src/modelspec/model_family.cpp)
+                                  src/modelspec/model_family.cpp src/modelspec/graph.cpp)
 target_link_libraries(mqde_modelspec PUBLIC mqde_common)
 
 # ---- quant (numerical core, single source of truth for quantization semantics) ----

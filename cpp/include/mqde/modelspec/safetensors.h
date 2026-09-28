@@ -18,7 +18,13 @@ struct TensorInfo {
   int64_t numel = 0;
   uint64_t nbytes = 0;
   std::string file;  // shard file name
+  uint64_t data_offset = 0;  // absolute byte offset of the payload inside `file`
 };
+
+// Reads one tensor's payload and converts it to float32 (BF16/F16/F32/F8_E4M3/F8_E5M2).
+// At most `max_elems` evenly-strided elements are returned so huge embeddings stay cheap.
+Result<std::vector<float>> read_tensor_f32(const std::filesystem::path& model_dir, const TensorInfo& t,
+                                           int64_t max_elems = 4'000'000);
 
 // Bytes per element for a safetensors dtype string; 0 for unknown.
 double dtype_bytes(std::string_view dtype);

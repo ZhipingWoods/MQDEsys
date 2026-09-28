@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstring>
 #include <fstream>
 #include <set>
 
@@ -53,6 +55,7 @@ Result<std::vector<TensorInfo>> read_safetensors_header(const fs::path& file) {
       if (offs.size() != 2 || offs[1] < offs[0])
         return make_error(Errc::kParse, "'{}': bad data_offsets for {}", file.string(), t.name);
       t.nbytes = offs[1] - offs[0];
+      t.data_offset = 8 + len + offs[0];
     } catch (const std::exception& e) {
       return make_error(Errc::kParse, "'{}': bad entry for {}: {}", file.string(), t.name, e.what());
     }
@@ -96,6 +99,73 @@ Result<std::vector<TensorInfo>> read_model_tensors(const fs::path& model_dir) {
   }
   std::sort(all.begin(), all.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
   return all;
+}
+
+namespace {
+float bf16_to_f32(uint16_t v) {
+  uint32_t u = static_cast<uint32_t>(v) << 16;
+  float f;
+  std::memcpy(&f, &u, 4);
+  return f;
+}
+float f16_to_f32(uint16_t h) {
+  const uint32_t sign = (h & 0x8000u) << 16, exp = (h >> 10) & 0x1f, man = h & 0x3ff;
+  uint32_t u;
+  if (exp == 0) {
+    if (man == 0) u = sign;
+    else {  // subnormal
+      float f = std::ldexp(static_cast<float>(man), -24);
+      return sign ? -f : f;
+    }
+  } else if (exp == 31) u = sign | 0x7f800000u | (man << 13);
+  else u = sign | ((exp + 112) << 23) | (man << 13);
+  float f;
+  std::memcpy(&f, &u, 4);
+  return f;
+}
+float f8_to_f32(uint8_t v, bool e4m3) {
+  const int mbits = e4m3 ? 3 : 2, ebits = e4m3 ? 4 : 5, bias = e4m3 ? 7 : 15;
+  const int sign = v >> 7, exp = (v >> mbits) & ((1 << ebits) - 1), man = v & ((1 << mbits) - 1);
+  if (e4m3 && exp == 15 && man == 7) return std::nanf("");
+  if (!e4m3 && exp == 31) return man ? std::nanf("") : (sign ? -INFINITY : INFINITY);
+  const float m = exp == 0 ? static_cast<float>(man) / (1 << mbits) : 1.0f + static_cast<float>(man) / (1 << mbits);
+  const float f = std::ldexp(m, (exp == 0 ? 1 : exp) - bias);
+  return sign ? -f : f;
+}
+}  // namespace
+
+Result<std::vector<float>> read_tensor_f32(const fs::path& model_dir, const TensorInfo& t, int64_t max_elems) {
+  const double eb = dtype_bytes(t.dtype);
+  if (!(t.dtype == "BF16" || t.dtype == "F16" || t.dtype == "F32" || t.dtype == "F8_E4M3" || t.dtype == "F8_E5M2"))
+    return make_error(Errc::kUnsupported, "dtype {} is packed or non-float; no value view", t.dtype);
+  std::ifstream in(model_dir / t.file, std::ios::binary);
+  if (!in) return make_error(Errc::kNotFound, "cannot open shard '{}'", t.file);
+  const int64_t n = t.numel;
+  const int64_t stride = std::max<int64_t>(1, n / std::max<int64_t>(1, max_elems));
+  const int64_t out_n = (n + stride - 1) / stride;
+  std::vector<float> out;
+  out.reserve(static_cast<size_t>(out_n));
+  const size_t esz = static_cast<size_t>(eb);
+  // Read in chunks of contiguous elements; strided sampling picks every `stride`-th value.
+  constexpr int64_t kChunk = 1 << 20;
+  std::vector<char> buf;
+  for (int64_t start = 0; start < n; start += kChunk * stride) {
+    const int64_t span = std::min<int64_t>(kChunk * stride, n - start);
+    buf.resize(static_cast<size_t>(span) * esz);
+    in.seekg(static_cast<std::streamoff>(t.data_offset + static_cast<uint64_t>(start) * esz));
+    if (!in.read(buf.data(), static_cast<std::streamsize>(buf.size())))
+      return make_error(Errc::kIo, "short read on '{}'", t.name);
+    for (int64_t i = 0; i < span; i += stride) {
+      const char* p = buf.data() + static_cast<size_t>(i) * esz;
+      float v = 0;
+      if (t.dtype == "F32") std::memcpy(&v, p, 4);
+      else if (t.dtype == "BF16") { uint16_t h; std::memcpy(&h, p, 2); v = bf16_to_f32(h); }
+      else if (t.dtype == "F16") { uint16_t h; std::memcpy(&h, p, 2); v = f16_to_f32(h); }
+      else v = f8_to_f32(static_cast<uint8_t>(*p), t.dtype == "F8_E4M3");
+      out.push_back(v);
+    }
+  }
+  return out;
 }
 
 }  // namespace mqde::modelspec
