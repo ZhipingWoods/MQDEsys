@@ -280,6 +280,20 @@ function Detail({ m, query }: { m: ModelFit; query: FitQuery }) {
                     <dd className="muted">{fmt(m.formula_tps, 2)} {m.speed_unit}</dd>
                   </>
                 )}
+                {m.estimate_basis && (
+                  <>
+                    <dt>估算依据</dt>
+                    <dd className="muted small">
+                      方法：{m.estimate_basis.method}
+                      {m.estimate_basis.gpu_bandwidth_gbps > 0 && <span>  · GPU BW {fmt(m.estimate_basis.gpu_bandwidth_gbps, 0)} GB/s</span>}
+                      {m.estimate_basis.efficiency > 0 && <span>  · 效率 {fmt(m.estimate_basis.efficiency * 100, 0)}%</span>}
+                      {m.estimate_basis.assumed_context > 0 && <span>  · 上下文 {m.estimate_basis.assumed_context} tok</span>}
+                      {m.estimate_basis.local_calibration !== 1.0 && (
+                        <span>  · 本机校准系数 ×{fmt(m.estimate_basis.local_calibration, 3)}</span>
+                      )}
+                    </dd>
+                  </>
+                )}
               </dl>
             </div>
           </div>
@@ -410,7 +424,7 @@ function Tile({ label, value, hint }: { label: string; value: string; hint?: str
 const CONF_LABEL: Record<string, [string, string]> = {
   measured_local: ["本机实测", "good"],
   measured_community: ["社区实测", "good"],
-  calibrated: ["已校准", "accent"],
+  calibrated: ["本机校准", "accent"],
   estimated: ["估算（无实测）", ""],
   unsupported: ["不支持", "critical"],
 };

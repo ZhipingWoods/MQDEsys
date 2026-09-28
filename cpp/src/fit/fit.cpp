@@ -142,7 +142,9 @@ std::string_view to_string(Confidence c) {
   switch (c) {
     case Confidence::kMeasuredLocal: return "measured_local";
     case Confidence::kMeasuredCommunity: return "measured_community";
+    case Confidence::kCalibrated: return "calibrated";
     case Confidence::kEstimated: return "estimated";
+    case Confidence::kUnsupported: return "unsupported";
   }
   return "unknown";
 }
@@ -340,6 +342,8 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
     const double t = std::max(t_mem, t_cmp);
     f.formula_tps = t > 0 ? mode_factor / t : 0;
     f.estimated_tps = f.formula_tps;
+    f.estimate_basis = {"formula", sys.mem_bw_gbps, cfg.ddr_bw_gbps, cfg.bw_efficiency,
+                        e.context_tokens > 0 ? e.context_tokens : cfg.default_context, 1.0};
     // The roofline assumes the GPU is never idle. A VLA step is thousands of small kernels (vision
     // tower + LM prefill + N flow-matching denoise passes), so in eager mode launch overhead, not
     // bandwidth, sets the step time. Report the number as a ceiling until a measurement lands.
@@ -399,6 +403,11 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
       f.ttft_ms = static_cast<double>(ctx) / ptps * 1e3;
     }
   }
+  // Populate estimate_basis for the non-VLA path (VLA branch already set it above).
+  if (f.estimate_basis.method.empty()) {
+    const int64_t ctx_eb = e.context_tokens > 0 ? e.context_tokens : cfg.default_context;
+    f.estimate_basis = {"formula", sys.mem_bw_gbps, cfg.ddr_bw_gbps, cfg.bw_efficiency, ctx_eb, 1.0};
+  }
   // Measured baseline (llmfit: local > community > estimate). Keyed by model + chosen quant, so a
   // BF16 measurement never stands in for a W4A16 fit.
   f.formula_tps = f.estimated_tps;
@@ -408,6 +417,7 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
     f.measured_tps = m;
     f.estimated_tps = m->tok_s;
     f.confidence = m->source == MeasuredSource::kLocal ? Confidence::kMeasuredLocal : Confidence::kMeasuredCommunity;
+    f.estimate_basis.method = m->source == MeasuredSource::kLocal ? "measured_local" : "measured_community";
     f.speed_is_upper_bound = false;
     if (m->ttft_ms) f.ttft_ms = m->ttft_ms;
     f.notes.push_back(fmt::format("speed measured on {}: {:.2f} {} (median of {} runs; formula {:.2f})", m->hardware_label,
@@ -467,6 +477,46 @@ void rank(std::vector<ModelFit>& fits, std::string_view sort_by) {
   });
 }
 
+void apply_local_calibration(std::vector<ModelFit>& fits) {
+  // llmfit A.7: use dense, >=1B local measurements as anchors to calibrate formula estimates.
+  // Collect anchors: dense (not MoE), params >= 1B, local measurement present, same speed_unit.
+  // Separate tok/s and steps/s anchors — mixing units makes no sense.
+  auto collect = [&](const std::string& unit) -> std::vector<double> {
+    std::vector<double> ratios;
+    for (const auto& f : fits) {
+      if (f.speed_unit != unit) continue;
+      if (f.is_moe) continue;
+      if (f.active_params_b < 1.0) continue;
+      if (!f.measured_tps || f.measured_tps->source != MeasuredSource::kLocal) continue;
+      if (f.formula_tps <= 0) continue;
+      ratios.push_back(f.measured_tps->tok_s / f.formula_tps);
+    }
+    return ratios;
+  };
+
+  for (const std::string& unit : std::vector<std::string>{"tok/s", "steps/s"}) {
+    auto ratios = collect(unit);
+    if (ratios.size() < 2) continue;  // fewer than 2 anchors: skip this unit
+
+    // Median of ratios, then clamp to [0.05, 3.0].
+    std::sort(ratios.begin(), ratios.end());
+    const double raw_median = ratios.size() % 2 == 1
+                                  ? ratios[ratios.size() / 2]
+                                  : 0.5 * (ratios[ratios.size() / 2 - 1] + ratios[ratios.size() / 2]);
+    const double factor = std::clamp(raw_median, 0.05, 3.0);
+
+    // Apply to all non-measured entries with the same speed unit.
+    for (auto& f : fits) {
+      if (f.speed_unit != unit) continue;
+      if (f.measured_tps) continue;  // already has a measurement; don't touch it
+      f.estimated_tps = f.formula_tps * factor;
+      f.confidence = Confidence::kCalibrated;
+      f.estimate_basis.method = "calibrated";
+      f.estimate_basis.local_calibration = factor;
+    }
+  }
+}
+
 Json to_json(const ModelFit& f) {
   return {{"model", f.model},
           {"family", f.family},
@@ -502,6 +552,12 @@ Json to_json(const ModelFit& f) {
           {"score_components",
            {{"quality", f.components.quality}, {"speed", f.components.speed}, {"fit", f.components.fit}, {"context", f.components.context}}},
           {"notes", f.notes},
+          {"estimate_basis", {{"method", f.estimate_basis.method},
+                              {"gpu_bandwidth_gbps", f.estimate_basis.gpu_bandwidth_gbps},
+                              {"ddr_bandwidth_gbps", f.estimate_basis.ddr_bandwidth_gbps},
+                              {"efficiency", f.estimate_basis.efficiency},
+                              {"assumed_context", f.estimate_basis.assumed_context},
+                              {"local_calibration", f.estimate_basis.local_calibration}}},
           {"detail", estimator::to_json(f.detail)}};
 }
 

@@ -299,3 +299,150 @@ TEST(fit, moe_pressure_applied_in_gpu_mode) {
   EXPECT_NEAR(f->moe_vram_pressure, 1.0 - (util - 0.60) * 0.75, 1e-9);
   EXPECT_LT(f->moe_vram_pressure, 1.0);
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// T-R19: confidence ladder, local calibration, EstimateBasis
+// ──────────────────────────────────────────────────────────────────────────────
+
+// Build a ModelFit with a local measurement (for use as an anchor).
+static ModelFit with_local_measurement(double params_b, double formula_tps, double measured_tps_val) {
+  ModelFit f;
+  f.params_b = params_b;
+  f.active_params_b = params_b;
+  f.is_moe = false;
+  f.formula_tps = formula_tps;
+  f.estimated_tps = formula_tps;
+  f.speed_unit = "tok/s";
+  f.confidence = Confidence::kEstimated;
+  MeasuredTps m;
+  m.tok_s = measured_tps_val;
+  m.sample_count = 5;
+  m.source = MeasuredSource::kLocal;
+  m.hardware_label = "this machine";
+  f.measured_tps = m;
+  f.estimated_tps = measured_tps_val;
+  f.confidence = Confidence::kMeasuredLocal;
+  return f;
+}
+
+// Build an unmeasured ModelFit (calibration candidate).
+static ModelFit unmeasured(double params_b, double formula_tps, const std::string& unit = "tok/s") {
+  ModelFit f;
+  f.params_b = params_b;
+  f.active_params_b = params_b;
+  f.is_moe = false;
+  f.formula_tps = formula_tps;
+  f.estimated_tps = formula_tps;
+  f.speed_unit = unit;
+  f.confidence = Confidence::kEstimated;
+  return f;
+}
+
+TEST(fit_calibration, fewer_than_two_anchors_is_noop) {
+  // Zero anchors
+  std::vector<ModelFit> v0 = {unmeasured(7.0, 100.0), unmeasured(3.0, 50.0)};
+  apply_local_calibration(v0);
+  for (const auto& f : v0) {
+    EXPECT_EQ(f.confidence, Confidence::kEstimated);
+    EXPECT_DOUBLE_EQ(f.estimated_tps, f.formula_tps);
+  }
+
+  // Exactly one anchor — still not enough
+  std::vector<ModelFit> v1 = {
+      with_local_measurement(7.0, 100.0, 80.0),  // ratio 0.8
+      unmeasured(3.0, 50.0),
+  };
+  apply_local_calibration(v1);
+  EXPECT_EQ(v1[1].confidence, Confidence::kEstimated);
+  EXPECT_DOUBLE_EQ(v1[1].estimated_tps, v1[1].formula_tps);
+}
+
+TEST(fit_calibration, two_anchors_calibrate_non_measured) {
+  // Anchors: ratio 0.8 and 0.6 → median 0.7
+  std::vector<ModelFit> v = {
+      with_local_measurement(7.0, 100.0, 80.0),  // ratio 0.8
+      with_local_measurement(3.0, 50.0,  30.0),  // ratio 0.6
+      unmeasured(1.5, 40.0),                      // will be calibrated
+  };
+  apply_local_calibration(v);
+  // Anchors unchanged
+  EXPECT_EQ(v[0].confidence, Confidence::kMeasuredLocal);
+  EXPECT_EQ(v[1].confidence, Confidence::kMeasuredLocal);
+  // Non-measured gets calibrated: 40 * 0.7 = 28
+  EXPECT_EQ(v[2].confidence, Confidence::kCalibrated);
+  EXPECT_NEAR(v[2].estimated_tps, 28.0, 1e-9);
+  EXPECT_NEAR(v[2].estimate_basis.local_calibration, 0.7, 1e-9);
+  EXPECT_EQ(v[2].estimate_basis.method, "calibrated");
+}
+
+TEST(fit_calibration, calibration_factor_clamps_to_bounds) {
+  // Very high ratios → clamped to 3.0
+  std::vector<ModelFit> v_high = {
+      with_local_measurement(7.0, 1.0, 100.0),  // ratio 100
+      with_local_measurement(3.0, 1.0, 200.0),  // ratio 200
+      unmeasured(1.5, 10.0),
+  };
+  apply_local_calibration(v_high);
+  EXPECT_NEAR(v_high[2].estimate_basis.local_calibration, 3.0, 1e-9);
+  EXPECT_NEAR(v_high[2].estimated_tps, 30.0, 1e-9);
+
+  // Very low ratios → clamped to 0.05
+  std::vector<ModelFit> v_low = {
+      with_local_measurement(7.0, 100.0, 0.01),  // ratio 0.0001
+      with_local_measurement(3.0, 100.0, 0.01),  // ratio 0.0001
+      unmeasured(1.5, 10.0),
+  };
+  apply_local_calibration(v_low);
+  EXPECT_NEAR(v_low[2].estimate_basis.local_calibration, 0.05, 1e-9);
+  EXPECT_NEAR(v_low[2].estimated_tps, 0.5, 1e-9);
+}
+
+TEST(fit_calibration, idempotent) {
+  std::vector<ModelFit> v = {
+      with_local_measurement(7.0, 100.0, 80.0),  // ratio 0.8
+      with_local_measurement(3.0, 50.0, 30.0),   // ratio 0.6
+      unmeasured(1.5, 40.0),
+  };
+  apply_local_calibration(v);
+  const double tps_after_first = v[2].estimated_tps;
+  const double factor_after_first = v[2].estimate_basis.local_calibration;
+  apply_local_calibration(v);
+  EXPECT_DOUBLE_EQ(v[2].estimated_tps, tps_after_first);
+  EXPECT_DOUBLE_EQ(v[2].estimate_basis.local_calibration, factor_after_first);
+}
+
+TEST(fit_calibration, moe_excluded_from_anchors) {
+  // MoE model with local measurement should not count as an anchor.
+  ModelFit moe = with_local_measurement(8.0, 50.0, 40.0);
+  moe.is_moe = true;
+  std::vector<ModelFit> v = {
+      moe,
+      with_local_measurement(7.0, 100.0, 80.0),  // only one valid anchor
+      unmeasured(1.5, 40.0),
+  };
+  apply_local_calibration(v);  // < 2 anchors in tok/s → noop
+  EXPECT_EQ(v[2].confidence, Confidence::kEstimated);
+}
+
+TEST(fit_calibration, steps_per_s_calibrated_separately) {
+  // A steps/s anchor should not affect tok/s candidates, and vice versa.
+  std::vector<ModelFit> v = {
+      with_local_measurement(7.0, 100.0, 80.0),  // tok/s anchor 0.8
+      with_local_measurement(3.0, 50.0,  30.0),  // tok/s anchor 0.6
+      unmeasured(1.5, 40.0, "steps/s"),           // steps/s, no anchor → noop
+      unmeasured(2.0, 60.0, "tok/s"),             // tok/s → calibrated
+  };
+  apply_local_calibration(v);
+  EXPECT_EQ(v[2].confidence, Confidence::kEstimated) << "steps/s with no anchors stays estimated";
+  EXPECT_EQ(v[3].confidence, Confidence::kCalibrated);
+}
+
+TEST(fit_calibration, estimate_basis_fields_non_empty_after_analyze) {
+  auto c = load_fit_config();
+  ASSERT_TRUE(c);
+  auto f = analyze(dense_llm(7.0), gpu24(), *c, estimator::BackendProfile{}, Request{});
+  ASSERT_TRUE(f);
+  EXPECT_FALSE(f->estimate_basis.method.empty());
+  EXPECT_GT(f->estimate_basis.gpu_bandwidth_gbps, 0.0);
+  EXPECT_GT(f->estimate_basis.efficiency, 0.0);
+}

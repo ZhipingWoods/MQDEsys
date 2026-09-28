@@ -15,7 +15,7 @@ namespace mqde::fit {
 
 enum class FitLevel { kPerfect, kGood, kMarginal, kTooTight };
 enum class RunMode { kGpu, kTensorParallel, kMoeOffload, kCpuOffload, kCpuOnly };
-enum class Confidence { kMeasuredLocal, kMeasuredCommunity, kEstimated };
+enum class Confidence { kMeasuredLocal, kMeasuredCommunity, kCalibrated, kEstimated, kUnsupported };
 
 std::string_view to_string(FitLevel);
 std::string_view to_string(RunMode);
@@ -102,6 +102,18 @@ struct Request {
   std::optional<MeasuredTps> measured;  // explicit override (tests / API); wins over `bench`
 };
 
+// How estimated_tps was derived: the method and the numerical inputs.
+// Populated by analyze(); updated by apply_local_calibration().
+struct EstimateBasis {
+  std::string method;         // "formula", "calibrated", "measured_local", "measured_community"
+  double gpu_bandwidth_gbps = 0;
+  double ddr_bandwidth_gbps = 0;
+  double efficiency = 0;
+  int64_t assumed_context = 0;
+  // Non-zero when confidence == kCalibrated: factor applied to the formula estimate.
+  double local_calibration = 1.0;
+};
+
 struct ScoreComponents {
   double quality = 0, speed = 0, fit = 0, context = 0;
 };
@@ -129,6 +141,7 @@ struct ModelFit {
   // See docs/adr/0001-flash-linear-attention.md.
   bool speed_is_upper_bound = false;
   Confidence confidence = Confidence::kEstimated;
+  EstimateBasis estimate_basis;
   ScoreComponents components;
   double score = 0;
   int64_t context = 0;
@@ -146,6 +159,11 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
 
 // Sort key helpers (llmfit ranking: TooTight last, then by the chosen column).
 void rank(std::vector<ModelFit>& fits, std::string_view sort_by = "score");
+
+// Calibrate all non-measured fits using local measurements as anchors (llmfit A.7).
+// Anchors: dense models with >= 1B params that have a local measurement.
+// Requires >= 2 anchors; otherwise a no-op.  Idempotent: recalculates from anchors each call.
+void apply_local_calibration(std::vector<ModelFit>& fits);
 
 Json to_json(const ModelFit& f);
 Json to_json(const System& s);
