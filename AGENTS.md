@@ -31,6 +31,8 @@
 | 3 | [`docs/TASKS.md`](docs/TASKS.md) | 选任务时 | 全部任务、依赖、状态、验收与校验方法 |
 | 4 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 做任务前读相关章节 | 设计意图、接口、公式、数据流 |
 | 5 | [`docs/STRUCTURE.md`](docs/STRUCTURE.md) | 新增/修改文件前 | 文件放哪、谁能改、改了要谁审（L0–L3） |
+| 6 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | 第一次动手前 | 机器分工、同步、构建、测试、起服务、调试、提交自查 |
+| 7 | [`docs/REFERENCES.md`](docs/REFERENCES.md) | 实现对齐任务前 | 模仿哪个开源项目；**附录 A 是 llmfit 的公式与常数，照它实现即可，不必再读源码** |
 | 6 | `docs/adr/` | 涉及架构取舍时 | 已做出的决策及其原因 |
 | 7 | `docs/guides/` | 做对应类型任务时 | 如何新增算法/模型/后端/硬件插件、编码规范 |
 

@@ -112,3 +112,245 @@ refero 的样式详情页无法抓取 token（页面由 JS 渲染），因此以
 - **字体与尺寸**：等宽数字，12px 表格；圆角 8/12；阴影克制。
 - **图表色**：继续用已校验的 dataviz 调色板，状态色保留给状态。
 - **浅色主题**：暖白，同一套 token。
+
+---
+
+# 附录 A：llmfit 算法细节（可直接实现，无需再读源码）
+
+> 2026-09-28 从 `3rdpart/llmfit` 源码逐行核对得到。文件行号为当时 commit `7f47fca`。
+> 我们已实现的部分见 `cpp/src/fit/fit.cpp`；未实现的标注 **[待实现]** 并对应附录 R 任务号。
+
+## A.1 质量分档（修正我们当前的数值）
+
+按**活跃**参数量（`fit.rs:1969-1983`）：
+
+| 活跃参数 | 分数 |
+|---------|------|
+| < 1 B | 30 |
+| < 3 B | 45 |
+| < 7 B | 60 |
+| < 10 B | 75 |
+| < 20 B | 82 |
+| < 40 B | 89 |
+| ≥ 40 B | 95 |
+
+叠加项：
+
+- **家族加分**：deepseek +3；qwen、llama +2；mistral、mixtral、gemma、starcoder +1；phi 0。
+- **时效加分**：发布 < 3 个月 +3；< 9 个月 +1.5。
+- **任务加分**：查 `use_case_benchmarks.json`，`((bench − 72) × 0.4)` 截断到 [−8, +9]。无记录时用启发式：名字含 coding 且用途为 coding +6；reasoning 且 ≥13B +5；带视觉 +6。
+- 最后截断到 [0, 100]。
+
+## A.2 量化质量惩罚（`models.rs:183`）
+
+Q8_0 / F16 / MXFP4 / 8-bit 0；Q6_K −1；Q5_K_M −2；Q4_K_M −5；Q3_K_M −8；Q2_K −12；I2_S −6；mlx-4bit −4；AWQ / GPTQ / AutoRound-4bit −3；未知 −5。
+
+**我们当前 W2A16 给了 −18，应改为 −12。**
+
+## A.3 速度目标与上下文目标（`fit.rs:98-110`）
+
+| 用途 | 权重 [质量,速度,适配,上下文] | 速度目标 tok/s | 上下文目标 |
+|------|---------------------------|--------------|-----------|
+| General | .45 / .30 / .15 / .10 | 40 | 4096 |
+| Coding | .50 / .20 / .15 / .15 | 40 | 8192 |
+| Reasoning | .55 / .15 / .15 / .15 | 25 | 8192 |
+| Chat | .40 / .35 / .15 / .10 | 40 | 4096 |
+| Multimodal | .50 / .20 / .15 / .15 | 40 | 4096 |
+| Embedding | .30 / .40 / .20 / .10 | 200 | 512 |
+
+适配分：ratio ≤ `COMFORT 0.70` 时为 100，之后高斯衰减 `100·exp(−0.5·((ratio−0.70)/0.20)²)`。
+上下文分：≥ 目标 100；≥ 目标/2 为 70；否则 30。
+
+## A.4 速度估算分支（`fit.rs:1623` estimate_tps）
+
+按优先级：
+
+1. **GPU 带宽屋顶线**：`bw / (params_B × bytes_per_param) × 0.55 × mode_factor`。
+2. **按后端 K 常数**（GPU 带宽未知时）：BitNet 75、Metal+MLX 250、Metal+llama.cpp/vLLM 160、CUDA 220、ROCm 180、Vulkan 150、SYCL 100、CPU-ARM 90、CPU-x86 70、Ascend 390、不支持 0。再乘 `quant_speed_multiplier`，**核数 ≥ 8 再乘 1.1**。
+3. **纯 CPU**：K = 70（x86）/ 90（aarch64）。
+4. **MoE 卸载**：`1 / (active_gb / ddr_bw + active_gb / (bw × 0.55))`。
+
+运行模式系数：gpu 1.0、tensor_parallel 0.9、moe_offload 0.8、cpu_offload 0.5、cpu_only 0.3。
+
+DDR 带宽解析顺序：配置 → 环境变量 `LLMFIT_DDR_BANDWIDTH` → 实测 → 50 GB/s。
+
+## A.5 MoE 两级速度模型 **[待实现，T-R17]**
+
+我们当前只按 `active/total` 线性缩放，llmfit 分两级：
+
+**Tier-1（架构已知，有专家维度信息）**：
+
+```
+active_ffn_params = experts_per_tok × (gate + up + down 单专家参数量)
+fixed_params      = total_params − routed_expert_params
+tps = K × bw / (active_ffn_GB + fixed_GB × moe_tier1_fixed_bpp)
+K = 3.2（gpt_oss 架构为 1.43）
+```
+
+**Tier-2（回退）**：
+
+```
+active_GB = total_params × default_expert_ratio(0.50) × bpp
+tps = bw / active_GB × efficiency × overhead
+```
+
+per-arch 校准：gpt_oss efficiency .72 / overhead .80；deepseek_v3、deepseek_v4 .62 / .70。
+其它架构 efficiency 用默认 0.55，overhead 按专家数查表：
+
+| 专家数 | overhead |
+|-------|---------|
+| ≤ 8 | 0.90 |
+| ≤ 16 | 0.85 |
+| ≤ 32 | 0.80 |
+| ≤ 64 | 0.70 |
+| ≥ 128 | 0.40 |
+| 未知 | 0.60 |
+
+**显存压力惩罚**：利用率超过 `VRAM_PRESSURE_UTIL_THRESHOLD 0.60` 后线性衰减，下限 `0.30`。
+
+## A.6 预填充 / TTFT（`fit.rs:1564`）
+
+`PREFILL_COMPUTE_UTILIZATION 0.35`，`flops_per_token = 2 × params`。
+**算力未知或纯 CPU 时返回 null**，不给假数字。我们当前会算出一个值，应对齐为 null。
+
+## A.7 置信度阶梯与本地校准 **[待实现，T-R03]**
+
+阶梯：`measured_local > measured_community > calibrated > estimated > unsupported`。
+
+`apply_local_calibration`（`analysis.rs`）：
+
+1. 取锚点：稠密、≥1B、有**本地**实测（社区实测不算）的条目。
+2. 锚点 < 2 个则放弃。
+3. 算每个锚点的 `measured / estimated` 比值，取**中位数**，截断到 [0.05, 3.0]。
+4. 该系数乘到所有**无实测**条目的 estimated_tps 上，置信度标为 `calibrated`。
+5. 幂等：只改无实测项，系数每次都从锚点重算。
+
+## A.8 实测数据格式与匹配 **[待实现，T-R03]**
+
+社区数据：`community/<gpu-slug>/<ts>-<hash>.json`
+
+```json
+{
+  "schemaVersion": 1,
+  "submittedAtUnix": 1730000000,
+  "tool": {"name": "llmfit", "version": "..."},
+  "hardware": {"cpu": "...", "cpuCores": 16, "gpuCount": 1, "hardwareName": "...",
+               "hwClass": "...", "memTierGb": 64, "os": "...", "ramGb": 64,
+               "unifiedMemory": false, "vramGb": 24},
+  "results": [{"model": "...", "provider": "...", "avgTps": 41.2, "avgTtftMs": 180,
+               "minTps": 38.1, "maxTps": 43.7, "avgOutputTokens": 256,
+               "avgTotalMs": 6200, "numRuns": 3}]
+}
+```
+
+硬件匹配三级回退：精确 slug → 去掉厂商名后前缀匹配 → 硬件等级等价（要求内存档位差 ≤ 25%，统一内存标志一致）。
+同模型多条结果取 **tps 中位数**，样本数累加。
+
+## A.9 并发估算 **[待实现，T-R18]**
+
+内存模型：`weights + users × kv_per_user + overhead`，反解 `max_users`。
+另有 `max_context_for(users)`：给定并发数反解最大上下文。
+结果字段含：请求并发、最大并发、上下文、各部分内存、利用率、是否放得下；利用率 > 90% 标记高压。
+
+## A.10 claim 边界 **[待实现，T-R19]**
+
+`claim::fit_bounds`：给定模型 + 硬件 + 最低 tok/s，产出「保守 / 乐观」两个估计（用不同效率假设），
+判断保守值是否仍达标；再用二分找出仍达标的最大 2 的幂上下文长度（受模型上限约束）。
+device-class 与 template 只影响输出文案，不参与计算。
+
+## A.11 已安装运行时探测 **[待实现，T-R20]**
+
+8 个来源，**并行**探测，单个 HTTP 超时 400 ms，整体有总deadline：
+
+| 来源 | 方式 |
+|------|------|
+| ollama | HTTP `/api/tags` |
+| LM Studio | HTTP API + 磁盘扫描 |
+| llama.cpp | GGUF 目录扫描，深度 3 |
+| vLLM | HTTP |
+| MLX | 文件系统 |
+| Docker Model Runner | `docker model ls` |
+| RamaLama | 文件系统 |
+| HuggingFace cache | 文件系统 |
+
+名字归一化：转小写、去量化后缀、拆 ollama 的 `name:tag`。
+`is_installed` 会额外尝试去掉 provider 前缀再匹配。
+
+## A.12 HF 模型库 **[待实现，T-R21]**
+
+`hf_models.json`：18 MB，15049 条。字段（★ 为必填）：
+
+★`name` ★`provider` ★`parameter_count` `parameters_raw` `min_ram_gb` `recommended_ram_gb`
+`min_vram_gb` ★`quantization` ★`format` ★`context_length` `use_case` `capabilities[]`
+`pipeline_tag` `architecture` `hf_downloads` `hf_likes` `release_date`
+`num_hidden_layers` `num_attention_heads` `num_key_value_heads` `head_dim` `hidden_size`
+`vocab_size` `moe_intermediate_size` `shared_expert_intermediate_size` `license`
+`gguf_sources[]` `attention_layout` `languages[]`
+
+`llmfit update` 从 HF API 抓 trending / downloads 列表，再逐个取 config。
+字段映射：`id`→name、`author`→provider、`safetensors.total`→parameter_count、
+`config.architectures[0]`→architecture、`cardData.license`→license。
+token 走环境变量或 `--token`，用 bearer auth。每次 config 请求间隔固定 **250 ms**。
+
+**目录卫生**：draft / 投机解码模型（名字含 `-draft`、`-eagle`）、参数量与 raw 不一致、
+缺尺寸或上下文长度的条目会被降级，不参与排名。
+
+## A.13 下载文件选择（`download`）
+
+列出 repo 文件后，按数字前缀把分片归组（下一片就下整组）。
+文件大小取 HF 元数据，缺失时按 `params × bpp` 估。在预算内按质量排序取最优，
+预算内无解时退化为最小文件。下载走 `resolve` 端点并跟随重定向。
+
+## A.14 API 端点（`serve_api.rs:255-266`）
+
+`GET /`、`GET /health`、`GET /api/v1/system`、`GET /api/v1/models`、
+`GET /api/v1/models/top`（limit=5，排除 too_tight）、`GET /api/v1/models/{name}`、
+`GET /api/v1/runtimes`、`GET /api/v1/installed`、
+`POST /api/v1/download`、`GET /api/v1/download/{id}/status`、`POST /api/v1/plan`。
+
+查询参数：`limit|n, perfect, min_fit, runtime, use_case, provider, search, sort,
+include_too_tight, max_context, force_runtime`，以及 `ram_gb, vram_gb, cpu_cores` 覆盖项。
+
+## A.15 ModelFit 字段全集（`fit.rs:331-380`）
+
+`model, fit_level, run_mode, memory_required_gb, memory_available_gb, utilization_pct,
+notes, moe_offloaded_gb, score, score_components{quality,speed,fit,context},
+estimated_tps, best_quant, use_case, runtime, installed, fits_with_turboquant,
+effective_context_length, usable_context,
+estimate_basis{method, gpu_bandwidth_gbps, ddr_bandwidth_gbps, efficiency,
+assumed_context, local_calibration},
+measured_tps{tok_s, sample_count, hardware_label, source}, estimate_confidence,
+prefill_tps, ttft_ms`
+
+JSON 额外字段：`params_b, category, fit_label, run_mode_label, runtime_label,
+capability_ids, disk_size_gb, ollama_name, supports_tp, verify_command,
+estimate_confidence_label, gguf_sources, license`
+
+**我们缺的字段**：`moe_offloaded_gb, runtime, installed, usable_context, estimate_basis,
+measured_tps, disk_size_gb, supports_tp, verify_command, license, capability_ids`
+
+## A.16 运行时选择（`fit.rs:475-511`）
+
+`InferenceRuntime = LlamaCpp | Mlx | Vllm | BitNet | Unsupported`，按序判断：
+ternary → BitNet（不接受强制覆盖）；cluster_mode → vLLM；已量化 → vLLM；
+Metal + 统一内存 → MLX；否则 llama.cpp。
+
+各运行时差异：量化层级、内存模型、K 常数、MLX vs llama.cpp 提速说明、
+vLLM 固定开销（不重新量化）、TurboQuant 仅 vLLM+CUDA、BitNet 强制走 CPU/RAM。
+
+`verify_command` 产出 `llama-bench` / `llama-cli` 参数，按运行模式给 `-ngl all|0|auto --fit on`。
+
+**llmfit 没有的**：k8s / 调度器清单生成；除 runtime 标签和 pull tag 外没有「该装哪个运行时」的建议。
+
+## A.17 存储估算（`storage.rs:144`）**[待实现，低优先级]**
+
+`可用预算 = 空闲磁盘 − OS 保留(默认 20 GB) − scratch(默认 50 GB) − 总容量 × headroom(默认 10%)`，
+与 keep 集合的实际占用比较判断是否放得下。
+`parse_storage_size` 支持 `500GB` / `1.5TB`，区分十进制与二进制后缀。
+单模型占用按 `params × bpp` 加元数据开销估算。
+
+## A.18 我们不打算实现的部分
+
+TUI（21 种输入模式、主题、下载管理器、排行榜视图）、MCP server（6 个 tool）、
+NATS 事件、质量评测 rubric（`benchmarks.yaml` 19 个角色 + 路由矩阵 + frontier 对比）、
+desktop（Tauri 5 个命令）、llmfit-python（只是二进制包装）、i18n（我们只做中文）。

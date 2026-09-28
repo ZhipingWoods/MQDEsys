@@ -6,7 +6,19 @@
 2. **量化评估**（Python 执行器，由 C++ 调度到 GPU 池）：生成 BF16 基线，逐模态做误差归因，执行 fake-quant 并逐层追踪误差。
 3. **可视化**（Web）：展示实时执行过程和日志、逐层误差热力图、最差层列表以及配方对比。
 
-目前首个支持的模型是 VLA 模型 MiniCPM-RobotManip。设计与任务见 `docs/`，Agent 工作规则见 `AGENTS.md`，当前进度见 `docs/PROGRESS.md`。
+目前首个支持的模型是 VLA 模型 MiniCPM-RobotManip。
+
+文档导航：
+
+| 文件 | 内容 |
+|------|------|
+| [AGENTS.md](AGENTS.md) | Agent 工作规则（入口） |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 环境、构建、测试、调试、提交 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统设计 |
+| [docs/STRUCTURE.md](docs/STRUCTURE.md) | 每个文件是干什么的、谁能改 |
+| [docs/TASKS.md](docs/TASKS.md) | 任务清单与验收标准 |
+| [docs/REFERENCES.md](docs/REFERENCES.md) | 参考的开源项目；附录 A 为 llmfit 算法细节 |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | 会话日志与当前进度 |
 
 ## 快速开始（4090 开发机）
 

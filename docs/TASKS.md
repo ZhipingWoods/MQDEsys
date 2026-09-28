@@ -816,23 +816,176 @@
 
 ---
 
-## 附录 R：参考架构对齐任务（2026-09-28 新增，依据 docs/REFERENCES.md）
+## 附录 R：参考架构对齐任务
+
+> 依据 [REFERENCES.md](REFERENCES.md)。llmfit 相关任务的公式与常数已抄录在 REFERENCES.md **附录 A**，
+> 实现时**不需要再读 3rdpart 源码**，按附录 A 的章节号对照即可。
+> 状态更新为 L0；任务定义（产出/验收）修改为 L2。
+
+### R.1 总览
 
 | ID | 标题 | 参考 | 级别 | 状态 |
 |----|------|------|------|------|
-| T-R01 | `fit` 模块：llmfit 适配等级/量化层级/运行模式/速度/评分（C++） | llmfit | L2 | DONE (2026-09-28, cpp/src/fit, data/fit/fit.yaml, 6 tests) |
-| T-R02 | `/fit`、`/fit:plan` API + 部署预评估页（System/Filter/Table/Detail/跨硬件规划） | llmfit-web | L1 | DONE (2026-09-28) |
-| T-R03 | 社区/本地实测回填（`data/benchmarks/community/<hw>/*.json` → measured_tps、置信度） | llmfit benchmarks.rs | L1 | TODO |
-| T-R04 | netron 式模型结构：`models:graph` / `models:tensor` API + 结构页（树/块图/属性/直方图/量化预览） | netron | L1 | DONE (2026-09-28) |
-| T-R05 | GGUF 结构解析（结构页第二种格式） | netron gguf.js | L1 | TODO |
-| T-R06 | QuantizeConfig（bits/group/sym/desc_act/damp/static_groups/dynamic）+ module_tree 定义（VLA/Qwen3.5/MiniCPM-o） | GPTQModel | L2 | TODO |
-| T-R07 | Looper/Processor：首层捕获 → 逐子集 Hessian → 量化 → true_sequential；每模块日志表 process/layer/module/loss/samples/damp/time/fwd_time | GPTQModel | L2 | TODO |
-| T-R08 | GPTQ 算法（damp 自增、act_order、static_groups）+ AWQ Processor | GPTQModel | L1 | TODO |
-| T-R09 | 导出：quantize_config.json + GPTQ v1/v2 qweight/qzeros/scales/g_idx；merged 16bit；GGUF（llama.cpp） | GPTQModel / unsloth | L2 | TODO |
-| T-R10 | 动态量化：由逐层误差自动生成 `dynamic` 跳过/高精度名单 | unsloth dynamic quants | L1 | TODO |
-| T-R11 | eval：TaskConfig + @register_benchmark + Adapter + Evaluator + outputs/<ts>/{predictions,reviews,reports} + Report schema | evalscope | L2 | TODO |
-| T-R12 | perf：parallel/number 扫描，TTFT/TPOT/ITL/吞吐 p50/p90/p99，benchmark_summary/percentile.json | evalscope perf | L1 | TODO |
-| T-R13 | 前端评测页：Reports（Overview/Details/Predictions 逐样本）、Compare 矩阵、Perf 报告 | evalscope web | L1 | TODO |
-| T-R14 | hal：Target{backend,arch,warp} + Backend 接口（is_active/supports_target/capabilities/deploy/benchmark）+ 插件发现 | FlagTree | L3 | TODO |
-| T-R15 | 后端插件 nvidia(vLLM/TRT-Edge-LLM)、ascend、metax + `data/benchmarks/ref/<backend>/*.yaml` 回归基线 | FlagTree CI ref.txt | L1 | TODO |
-| T-R16 | 前端统一深色控制台风格（token 化、主题切换） | refero Raycast/Linear + evalscope DESIGN.md | L1 | DONE (2026-09-28) |
+| T-R01 | `fit` 模块：适配等级/量化层级/运行模式/速度/评分 | llmfit | L2 | DONE (2141a7e) |
+| T-R02 | `/fit`、`/fit:plan` API + 部署预评估页 | llmfit-web | L1 | DONE (7f2c8a7) |
+| T-R04 | netron 式模型结构：`models:graph` / `models:tensor` + 结构页 | netron | L1 | DONE (7f2c8a7) |
+| T-R16 | 前端深色控制台风格（token 化、主题切换） | refero / evalscope | L1 | DONE (7f2c8a7) |
+| **T-R17** | **评分常数校准**：质量分档、量化惩罚、家族/时效/任务加分、TTFT 返回 null | llmfit A.1–A.3, A.6 | L2 | TODO |
+| **T-R18** | **MoE 两级速度模型** + 显存压力惩罚 | llmfit A.5 | L1 | TODO |
+| **T-R19** | **置信度阶梯 + 本地校准**（calibrated 档） | llmfit A.7 | L1 | TODO |
+| **T-R20** | **实测基线库**：格式、三级硬件匹配、中位数归并 | llmfit A.8 | L1 | TODO |
+| **T-R21** | **并发反解**：max_users / max_context_for | llmfit A.9 | L1 | TODO |
+| **T-R22** | **完整 plan**：run paths、最低/推荐硬件、升级增量、KV 替代 | llmfit A.10 | L1 | TODO |
+| **T-R23** | **claim 边界**：保守/乐观双估 + 二分最大上下文 | llmfit A.10 | L1 | TODO |
+| **T-R24** | **已安装运行时探测**（8 来源并行） | llmfit A.11 | L1 | TODO |
+| **T-R25** | **HF 模型库 + 搜索/下载** | llmfit A.12–A.13 | L2 | TODO |
+| **T-R26** | **ModelFit 字段补全** + 运行时选择 | llmfit A.15–A.16 | L2 | TODO |
+| **T-R27** | **前端补全**：硬件模拟、对比模式、完整筛选、导出 | llmfit-web | L1 | TODO |
+| T-R05 | GGUF 结构解析 | netron gguf.js | L1 | TODO |
+| T-R06 | QuantizeConfig + module_tree | GPTQModel | L2 | TODO |
+| T-R07 | Looper/Processor + 每模块日志表 | GPTQModel | L2 | TODO |
+| T-R08 | GPTQ 算法 + AWQ Processor | GPTQModel | L1 | TODO |
+| T-R09 | 导出 GPTQ v1/v2 / merged 16bit / GGUF | GPTQModel / unsloth | L2 | TODO |
+| T-R10 | 动态量化（按误差自动生成 skip 名单） | unsloth | L1 | TODO |
+| T-R11 | eval：TaskConfig + registry + Evaluator + Report | evalscope | L2 | TODO |
+| T-R12 | perf：并发扫描 + TTFT/TPOT/ITL 百分位 | evalscope | L1 | TODO |
+| T-R13 | 前端评测页：Reports / Compare / Perf | evalscope | L1 | TODO |
+| T-R14 | hal：Target + Backend 接口 + 插件发现 | FlagTree | L3 | TODO |
+| T-R15 | 后端插件 + 回归基线 | FlagTree | L1 | TODO |
+| T-R28 | 存储估算 | llmfit A.17 | L1 | 暂不做 |
+
+**执行顺序**：T-R17 → T-R18 → T-R20 → T-R19 → T-R21 → T-R26 → T-R22 → T-R23 → T-R24 → T-R25 → T-R27，之后进入 GPTQ（T-R06 起）。
+
+---
+
+### R.2 任务详情
+
+#### T-R17 评分常数校准
+- **依赖**：T-R01 **级别**：L2（改 `data/fit/fit.yaml` 与评分逻辑）
+- **产出**：
+  - `data/fit/fit.yaml`：质量分档改为 30/45/60/75/82/89/95（按**活跃**参数，见 A.1）；W2 惩罚 −18 → −12（A.2）；新增 `embedding` 用途（权重 .30/.40/.20/.10，速度目标 200，上下文目标 512）；新增 `family_bonus`、`recency_bonus` 表。
+  - `cpp/src/fit/fit.cpp`：叠加家族/时效/任务加分并截断 [0,100]；核数 ≥ 8 时 K 常数路径乘 1.1（A.4）。
+  - **TTFT**：算力未知或纯 CPU 时 `ttft_ms` / `prefill_tps` 返回 null 而非算出假值（A.6）。`ModelFit` 对应字段改 `std::optional<double>`。
+- **验收**：
+  - 1B 模型质量分 = 30 + 家族加分（此前为 45），7B = 60，27B = 89。
+  - `fit_test.cpp` 新增：质量分档边界（0.9B/1B/3B/7B/10B/20B/40B/70B）、W2 惩罚值、embedding 用途、TTFT 在无算力画像时为 null。
+  - 现有 6 个 fit 测试中因分档变化而失效的断言同步更新，并在 PR 中说明新旧值。
+- **校验**：`ctest --preset dev`；`mqde fit /cache/wuzhiping/hub --hw nvidia/rtx4090` 前后对比表贴进 PR。
+
+#### T-R18 MoE 两级速度模型
+- **依赖**：T-R17 **级别**：L1
+- **产出**：
+  - `data/fit/fit.yaml`：`moe:` 段 —— `tier1_k: 3.2`、`tier1_k_by_arch: {gpt_oss: 1.43}`、`tier1_fixed_bpp`、`tier2_by_arch`（gpt_oss .72/.80，deepseek_v3/v4 .62/.70）、`tier2_overhead_by_experts`（≤8 .90 / ≤16 .85 / ≤32 .80 / ≤64 .70 / ≥128 .40 / 未知 .60）、`default_expert_ratio: 0.50`、`vram_pressure_threshold: 0.60`、`vram_pressure_floor: 0.30`。
+  - `cpp/src/modelspec/model_spec.cpp`：从 config 提取单专家 FFN 维度（`moe_intermediate_size`、`shared_expert_intermediate_size`），算出 `active_ffn_params`、`fixed_params`、`routed_expert_params` 并存入 `ModelSpec`。
+  - `cpp/src/fit/fit.cpp`：按 A.5 实现 Tier-1 / Tier-2 分支与显存压力惩罚；`ModelFit` 新增 `moe_offloaded_gb`、`moe_tier`（1/2）。
+- **验收**：
+  - 256 专家、top-8 的 MoE 走 Tier-1；缺专家维度信息的 MoE 走 Tier-2 并按专家数取 overhead。
+  - 显存利用率 0.60 以下无惩罚；0.60→1.00 线性衰减到 0.30 不再继续下降。
+  - 新增测试：Tier-1 公式值、Tier-2 各 overhead 档、压力惩罚边界（0.59/0.60/0.80/1.00/1.20）。
+- **校验**：`ctest`；该 MoE 模型在 4090 上的 tok/s 变化在 PR 中说明合理性。
+
+#### T-R20 实测基线库
+- **依赖**：T-R01 **级别**：L1
+- **产出**：
+  - 目录 `data/benchmarks/local/<hw-slug>/*.json`（本机实测）、`data/benchmarks/community/<hw-slug>/*.json`（外部数据，须在文件内 `source` 字段标注来源与许可证）。
+  - `data/benchmarks/schema.json`：按 A.8 的字段定义。
+  - `cpp/src/fit/benchmarks.{h,cpp}`：加载索引；三级硬件回退匹配（精确 slug → 去厂商前缀 → 硬件等级等价且内存档位差 ≤ 25% 且统一内存标志一致）；同模型多条取 tps 中位数、样本数累加；模型名归一化（小写、去量化后缀、拆 `name:tag`）。
+  - `ModelFit.measured_tps{tok_s, sample_count, hardware_label, source}`。
+  - CLI：`mqde bench --model <path> --hw-slug <slug> --runs N` 写入 `local/`（真实跑推理，占用 GPU 3）。
+- **验收**：
+  - 有实测时 `estimated_tps` 被实测中位数替换，置信度为 `measured_local` / `measured_community`。
+  - 硬件不完全匹配时按三级回退命中，`hardware_label` 说明命中的是哪一级。
+  - 测试：三级匹配各一例、中位数归并、名字归一化、无匹配时保持 estimated。
+- **校验**：`ctest`；在 4090 上对 MiniCPM-RobotManip 实跑一次，前端置信度显示 `measured_local`。
+
+#### T-R19 置信度阶梯与本地校准
+- **依赖**：T-R20 **级别**：L1
+- **产出**：
+  - `Confidence` 增加 `kCalibrated`，阶梯 `measured_local > measured_community > calibrated > estimated > unsupported`。
+  - `cpp/src/fit/fit.cpp`：`apply_local_calibration(std::vector<ModelFit>&)` —— 锚点为稠密、≥1B、有**本地**实测的条目；< 2 个锚点放弃；取 `measured/estimated` 比值中位数并截断 [0.05, 3.0]；乘到所有无实测条目上并标 `calibrated`；幂等。
+  - `ModelFit.estimate_basis{method, gpu_bandwidth_gbps, ddr_bandwidth_gbps, efficiency, assumed_context, local_calibration}`，前端详情面板展示"这个数字怎么来的"。
+- **验收**：
+  - 锚点 < 2 时所有条目仍为 `estimated`。
+  - 连续调用两次结果一致（幂等）。
+  - 校准系数超出 [0.05, 3.0] 时被截断。
+  - 测试覆盖上述三条 + `estimate_basis` 各字段非空。
+- **校验**：`ctest`。
+
+#### T-R21 并发反解
+- **依赖**：T-R01 **级别**：L1
+- **产出**：
+  - `cpp/include/mqde/fit/concurrency.h` + `src/fit/concurrency.cpp`：`estimate_concurrency(spec, recipe, system, context, users)` → `ConcurrencyEstimate{requested_users, max_users, context, weights_gb, kv_per_user_gb, overhead_gb, total_gb, utilization_pct, fits, high_pressure}`；`max_context_for(users)` 反解最大上下文；利用率 > 90% 标 `high_pressure`。
+  - API `POST /api/v1/fit:concurrency`；前端在详情面板加"并发能力"块（最大并发、该并发下最大上下文、内存构成）。
+- **验收**：
+  - 与 `estimate()` 的显存分解一致（同配方同上下文下 `total_gb` 对齐）。
+  - `max_users` 反解结果代回正向计算后仍放得下，+1 则放不下。
+  - `max_context_for` 同理（2 的幂步进）。
+- **校验**：`ctest` 新增 concurrency 测试；前端手工核对一个例子。
+
+#### T-R22 完整 plan
+- **依赖**：T-R18, T-R21 **级别**：L1
+- **产出**：`POST /api/v1/fit:plan` 扩展为返回：
+  - `run_paths[]`：每种可行运行模式的量化、显存、速度、适配等级。
+  - `minimum_hardware` / `recommended_hardware`：从硬件库里找出最低可跑与推荐配置。
+  - `upgrades[]`：升级到某硬件后的增量（显存余量、速度提升倍数、可用更高精度量化）。
+  - `kv_alternatives[]`：KV 量化换成 fp8 / q8_0 / q4_0 后的上下文与显存变化。
+  - 前端详情面板内嵌 plan 表单与结果表（仿 llmfit DetailPanel 的 plan 区）。
+- **验收**：三个本地模型各给出 ≥ 2 条 run path；升级增量方向正确（更大显存 → 更高精度或更大上下文）。
+- **校验**：curl 三个模型的 plan 结果贴进 PR。
+
+#### T-R23 claim 边界
+- **依赖**：T-R18 **级别**：L1
+- **产出**：
+  - `cpp/src/fit/claim.cpp`：`fit_bounds(spec, system, min_tps)` → `{conservative_tps, optimistic_tps, holds, best_quant, max_context_at_min_tps, memory_gb, efficiency_used}`。保守/乐观用不同带宽效率假设；二分找仍达标的最大 2 的幂上下文（受模型上限约束）。
+  - CLI `mqde claim <model> --min-tps N [--quant Q --device-class NAME]`；输出一句可直接用的结论。
+  - API `POST /api/v1/fit:claim`。
+- **验收**：保守值 ≤ 乐观值；`holds` 当且仅当保守值 ≥ min_tps；上下文二分结果 +1 档即不达标。
+- **校验**：`ctest`；CLI 对 MiniCPM-RobotManip 跑一次贴输出。
+
+#### T-R24 已安装运行时探测
+- **依赖**：无 **级别**：L1
+- **产出**：
+  - `cpp/src/fit/installed.cpp`：按 A.11 并行探测 8 来源（ollama / LM Studio / llama.cpp / vLLM / MLX / Docker Model Runner / RamaLama / HF cache），单个 HTTP 超时 400 ms，整体总 deadline（建议 2 s）；名字归一化后建集合；`is_installed(name, ollama_name)`、`installed_providers(name)`。
+  - `data/installed.yaml`：各来源的探测路径与端口（可配置，不写死）。
+  - `ModelFit.installed`、`installed_providers[]`；API `GET /api/v1/installed`；前端模型表加"已安装"标记，排序时已安装优先。
+- **验收**：
+  - 开发机上能正确探测到实际存在的运行时；不存在的来源不报错、不拖慢（总耗时 < 2.5 s）。
+  - 名字归一化能把 `qwen2.5:7b-instruct-q4_K_M` 匹配到目录里的 `Qwen2.5-7B-Instruct`。
+- **校验**：`GET /api/v1/installed` 在开发机的输出贴进 PR；`time curl` 证明耗时。
+
+#### T-R25 HF 模型库 + 搜索/下载
+- **依赖**：T-R17 **级别**：L2（引入外部数据源与网络访问）
+- **产出**：
+  - `data/models/catalog.json`：按 A.12 的字段（7 个必填 + 可选）。**不照搬 llmfit 的 15k 条**，先用 `mqde catalog update` 抓 trending + downloads 前 N 条（N 可配，默认 500），需要时再扩。文件 > 5 MB 时走 LFS 或压缩存储。
+  - `cpp/src/fit/catalog.{h,cpp}`：加载、按名字/provider 查询、目录卫生（draft/eagle 降级、参数量与 raw 不一致降级、缺尺寸或上下文降级，不参与排名）。
+  - `mqde catalog update [--trending --downloads --token --limit N]`：HF API 抓列表 + 逐个取 config，字段映射见 A.12，请求间隔 250 ms，token 走环境变量 `HF_TOKEN` 或 `--token`（**禁止写入仓库**）。开发机需走代理（见 DEVELOPMENT.md）。
+  - `mqde hf-search <query> [-n N]`；`mqde download <model> [--quant Q --budget SIZE --list --output-dir DIR]`：分片按数字前缀归组整下，文件大小取 HF 元数据、缺失时按 `params × bpp` 估，预算内按质量排序取最优、无解时退最小文件。
+  - API `GET /api/v1/catalog?search=&provider=&limit=`、`POST /api/v1/download`、`GET /api/v1/download/{id}/status`；`/fit` 支持对目录里的模型（无本地权重）做评估。
+  - 前端：模型来源切换（本地库 / HF 目录）、搜索、下载按钮与进度。
+- **验收**：
+  - `mqde catalog update --limit 50` 成功写入 50 条，字段完整，无凭证入库。
+  - 目录里的模型能参与 `/fit` 评估（用 catalog 的层数/隐藏维等元数据，不需要下载权重）。
+  - 降级规则命中示例：至少 1 条 draft 模型被排除在排名外。
+  - 下载分片模型时整组下载，单文件模型按预算选中期望的量化。
+- **校验**：CLI 三条命令各跑一次贴输出；`grep -r "hf_[A-Za-z0-9]" data/` 为空。
+
+#### T-R26 ModelFit 字段补全与运行时选择
+- **依赖**：T-R18, T-R20, T-R24, T-R25 **级别**：L2（公共结构与 API 契约）
+- **产出**：
+  - 补齐 A.15 中我们缺的字段：`moe_offloaded_gb`、`runtime`、`installed`、`usable_context`、`estimate_basis`、`measured_tps`、`disk_size_gb`、`supports_tp`、`verify_command`、`license`、`capability_ids`、`fit_label`、`run_mode_label`、`estimate_confidence_label`。
+  - 运行时选择（A.16）：`InferenceRuntime = {VllmT, HfTransformers, LlamaCpp, TrtEdgeLlm, Unsupported}`（按我们的实际后端调整，不照搬 MLX/BitNet）；已量化 → vLLM；边缘设备 → TRT-Edge-LLM；否则 HF Transformers。各运行时的量化层级与固定开销从 `data/backends/*.yaml` 读。
+  - `verify_command`：按运行模式产出可直接复制执行的验证命令。
+  - `supports_tp`：按注意力头数算合法 TP 尺寸，不是简单按 GPU 数。
+- **验收**：`/fit` 返回的每个字段都有值或明确 null；`supports_tp` 对 GQA 模型（kv_heads=4）只给出 1/2/4；`verify_command` 可直接执行。
+- **校验**：`ctest`；curl 输出逐字段核对。
+
+#### T-R27 前端补全
+- **依赖**：T-R22, T-R24, T-R26 **级别**：L1
+- **产出**：
+  - **硬件模拟**：显存/内存/核数/带宽输入框（API 已支持，只需暴露）；内置画像下拉；"模拟中"标记与重置按钮。
+  - **对比模式**：模型表多选（上限 3），并排对比面板（评分构成、显存构成、速度、适配）。
+  - **完整筛选**：provider、capability、license、量化、运行模式、参数档（tiny/small/medium/large/xl）、TP 尺寸、最大上下文；折叠为"高级筛选"。
+  - **导出**：当前表格导出 JSON / CSV（前端生成，不加后端端点）。
+  - 列补全：运行时、已安装、磁盘占用、上下文、置信度。
+- **验收**：筛选任意组合后表格与 URL query 同步（可分享链接）；导出的 CSV 能在 Excel 打开且列名为中文；对比面板在 3 个模型下不溢出。
+- **校验**：`npm run build`；截图贴进 PR。

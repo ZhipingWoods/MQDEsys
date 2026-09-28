@@ -105,6 +105,34 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 ---
 
 
+### 2026-09-28 · 文档化 llmfit 对齐方案（无代码改动）
+
+- **完成**：
+  - `docs/REFERENCES.md` 追加**附录 A**（A.1–A.18）：llmfit 的全部公式与常数已抄录，
+    含质量分档、量化惩罚、用途权重、速度四分支、MoE 两级模型、TTFT、置信度阶梯与本地校准、
+    实测数据格式与三级硬件匹配、并发反解、claim 边界、运行时探测、HF 库 schema、
+    下载文件选择、API 端点、ModelFit 字段全集、运行时选择、存储估算。
+    **后续实现不需要再读 `3rdpart/llmfit` 源码。**
+  - `docs/STRUCTURE.md` 重写：原文描述的是设想中的目录树（`api/`、`schemas/`、`scripts/` 等均不存在），
+    改为当前真实文件的逐文件职责表 + 级别，并单列「计划中但尚未创建」。
+  - `docs/TASKS.md` 附录 R 重写：27 个任务，新增 T-R17–T-R27 十一项，每项含产出、验收标准、校验方法。
+    执行顺序：R17 → R18 → R20 → R19 → R21 → R26 → R22 → R23 → R24 → R25 → R27 → GPTQ(R06)。
+  - 新增 `docs/DEVELOPMENT.md`：机器分工与 GPU 约束、rsync 同步、构建测试、起服务与隧道、
+    截图、CLI、gdb 与交叉验证脚本、提交格式与自查清单。
+  - `AGENTS.md` 阅读顺序加入 DEVELOPMENT.md 与 REFERENCES.md；`README.md` 加文档导航表。
+- **校验**：仅文档改动，无代码变更；未跑构建。
+- **用户已确认的范围**：算法校准 + 核心功能，**额外包含** claim 边界（T-R23）、
+  已安装运行时探测（T-R24）、HF 模型库与搜索下载（T-R25）。
+  不做：TUI、MCP server、NATS、质量评测 rubric、desktop、i18n。
+- **下一步**：T-R17 评分常数校准（改 `data/fit/fit.yaml` 的质量分档为 30/45/60/75/82/89/95、
+  W2 惩罚改 −12、新增 embedding 用途与家族/时效加分表；TTFT 无算力时返回 null）。
+  注意这会让现有 6 个 fit 测试的部分断言失效，需同步更新并在 PR 说明新旧值。
+- **坑**：
+  - 我们当前的质量分档（45/55/65/72/80/87/92）是我上次凭印象写的，与 llmfit 实际值
+    （30/45/60/75/82/89/95）不一致，且 llmfit 是按**活跃**参数分档。
+  - 我们当前会在算力未知时也算出 TTFT 数字，llmfit 返回 null。别把假数字当结论。
+  - `data/benchmarks/` 目录从未创建，所以 `measured_tps` 字段虽在但永远无数据，置信度恒为 estimated。
+
 ### 2026-09-28 · 参考架构对齐（第一批）
 - **完成**：
   - T-R01/R02 llmfit 式 `fit`（C++，6 个单测）+ `/fit`、`/fit:plan` + 部署预评估页。
