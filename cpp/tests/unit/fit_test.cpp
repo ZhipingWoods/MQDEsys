@@ -119,12 +119,17 @@ TEST(fit, measured_speed_overrides_estimate) {
   auto c = load_fit_config();
   ASSERT_TRUE(c);
   Request r;
-  r.measured_tps = 123.0;
-  r.measured_source = Confidence::kMeasuredLocal;
+  MeasuredTps m;
+  m.tok_s = 123.0;
+  m.sample_count = 3;
+  m.hardware_label = "this machine";
+  r.measured = m;
   auto f = analyze(dense_llm(1.0), gpu24(), *c, estimator::BackendProfile{}, r);
   ASSERT_TRUE(f);
   EXPECT_DOUBLE_EQ(f->estimated_tps, 123.0);
   EXPECT_EQ(f->confidence, Confidence::kMeasuredLocal);
+  EXPECT_GT(f->formula_tps, 0.0);
+  EXPECT_NE(f->formula_tps, 123.0) << "the formula estimate is kept alongside the measurement";
 }
 
 // ---- T-R17: llmfit score calibration (docs/REFERENCES.md A.1-A.6) ----

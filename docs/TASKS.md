@@ -833,7 +833,7 @@
 | **T-R17** | **评分常数校准**：质量分档、量化惩罚、家族/时效/任务加分、TTFT 返回 null | llmfit A.1–A.3, A.6 | L2 | DONE (2026-09-28, 39/39 ctest) |
 | **T-R18** | **MoE 两级速度模型** + 显存压力惩罚 | llmfit A.5 | L1 | DONE (2026-09-28, 45/45 ctest; 256 专家 MoE Tier-1) |
 | **T-R19** | **置信度阶梯 + 本地校准**（calibrated 档） | llmfit A.7 | L1 | TODO |
-| **T-R20** | **实测基线库**：格式、三级硬件匹配、中位数归并 | llmfit A.8 | L1 | TODO |
+| **T-R20** | **实测基线库**：格式、相同硬件匹配、中位数归并 | llmfit A.8 | L1 | DONE (2026-09-28, 56/56 ctest; 4090 实测 4.41 steps/s) |
 | **T-R21** | **并发反解**：max_users / max_context_for | llmfit A.9 | L1 | TODO |
 | **T-R22** | **完整 plan**：run paths、最低/推荐硬件、升级增量、KV 替代 | llmfit A.10 | L1 | TODO |
 | **T-R23** | **claim 边界**：保守/乐观双估 + 二分最大上下文 | llmfit A.10 | L1 | TODO |
@@ -886,17 +886,12 @@
 
 #### T-R20 实测基线库
 - **依赖**：T-R01 **级别**：L1
+- **定义变更（2026-09-28）**：原"三级硬件回退"在 llmfit 源码中不存在（调研误读），改为 llmfit 实际行为：**仅相同硬件**匹配。见 REFERENCES.md A.8。
 - **产出**：
-  - 目录 `data/benchmarks/local/<hw-slug>/*.json`（本机实测）、`data/benchmarks/community/<hw-slug>/*.json`（外部数据，须在文件内 `source` 字段标注来源与许可证）。
-  - `data/benchmarks/schema.json`：按 A.8 的字段定义。
-  - `cpp/src/fit/benchmarks.{h,cpp}`：加载索引；三级硬件回退匹配（精确 slug → 去厂商前缀 → 硬件等级等价且内存档位差 ≤ 25% 且统一内存标志一致）；同模型多条取 tps 中位数、样本数累加；模型名归一化（小写、去量化后缀、拆 `name:tag`）。
-  - `ModelFit.measured_tps{tok_s, sample_count, hardware_label, source}`。
-  - CLI：`mqde bench --model <path> --hw-slug <slug> --runs N` 写入 `local/`（真实跑推理，占用 GPU 3）。
-- **验收**：
-  - 有实测时 `estimated_tps` 被实测中位数替换，置信度为 `measured_local` / `measured_community`。
-  - 硬件不完全匹配时按三级回退命中，`hardware_label` 说明命中的是哪一级。
-  - 测试：三级匹配各一例、中位数归并、名字归一化、无匹配时保持 estimated。
-- **校验**：`ctest`；在 4090 上对 MiniCPM-RobotManip 实跑一次，前端置信度显示 `measured_local`。
+  - 目录 `data/benchmarks/local/<hw-slug>/*.json`（本机实测）、`dat
+...[516 chars omitted]...
+配规则的偏差说明写进 PR。
+- **校验**：`ctest`；在 4090 上对 MiniCPM-RobotManip 实跑一次，`mqde fit` 与前端置信度显示 `measured_local`。
 
 #### T-R19 置信度阶梯与本地校准
 - **依赖**：T-R20 **级别**：L1

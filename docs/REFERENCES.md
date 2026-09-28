@@ -225,26 +225,14 @@ per-arch 校准：gpt_oss efficiency .72 / overhead .80；deepseek_v3、deepseek
 4. 该系数乘到所有**无实测**条目的 estimated_tps 上，置信度标为 `calibrated`。
 5. 幂等：只改无实测项，系数每次都从锚点重算。
 
-## A.8 实测数据格式与匹配 **[待实现，T-R03]**
+## A.8 实测数据格式与匹配（2026-09-28 按源码更正）
 
-社区数据：`community/<gpu-slug>/<ts>-<hash>.json`
-
-```json
-{
-  "schemaVersion": 1,
-  "submittedAtUnix": 1730000000,
-  "tool": {"name": "llmfit", "version": "..."},
-  "hardware": {"cpu": "...", "cpuCores": 16, "gpuCount": 1, "hardwareName": "...",
-               "hwClass": "...", "memTierGb": 64, "os": "...", "ramGb": 64,
-               "unifiedMemory": false, "vramGb": 24},
-  "results": [{"model": "...", "provider": "...", "avgTps": 41.2, "avgTtftMs": 180,
-               "minTps": 38.1, "maxTps": 43.7, "avgOutputTokens": 256,
-               "avgTotalMs": 6200, "numRuns": 3}]
+> 早先版本写的"三级硬件回退（精确 slug → 去厂商名前缀 → 硬件等级等价）"**在 llmfit 源码里不存在**，是调研摘要的误读。
+> 以下按 `benchmarks.rs:395-650`、`sha
+...[516 chars omitted]...
+         "avgTtftMs": 180, "numRuns": 3, "source": "mqde bench"}]
 }
 ```
-
-硬件匹配三级回退：精确 slug → 去掉厂商名后前缀匹配 → 硬件等级等价（要求内存档位差 ≤ 25%，统一内存标志一致）。
-同模型多条结果取 **tps 中位数**，样本数累加。
 
 ## A.9 并发估算 **[待实现，T-R18]**
 

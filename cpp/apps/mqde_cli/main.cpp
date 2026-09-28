@@ -1,8 +1,13 @@
 // mqde - command line entry point (docs/ARCHITECTURE.md §6.16).
 // stdout carries command output (tables or --json); diagnostics go to stderr.
 
+#include <sys/wait.h>
+#include <unistd.h>
+
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <sstream>
@@ -11,6 +16,7 @@
 
 #include "mqde/common/log.h"
 #include "mqde/estimator/estimator.h"
+#include "mqde/fit/benchmarks.h"
 #include "mqde/fit/fit.h"
 #include "mqde/server/server.h"
 #include "mqde_probe.h"
@@ -55,6 +61,23 @@ Json probe_json() {
     arr.push_back(j);
   }
   return arr;
+}
+
+// Identity of this machine for benchmark matching: the given GPU (or the first one) + the CPU.
+mqde::fit::HardwareId host_identity(int gpu_index, double* vram_gb = nullptr, double* ram_gb = nullptr,
+                                    int* cores = nullptr) {
+  mqde::fit::HardwareId id;
+  for (const auto& d : probe_json()) {
+    if (d["kind"] == "cpu") {
+      id.cpu_name = d["name"].get<std::string>();
+      if (ram_gb) *ram_gb = d["mem_total_bytes"].get<double>() / (1024.0 * 1024.0 * 1024.0);
+      if (cores) *cores = d["compute_units"].get<int>();
+    } else if (d["kind"] == "gpu" && id.gpu_name.empty() && (gpu_index < 0 || d["index"].get<int>() == gpu_index)) {
+      id.gpu_name = d["name"].get<std::string>();
+      if (vram_gb) *vram_gb = d["mem_total_bytes"].get<double>() / (1024.0 * 1024.0 * 1024.0);
+    }
+  }
+  return id;
 }
 
 int cmd_probe(bool json) {
@@ -218,6 +241,15 @@ int cmd_fit(const FitArgs& a) {
   req.context = a.context;
   req.concurrency = a.concurrency;
   req.force_quant = a.quant;
+  // Measured baselines only describe THIS machine: attach them when --hw is the local GPU's profile
+  // and the evaluation is single-GPU (bench runs on one GPU).
+  const auto host = host_identity(-1);
+  std::optional<mqde::fit::BenchmarkIndex> bench;
+  if (!host.gpu_name.empty() && sys.gpu_count == 1)
+    if (auto local = mqde::estimator::match_hardware(host.gpu_name); local && local->id == hw->id) {
+      bench = mqde::fit::BenchmarkIndex::load(host);
+      req.bench = &*bench;
+    }
   std::vector<mqde::fit::ModelFit> fits;
   for (const auto& m : scan_models(a.models)) {
     auto spec = mqde::modelspec::inspect_local(m);
@@ -276,6 +308,105 @@ int cmd_list(const std::string& sub, bool json) {
 
 }  // namespace
 
+struct BenchArgs {
+  std::string model, dataset = "synthetic", python = "python", repo = ".";
+  int gpu = 3, runs = 20, warmup = 3;
+  bool dry_run = false;
+};
+
+// Runs `python -m mqde.eval.bench` on one GPU and records the result under data/benchmarks/local/.
+int cmd_bench(const BenchArgs& a, bool json) {
+  namespace fs = std::filesystem;
+  if (!fs::is_regular_file(fs::path(a.model) / "config.json"))
+    return fail(mqde::Error{mqde::Errc::kNotFound, a.model + " has no config.json"});
+  const auto repo = fs::absolute(a.repo);
+  if (!fs::is_directory(repo / "python" / "mqde"))
+    return fail(mqde::Error{mqde::Errc::kNotFound, "--repo must point at the repository root (python/mqde not found)"});
+  double vram = 0, ram = 0;
+  int cores = 0;
+  const auto hw = host_identity(a.gpu, &vram, &ram, &cores);
+  if (hw.gpu_name.empty())
+    return fail(mqde::Error{mqde::Errc::kNotFound, fmt::format("no GPU with index {} on this machine", a.gpu)});
+
+  int out_pipe[2];
+  if (::pipe(out_pipe) != 0) return fail(mqde::Error{mqde::Errc::kIo, std::strerror(errno)});
+  const std::string pythonpath = (repo / "python").string();
+  const std::string runs = std::to_string(a.runs), warmup = std::to_string(a.warmup);
+  const pid_t pid = ::fork();
+  if (pid < 0) return fail(mqde::Error{mqde::Errc::kIo, std::strerror(errno)});
+  if (pid == 0) {
+    ::dup2(out_pipe[1], STDOUT_FILENO);  // stderr stays on the terminal (progress + errors)
+    ::close(out_pipe[0]);
+    ::close(out_pipe[1]);
+    ::setenv("CUDA_VISIBLE_DEVICES", std::to_string(a.gpu).c_str(), 1);
+    const char* old = std::getenv("PYTHONPATH");
+    ::setenv("PYTHONPATH", old && *old ? (pythonpath + ":" + old).c_str() : pythonpath.c_str(), 1);
+    ::setenv("MQDE_DATA_DIR", mqde::data_dir().c_str(), 1);
+    ::setenv("PYTHONUNBUFFERED", "1", 1);
+    ::execlp(a.python.c_str(), a.python.c_str(), "-m", "mqde.eval.bench", a.model.c_str(), "--runs", runs.c_str(),
+             "--warmup", warmup.c_str(), "--dataset", a.dataset.c_str(), static_cast<char*>(nullptr));
+    std::fprintf(stderr, "exec %s failed: %s\n", a.python.c_str(), std::strerror(errno));
+    ::_exit(127);
+  }
+  ::close(out_pipe[1]);
+  std::string out;
+  char buf[4096];
+  for (ssize_t n; (n = ::read(out_pipe[0], buf, sizeof buf)) > 0;) out.append(buf, static_cast<size_t>(n));
+  ::close(out_pipe[0]);
+  int status = 0;
+  ::waitpid(pid, &status, 0);
+
+  // The contract is "one JSON object on the last stdout line".
+  while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
+  const auto nl = out.rfind('\n');
+  Json r;
+  try {
+    r = Json::parse(nl == std::string::npos ? out : out.substr(nl + 1));
+  } catch (const std::exception&) {
+    return fail(mqde::Error{mqde::Errc::kExternal,
+                            fmt::format("benchmark produced no result (exit {})", WIFEXITED(status) ? WEXITSTATUS(status) : -1)});
+  }
+  if (r.contains("error")) return fail(mqde::Error{mqde::Errc::kExternal, r["error"].get<std::string>()});
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+    return fail(mqde::Error{mqde::Errc::kExternal, "benchmark exited abnormally"});
+
+  mqde::fit::Submission sub;
+  sub.hw = hw;
+  sub.vram_gb = vram;
+  sub.ram_gb = ram;
+  sub.cpu_cores = cores;
+  sub.tool_version = MQDE_VERSION;
+  mqde::fit::Submission::Entry e;
+  e.model = a.model;
+  e.quant = r.value("quant", "bf16");
+  e.runtime = r.value("runtime", "hf_transformers");
+  e.unit = r.value("unit", "tok/s");
+  e.avg_tps = r.value("avg_tps", 0.0);
+  e.min_tps = r.value("min_tps", 0.0);
+  e.max_tps = r.value("max_tps", 0.0);
+  e.num_runs = r.value("num_runs", 0);
+  e.peak_mem_bytes = r.value("peak_mem_bytes", int64_t{0});
+  e.context_tokens = r.value("context_tokens", int64_t{0});
+  // For step-based models the recorded "TTFT" is the mean decision-step latency (schema.json).
+  if (e.unit == "steps/s" && e.avg_tps > 0) e.avg_ttft_ms = 1e3 / e.avg_tps;
+  sub.results.push_back(e);
+
+  const Json doc = mqde::fit::to_json(sub);  // exactly what write_local_submission stores
+  if (a.dry_run) {
+    std::cout << doc.dump(2) << "\n";
+    return 0;
+  }
+  auto path = mqde::fit::write_local_submission(sub);
+  if (!path) return fail(path.error());
+  if (json) {
+    std::cout << Json{{"path", path->string()}, {"submission", doc}}.dump(2) << "\n";
+    return 0;
+  }
+  fmt::print("{}  {}  {:.2f} {} (min {:.2f}, max {:.2f}, {} runs) on {}\nwrote {}\n", fs::path(a.model).filename().string(),
+             e.quant, e.avg_tps, e.unit, e.min_tps, e.max_tps, e.num_runs, hw.gpu_name, path->string());
+  return 0;
+}
+
 int main(int argc, char** argv) {
   CLI::App app{"MQDEsys - model quantization & deployment evaluation"};
   app.require_subcommand(1);
@@ -321,6 +452,17 @@ int main(int argc, char** argv) {
   fitc->add_option("--quant", fa.quant, "force a recipe instead of choosing the best that fits");
   fitc->add_option("--sort", fa.sort, "score|tps|params|mem");
 
+  auto* bench = app.add_subcommand("bench", "measure real throughput on one GPU and record it in data/benchmarks/local/");
+  BenchArgs ba;
+  bench->add_option("model", ba.model, "local model directory")->required();
+  bench->add_option("--gpu", ba.gpu, "physical GPU index (CUDA_VISIBLE_DEVICES)");
+  bench->add_option("--runs", ba.runs, "measured steps");
+  bench->add_option("--warmup", ba.warmup, "unmeasured warm-up steps");
+  bench->add_option("--dataset", ba.dataset, "'synthetic' or a LeRobot v3 dataset directory");
+  bench->add_option("--python", ba.python, "python executable of the mqde environment");
+  bench->add_option("--repo", ba.repo, "repository root (for python/)");
+  bench->add_flag("--dry-run", ba.dry_run, "print the submission instead of writing it");
+
   auto* serve = app.add_subcommand("serve", "start the REST/SSE API server (+ web UI)");
   mqde::server::ServerOptions so;
   std::string gpus;
@@ -351,6 +493,7 @@ int main(int argc, char** argv) {
   }
   if (*inspect) return cmd_inspect(model_path, json, with_tensors);
   if (*est) return cmd_estimate(ea);
+  if (*bench) return cmd_bench(ba, json);
   if (*fitc) {
     fa.json = json;
     return cmd_fit(fa);

@@ -394,9 +394,18 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
       f.ttft_ms = static_cast<double>(ctx) / ptps * 1e3;
     }
   }
-  if (req.measured_tps > 0) {
-    f.estimated_tps = req.measured_tps;
-    f.confidence = req.measured_source;
+  // Measured baseline (llmfit: local > community > estimate). Keyed by model + chosen quant, so a
+  // BF16 measurement never stands in for a W4A16 fit.
+  f.formula_tps = f.estimated_tps;
+  std::optional<MeasuredTps> m = req.measured;
+  if (!m && req.bench && !f.best_quant.empty()) m = req.bench->lookup(spec.path.empty() ? spec.model_type : spec.path, f.best_quant);
+  if (m && plausible_tps(m->tok_s)) {
+    f.measured_tps = m;
+    f.estimated_tps = m->tok_s;
+    f.confidence = m->source == MeasuredSource::kLocal ? Confidence::kMeasuredLocal : Confidence::kMeasuredCommunity;
+    if (m->ttft_ms) f.ttft_ms = m->ttft_ms;
+    f.notes.push_back(fmt::format("speed measured on {}: {:.2f} {} (median of {} runs; formula {:.2f})", m->hardware_label,
+                                  m->tok_s, f.speed_unit, m->sample_count, f.formula_tps));
   }
   f.context = e.context_tokens;
 
@@ -470,6 +479,13 @@ Json to_json(const ModelFit& f) {
           {"ttft_ms", f.ttft_ms ? Json(*f.ttft_ms) : Json(nullptr)},
           {"context", f.context},
           {"estimate_confidence", to_string(f.confidence)},
+          {"formula_tps", f.formula_tps},
+          {"measured_tps", f.measured_tps ? Json{{"tok_s", f.measured_tps->tok_s},
+                                                 {"ttft_ms", f.measured_tps->ttft_ms ? Json(*f.measured_tps->ttft_ms) : Json(nullptr)},
+                                                 {"sample_count", f.measured_tps->sample_count},
+                                                 {"hardware_label", f.measured_tps->hardware_label},
+                                                 {"source", f.measured_tps->source == MeasuredSource::kLocal ? "local" : "community"}}
+                                          : Json(nullptr)},
           {"score", f.score},
           {"score_components",
            {{"quality", f.components.quality}, {"speed", f.components.speed}, {"fit", f.components.fit}, {"context", f.components.context}}},

@@ -68,6 +68,7 @@ MQDEsys/
 | `modelspec/model_spec.h` | `ModelSpec` 全模型描述；`TextSpec`（层数/隐藏维/注意力布局/MoE 专家数）；`VisionSpec`；`ActionSpec`；`UnitInfo`（逐张量的组件归属、块号、可量化性、逻辑形状、是否为 aux 元数据）；`CheckpointQuant`（已量化 checkpoint 的方法/算法/位宽/组大小/忽略名单）；`inspect_local()`；`to_json()`；`to_graph_json()`（netron 式层级图） |
 | `estimator/estimator.h` | `Recipe`（量化配方）；`HardwareProfile`；`BackendProfile`；`RuntimeParams`；`Estimate`（显存分解、FLOPs、字节数、延迟下界、可行性、理由列表）；`estimate()`；`load_recipe()` / `load_hardware()` / `load_backend()` |
 | `fit/fit.h` | **部署预评估**（仿 llmfit）：`FitLevel`、`RunMode`、`Confidence`、`UseCase`、`FitConfig`、`System`、`Request`、`ScoreComponents`、`ModelFit`；`analyze()`、`rank()`、`load_fit_config()`、`system_from_profile()` |
+| `fit/benchmarks.h` | **实测基线**：`MeasuredTps`、`HardwareId`、`BenchmarkIndex`（load / lookup）、`Submission`、`write_local_submission()`、`canonical_slug()` |
 | `quant/quant_spec.h` | `QuantSpec`（位宽、粒度、对称性、格式）；解析与校验 |
 | `quant/ops.h` | `fake_quant()`（伪量化，C++ 权威实现） |
 | `quant/metrics.h` | `tensor_stats()`（min/max/absmax/mean/std/峰度/离群比例）；`measure()`（SQNR/cosine/rel_l2/max_abs/mse/rmse） |
@@ -88,6 +89,7 @@ MQDEsys/
 | `estimator/hardware.cpp` | 硬件画像加载 | L1 |
 | `estimator/recipe.cpp` | 配方加载与校验 | L1 |
 | `fit/fit.cpp` | 适配等级判定、量化层级搜索、运行模式选择、速度估算（带宽屋顶线 / K 常数 / 卸载）、四要素评分、notes 生成、排序 | L1 |
+| `fit/benchmarks.cpp` | 实测基线库：读 `data/benchmarks/{local,community}`，相同硬件匹配，同模型取中位数；`mqde bench` 写入 | L1 |
 | `quant/ops.cpp` | 伪量化数值实现（**权威**，Python 必须逐位对齐） | L1 |
 | `quant/metrics.cpp` | 统计与误差指标 | L1 |
 | `quant/quant_spec.cpp` | QuantSpec 解析 | L1 |
@@ -134,6 +136,7 @@ MQDEsys/
 | `mqde/models/minicpm_vla.py` | MiniCPM-VLA 适配器：加载、前向、动作预测 | L1 |
 | `mqde/data/vla.py` | VLA 数据集读取与预处理 | L1 |
 | `mqde/pipeline/vla_job.py` | 作业主流程：量化 → 评测 → 报告 | L1 |
+| `mqde/eval/bench.py` | 实测吞吐（由 `mqde bench` 以子进程调用；stdout 最后一行为 JSON 结果） | L1 |
 | `mqde/pipeline/events.py` | 结构化事件输出（被 C++ job_runner 解析为 SSE） | L2（协议） |
 | `tests/test_numerics_golden.py` | C++/Python 数值一致性黄金测试 | L1（改动需给数值依据） |
 

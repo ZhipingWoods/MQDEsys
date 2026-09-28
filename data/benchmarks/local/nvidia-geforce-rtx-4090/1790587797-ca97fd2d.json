@@ -1,0 +1,31 @@
+{
+  "hardware": {
+    "cpu": "AMD EPYC 7402 24-Core Processor",
+    "cpuCores": 96,
+    "gpuCount": 1,
+    "hardwareName": "NVIDIA GeForce RTX 4090",
+    "ramGb": 501.3177604675293,
+    "vramGb": 23.98828125
+  },
+  "results": [
+    {
+      "avgTps": 4.409430151320403,
+      "avgTtftMs": 226.78667439613488,
+      "contextTokens": 157,
+      "maxTps": 4.465704616321455,
+      "minTps": 4.260499442243802,
+      "model": "/cache/wuzhiping/hub/MiniCPM-RobotManip",
+      "numRuns": 20,
+      "peakMemBytes": 3778429952,
+      "quant": "bf16",
+      "runtime": "hf_transformers",
+      "unit": "steps/s"
+    }
+  ],
+  "schemaVersion": 1,
+  "submittedAtUnix": 1790587797,
+  "tool": {
+    "name": "mqde",
+    "version": "0.1.0"
+  }
+}

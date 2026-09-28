@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "mqde/estimator/estimator.h"
+#include "mqde/fit/benchmarks.h"
 
 namespace mqde::fit {
 
@@ -95,8 +96,10 @@ struct Request {
   int64_t concurrency = 1;
   std::string force_quant;       // empty = choose the best that fits
   std::string force_run_mode;    // empty = auto
-  double measured_tps = 0;       // >0 overrides the estimate (local/community benchmark)
-  Confidence measured_source = Confidence::kEstimated;
+  // Measured baselines for THIS machine (nullptr = none / evaluating other hardware). Looked up by
+  // model path + chosen quant; a hit replaces the estimate (docs/REFERENCES.md A.8).
+  const BenchmarkIndex* bench = nullptr;
+  std::optional<MeasuredTps> measured;  // explicit override (tests / API); wins over `bench`
 };
 
 struct ScoreComponents {
@@ -112,7 +115,9 @@ struct ModelFit {
   RunMode run_mode = RunMode::kGpu;
   FitLevel fit_level = FitLevel::kTooTight;
   double memory_required_gb = 0, memory_available_gb = 0, utilization_pct = 0;
-  double estimated_tps = 0;   // decode tok/s (LLM) or decision steps/s (VLA)
+  double estimated_tps = 0;   // decode tok/s (LLM) or decision steps/s (VLA); the measured value when one exists
+  double formula_tps = 0;     // the formula estimate, always kept (T-R19 calibrates against it)
+  std::optional<MeasuredTps> measured_tps;
   // Null when the hardware profile has no compute figure, or on CPU-only: llmfit reports no TTFT
   // rather than a fabricated one (docs/REFERENCES.md A.6).
   std::optional<double> prefill_tps, ttft_ms;

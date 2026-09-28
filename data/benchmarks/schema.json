@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mqde/benchmarks/submission/v1",
+  "title": "MQDEsys measured throughput submission",
+  "description": "One file per `mqde bench` run (local/<hw-slug>/) or per imported record (community/<hw-slug>/). Field names follow llmfit's community format (docs/REFERENCES.md A.8). Matching is identical hardware only: hardware.hardwareName and hardware.cpu must equal this machine's, case-insensitive.",
+  "type": "object",
+  "required": ["schemaVersion", "hardware", "results"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "submittedAtUnix": {"type": "integer"},
+    "source": {"type": "string", "minLength": 1, "description": "Required for community/ files: origin and license, e.g. 'llmfit community data (MIT)'."},
+    "tool": {"type": "object", "properties": {"name": {"type": "string"}, "version": {"type": "string"}}},
+    "hardware": {
+      "type": "object",
+      "required": ["cpu"],
+      "properties": {
+        "cpu": {"type": "string"},
+        "cpuCores": {"type": "integer"},
+        "gpuCount": {"type": "integer"},
+        "hardwareName": {"type": "string", "description": "GPU name as reported by the driver; empty/absent for CPU-only."},
+        "ramGb": {"type": "number"},
+        "vramGb": {"type": "number"}
+      }
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["model", "avgTps"],
+        "properties": {
+          "model": {"type": "string", "description": "HF id or local path; matched by canonical slug (last segment, lower-case, '-', '_', '.' removed)."},
+          "quant": {"type": "string", "description": "Recipe id (bf16, w4a16, ...). Absent = matches any quant."},
+          "runtime": {"type": "string"},
+          "unit": {"enum": ["tok/s", "steps/s"]},
+          "avgTps": {"type": "number", "exclusiveMinimum": 0, "maximum": 10000},
+          "minTps": {"type": "number"},
+          "maxTps": {"type": "number"},
+          "avgTtftMs": {"type": "number", "description": "LLM: time to first token. steps/s models: mean decision-step latency."},
+          "numRuns": {"type": "integer", "minimum": 1},
+          "peakMemBytes": {"type": "integer"},
+          "contextTokens": {"type": "integer"}
+        }
+      }
+    }
+  }
+}

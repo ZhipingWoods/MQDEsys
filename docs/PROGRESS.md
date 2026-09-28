@@ -105,6 +105,20 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 ---
 
 
+### 2026-09-28 · T-R20 实测基线库
+
+- **完成**：
+  - `cpp/{include,src}/fit/benchmarks.*`：读取 `data/benchmarks/local/`（本机）与 `community/`（外部，必须带 `source`）；**仅相同硬件**匹配（GPU 名 + CPU 名，不区分大小写）；同模型多条取中位数，样本数累加；名字按 llmfit `canonical_slug` 归一化；过滤不合理值（≤0 或 >10000）。
+  - `mqde bench <model> --gpu N`：fork/exec `python -m mqde.eval.bench`（不经 shell），写 `local/<hw-slug>/<unix>-<hex>.json`。目前只支持 VLA（单位 steps/s）。
+  - `fit` 结果新增 `measured_tps`、`formula_tps`；有实测时 `estimated_tps` 用实测值，置信度 `measured_local` / `measured_community`。前端速度列显示"实测"徽标，详情面板同时显示实测和公式值。
+  - **只在评估硬件就是本机、且单卡时才套用实测**；换成其他硬件画像或多卡时保持 estimated。
+- **校验**：
+  - ctest 56/56（新增 11 个 benchmarks 测试）。
+  - 在 GPU 3 上实测 MiniCPM-RobotManip BF16：**4.41 steps/s（226.8 ms/步，20 次）**，峰值显存 3.78 GB，上下文 157 token。`/api/v1/fit`（rtx4090）返回 `measured_local`；`/fit:plan` 中其他画像仍为 estimated；前端截图已核对。
+- **定义变更**：原 TASKS 写的"三级硬件回退"在 llmfit 源码中不存在（调研误读），已按源码改为相同硬件匹配，REFERENCES.md A.8 同步重写。
+- **重要发现**：公式估算 46.89 steps/s，实测 4.41，**公式高估约 10.6 倍**。原因是 VLA 的一步包含 10 次流匹配去噪 + 视觉编码，而公式只按带宽算一次权重读取。T-R19 的本地校准需要 ≥2 个稠密锚点，目前只有 1 个，所以还不会生效。VLA 速度模型需要单独修正（建议新开任务）。
+- **下一步**：T-R19 置信度阶梯与本地校准。
+
 ### 2026-09-28 · T-R17 评分校准 + T-R18 MoE 两级速度模型
 
 - **完成**：

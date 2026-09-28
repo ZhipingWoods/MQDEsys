@@ -240,6 +240,8 @@ export interface ModelFit {
   memory_required_gb: number; memory_available_gb: number; utilization_pct: number;
   estimated_tps: number; speed_unit: string; prefill_tps: number | null; ttft_ms: number | null; context: number;
   estimate_confidence: string; score: number;
+  formula_tps: number;
+  measured_tps: { tok_s: number; ttft_ms: number | null; sample_count: number; hardware_label: string; source: "local" | "community" } | null;
   score_components: { quality: number; speed: number; fit: number; context: number };
   notes: string[]; detail?: Estimate; hardware?: string; system?: FitSystem;
 }

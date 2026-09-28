@@ -169,6 +169,7 @@ export default function FitPage() {
                   </td>
                   <td className="num">
                     {fmt(m.estimated_tps, 1)} <span className="muted small">{m.speed_unit}</span>
+                    {m.measured_tps && <span className="badge good" style={{ marginLeft: 6 }} title={`实测 · ${m.measured_tps.sample_count} 次`}>实测</span>}
                   </td>
                   <td className="num">
                     <b>{fmt(m.score, 1)}</b>
@@ -249,7 +250,19 @@ function Detail({ m, query }: { m: ModelFit; query: FitQuery }) {
                 <dt>可用量化</dt>
                 <dd>{m.fitting_quants.join(" · ") || "–"}</dd>
                 <dt>置信度</dt>
-                <dd>{m.estimate_confidence === "estimated" ? "估算（无实测）" : m.estimate_confidence}</dd>
+                <dd>
+                  <ConfidenceBadge c={m.estimate_confidence} />
+                </dd>
+                {m.measured_tps && (
+                  <>
+                    <dt>实测</dt>
+                    <dd>
+                      {fmt(m.measured_tps.tok_s, 2)} {m.speed_unit} · 中位数，{m.measured_tps.sample_count} 次 · {m.measured_tps.hardware_label}
+                    </dd>
+                    <dt>公式估算</dt>
+                    <dd className="muted">{fmt(m.formula_tps, 2)} {m.speed_unit}</dd>
+                  </>
+                )}
               </dl>
             </div>
           </div>
@@ -374,4 +387,16 @@ function Tile({ label, value, hint }: { label: string; value: string; hint?: str
       {hint && <div className="hint">{hint}</div>}
     </div>
   );
+}
+
+const CONF_LABEL: Record<string, [string, string]> = {
+  measured_local: ["本机实测", "good"],
+  measured_community: ["社区实测", "good"],
+  calibrated: ["已校准", "accent"],
+  estimated: ["估算（无实测）", ""],
+  unsupported: ["不支持", "critical"],
+};
+function ConfidenceBadge({ c }: { c: string }) {
+  const [label, cls] = CONF_LABEL[c] ?? [c, ""];
+  return <span className={`badge ${cls}`}>{label}</span>;
 }

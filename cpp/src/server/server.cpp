@@ -363,6 +363,29 @@ Result<void> serve(const ServerOptions& o) {
     if (b.contains("mem_bw_gbps")) sys.mem_bw_gbps = b["mem_bw_gbps"].get<double>();
     return sys;
   };
+  // This machine's identity, and its baseline index (reloaded per request so a fresh `mqde bench`
+  // shows up without restarting the server).
+  auto host_id = [] {
+    fit::HardwareId id;
+    mqde_device_info devs[32];
+    int n = 0;
+    if (mqde_probe_all(devs, 32, &n) == 0)
+      for (int i = 0; i < n; ++i) {
+        if (devs[i].kind == MQDE_DEV_CPU) id.cpu_name = devs[i].name;
+        else if (devs[i].kind == MQDE_DEV_GPU && id.gpu_name.empty()) id.gpu_name = devs[i].name;
+      }
+    return id;
+  }();
+  std::string host_profile;
+  if (!host_id.gpu_name.empty())
+    if (auto hp = estimator::match_hardware(host_id.gpu_name)) host_profile = hp->id;
+  // Measurements apply only when the evaluated profile is this machine and the run is single-GPU.
+  auto attach_bench = [&](fit::Request& r, const std::string& profile, const fit::System& sys,
+                          std::optional<fit::BenchmarkIndex>& holder) {
+    if (host_profile.empty() || profile != host_profile || sys.gpu_count != 1) return;
+    holder = fit::BenchmarkIndex::load(host_id);
+    r.bench = &*holder;
+  };
   auto fit_request = [](const Json& b) {
     fit::Request r;
     r.use_case = b.value("use_case", "auto");
@@ -378,7 +401,9 @@ Result<void> serve(const ServerOptions& o) {
     if (!sys) return send_error(res, sys.error());
     auto be = estimator::load_backend(body->value("backend", "hf_transformers"));
     if (!be) return send_error(res, be.error());
-    const auto r = fit_request(*body);
+    auto r = fit_request(*body);
+    std::optional<fit::BenchmarkIndex> bench;
+    attach_bench(r, body->value("hardware", "nvidia/rtx4090"), *sys, bench);
     std::vector<std::string> models = body->value("models", std::vector<std::string>{});
     if (models.empty())
       for (const auto& p : scan_library()) models.push_back(p.string());
@@ -426,7 +451,10 @@ Result<void> serve(const ServerOptions& o) {
       b["hardware"] = id;
       auto sys = system_from(b);
       if (!sys) continue;
-      auto f = fit::analyze(*s, *sys, *fit_cfg, *be, r);
+      auto rr = r;
+      std::optional<fit::BenchmarkIndex> bench;
+      attach_bench(rr, id, *sys, bench);
+      auto f = fit::analyze(*s, *sys, *fit_cfg, *be, rr);
       if (!f) continue;
       Json j = fit::to_json(*f);
       j.erase("detail");
