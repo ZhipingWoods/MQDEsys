@@ -239,6 +239,8 @@ export interface ModelFit {
   moe_tier: 0 | 1 | 2; moe_vram_pressure: number; moe_offloaded_gb: number;
   memory_required_gb: number; memory_available_gb: number; utilization_pct: number;
   estimated_tps: number; speed_unit: string; prefill_tps: number | null; ttft_ms: number | null; context: number;
+  /** estimated_tps is an unreachable roofline ceiling (launch overhead not modeled), not a prediction. */
+  speed_is_upper_bound: boolean;
   estimate_confidence: string; score: number;
   formula_tps: number;
   measured_tps: { tok_s: number; ttft_ms: number | null; sample_count: number; hardware_label: string; source: "local" | "community" } | null;

@@ -338,7 +338,12 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
     const double t_mem = sys.mem_bw_gbps > 0 ? e.bytes_per_step / (sys.mem_bw_gbps * 1e9 * cfg.bw_efficiency) : 0;
     const double t_cmp = sys.peak_tflops_bf16 > 0 ? e.flops_per_step / (sys.peak_tflops_bf16 * 1e12 * cfg.prefill_util) : 0;
     const double t = std::max(t_mem, t_cmp);
-    f.estimated_tps = t > 0 ? mode_factor / t : 0;
+    f.formula_tps = t > 0 ? mode_factor / t : 0;
+    f.estimated_tps = f.formula_tps;
+    // The roofline assumes the GPU is never idle. A VLA step is thousands of small kernels (vision
+    // tower + LM prefill + N flow-matching denoise passes), so in eager mode launch overhead, not
+    // bandwidth, sets the step time. Report the number as a ceiling until a measurement lands.
+    f.speed_is_upper_bound = f.formula_tps > 0;
     // A VLA step latency is only meaningful when both bandwidth and compute are known.
     if (t_mem > 0 && t_cmp > 0 && f.run_mode != RunMode::kCpuOnly) f.ttft_ms = t * 1e3 / std::max(mode_factor, 1e-9);
   } else {
@@ -403,6 +408,7 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
     f.measured_tps = m;
     f.estimated_tps = m->tok_s;
     f.confidence = m->source == MeasuredSource::kLocal ? Confidence::kMeasuredLocal : Confidence::kMeasuredCommunity;
+    f.speed_is_upper_bound = false;
     if (m->ttft_ms) f.ttft_ms = m->ttft_ms;
     f.notes.push_back(fmt::format("speed measured on {}: {:.2f} {} (median of {} runs; formula {:.2f})", m->hardware_label,
                                   m->tok_s, f.speed_unit, m->sample_count, f.formula_tps));
@@ -429,6 +435,11 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
   if (spec.checkpoint_quant)
     f.notes.push_back(fmt::format("checkpoint is already quantized ({} {}); estimates re-quantize from logical params",
                                   spec.checkpoint_quant->method, spec.checkpoint_quant->algo));
+  if (f.speed_is_upper_bound)
+    f.notes.push_back(fmt::format(
+        "{:.1f} {} is a roofline ceiling, not a prediction: per-kernel launch overhead is not modeled and dominates a "
+        "VLA step in eager mode (measured 4.41 vs formula 46.9 steps/s on RTX 4090). Run `mqde bench` for a real number.",
+        f.formula_tps, f.speed_unit));
   if (f.is_moe)
     f.notes.push_back(fmt::format("MoE: {} experts, {} active; speed uses {:.2f}B active params{}", spec.text.n_experts,
                                   spec.text.experts_per_tok, f.active_params_b,
@@ -475,6 +486,7 @@ Json to_json(const ModelFit& f) {
           {"utilization_pct", f.utilization_pct},
           {"estimated_tps", f.estimated_tps},
           {"speed_unit", f.speed_unit},
+          {"speed_is_upper_bound", f.speed_is_upper_bound},
           {"prefill_tps", f.prefill_tps ? Json(*f.prefill_tps) : Json(nullptr)},
           {"ttft_ms", f.ttft_ms ? Json(*f.ttft_ms) : Json(nullptr)},
           {"context", f.context},

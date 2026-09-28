@@ -122,6 +122,12 @@ struct ModelFit {
   // rather than a fabricated one (docs/REFERENCES.md A.6).
   std::optional<double> prefill_tps, ttft_ms;
   std::string speed_unit = "tok/s";
+  // True when `estimated_tps` is an unreachable roofline ceiling rather than a prediction, i.e. a
+  // lower bound on step latency. VLA steps/s comes from a bytes+FLOPs roofline that ignores
+  // per-kernel launch overhead; on eager-mode MiniCPM-RobotManip that overhead is ~80% of the step
+  // (formula 46.9 vs measured 4.41 steps/s). Cleared once a measurement replaces the formula.
+  // See docs/adr/0001-flash-linear-attention.md.
+  bool speed_is_upper_bound = false;
   Confidence confidence = Confidence::kEstimated;
   ScoreComponents components;
   double score = 0;

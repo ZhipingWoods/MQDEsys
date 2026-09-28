@@ -184,6 +184,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .badge.accent { background: var(--accent-dim); color: var(--accent-strong); border-color: transparent; }
 .badge.good { background: color-mix(in srgb, var(--good) 14%, transparent); color: var(--good-text); border-color: transparent; }
 .badge.critical { background: color-mix(in srgb, var(--critical) 14%, transparent); color: var(--critical); border-color: transparent; }
+.badge.warn { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); border-color: transparent; }
 
 /* ---------- tables ---------- */
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }

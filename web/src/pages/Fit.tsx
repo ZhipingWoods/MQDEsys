@@ -19,6 +19,7 @@ const USE_LABEL: Record<string, string> = {
   auto: "自动", general: "通用", chat: "对话", coding: "代码", reasoning: "推理", multimodal: "多模态", vla: "VLA 具身",
 };
 const name = (m: ModelFit) => m.model.split("/").pop() ?? m.model;
+const UPPER_BOUND_HINT = `屋顶线上限：未计入逐内核发射开销（实测 4.41 vs 公式 46.9 steps/s）。VLA 的一步是数千个小内核，eager 模式下发射开销主导步时。请用 mqde bench 取实测值。`;
 
 export function FitBadge({ level }: { level: FitLevel }) {
   return <span className={`status ${FIT_CLASS[level]}`}>{FIT_LABEL[level]}</span>;
@@ -168,8 +169,14 @@ export default function FitPage() {
                     <Meter pct={m.utilization_pct} />
                   </td>
                   <td className="num">
+                    {m.speed_is_upper_bound && <span className="muted">≤ </span>}
                     {fmt(m.estimated_tps, 1)} <span className="muted small">{m.speed_unit}</span>
                     {m.measured_tps && <span className="badge good" style={{ marginLeft: 6 }} title={`实测 · ${m.measured_tps.sample_count} 次`}>实测</span>}
+                    {m.speed_is_upper_bound && (
+                      <span className="badge warn" style={{ marginLeft: 6 }} title={UPPER_BOUND_HINT}>
+                        上限
+                      </span>
+                    )}
                   </td>
                   <td className="num">
                     <b>{fmt(m.score, 1)}</b>
@@ -231,7 +238,14 @@ function Detail({ m, query }: { m: ModelFit; query: FitQuery }) {
                 </dd>
                 <dt>速度</dt>
                 <dd>
+                  {m.speed_is_upper_bound && <span className="muted">≤ </span>}
                   {fmt(m.estimated_tps, 1)} {m.speed_unit}
+                  {m.speed_is_upper_bound && (
+                    <div className="muted small" style={{ marginTop: 4 }}>
+                      屋顶线上限，不是预测值：未计入逐内核发射开销。VLA 的一步是数千个小内核（视觉塔 + LM 预填充 + 多次流匹配去噪），
+                      eager 模式下发射开销而非带宽决定步时——本机实测 4.41 vs 公式 46.9 steps/s。请用 <code>mqde bench</code> 取实测值。
+                    </div>
+                  )}
                 </dd>
                 {m.speed_unit === "tok/s" && (
                   <>
@@ -244,7 +258,10 @@ function Detail({ m, query }: { m: ModelFit; query: FitQuery }) {
                 {m.speed_unit === "steps/s" && (
                   <>
                     <dt>决策步延迟下界</dt>
-                    <dd>{fmt(m.ttft_ms, 1)} ms</dd>
+                    <dd>
+                      ≥ {fmt(m.ttft_ms, 1)} ms
+                      <span className="muted small"> （与上方速度上限同源）</span>
+                    </dd>
                   </>
                 )}
                 <dt>可用量化</dt>
@@ -338,6 +355,7 @@ function Detail({ m, query }: { m: ModelFit; query: FitQuery }) {
                     <span className="badge">{r.best_quant}</span>
                   </td>
                   <td className="num small">
+                    {r.speed_is_upper_bound && <span className="muted">≤ </span>}
                     {fmt(r.estimated_tps, 1)} {r.speed_unit}
                   </td>
                 </tr>
