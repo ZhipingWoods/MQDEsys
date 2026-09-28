@@ -173,6 +173,24 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-09-28 · T-R21 并发反解
+
+- **状态**：DONE（待 commit sha）
+- **本次完成**：
+  1. `cpp/include/mqde/fit/concurrency.h`：`ConcurrencyEstimate` 结构体（requested_users / max_users / context / weights_gb / kv_per_user_gb / overhead_gb / total_gb / capacity_gb / utilization_pct / fits / high_pressure / max_context_for_users）；`estimate_concurrency()` 声明；`to_json()` 声明。
+  2. `cpp/src/fit/concurrency.cpp`：基于 `estimator::estimate()` 的前向推算（单用户提取 KV 代价）；`max_users` 解析式求解；`max_context_for_users` 通过 2 的幂步进 + `estimate()` 正向验证（解决了近似求解导致 forward-check 失败的 bug）。
+  3. `cpp/CMakeLists.txt`：新增 `concurrency.cpp` + `concurrency_test.cpp`。
+  4. `cpp/src/server/server.cpp`：`POST /api/v1/fit:concurrency` 端点；接受 model/hardware/recipe/users/context。
+  5. `web/src/api.ts`：`ConcurrencyEstimate` 类型；`api.concurrency()` 方法。
+  6. `web/src/pages/Fit.tsx`：`ConcurrencyPanel` 组件（自含 `useAsync`，嵌入详情面板下方）；展示最大并发、最大上下文、利用率、显存构成；高压橙色徽标。
+- **校验结果**：
+  - `ctest --preset dev` → 69/69 通过（新增 6 个 concurrency 测试）。
+  - Web build（tsc + vite）→ 通过。
+  - `POST /api/v1/fit:concurrency`（MiniCPM-RobotManip, BF16, 1 用户, 4096 tok）→ fits=true, max_users=268, max_ctx_for=131072, util=19.3%。
+- **技术说明**：`max_context_for_users` 最初用近似公式求解，但 `estimate()` 在较长上下文时激活字节非线性增长，导致正向验证失败。改为对 2 的幂从大到小遍历并 forward-validate，确保结果与 `estimate()` 完全一致。
+- **下一步**：T-R26 ModelFit 字段补全与运行时选择（依赖 T-R18/T-R20/T-R24/T-R25，其中 T-R24/T-R25 尚未做，按顺序应先做 T-R22）。实际执行顺序 T-R21 → T-R26 → T-R22 → T-R23 → T-R24 → T-R25 → T-R27。
+
+
 ### 2026-09-28 · T-R19 置信度阶梯与本地校准
 
 - **状态**：DONE（d9f51d8）
