@@ -242,6 +242,9 @@ export interface ModelFit {
   /** estimated_tps is an unreachable roofline ceiling (launch overhead not modeled), not a prediction. */
   speed_is_upper_bound: boolean;
   estimate_confidence: string; score: number;
+  runtime: string; installed: boolean; usable_context: number; disk_size_gb: number;
+  supports_tp: number[]; verify_command: string; license: string; capability_ids: string[];
+  fit_label: string; run_mode_label: string; estimate_confidence_label: string;
   estimate_basis: { method: string; gpu_bandwidth_gbps: number; ddr_bandwidth_gbps: number; efficiency: number; assumed_context: number; local_calibration: number; };
   formula_tps: number;
   measured_tps: { tok_s: number; ttft_ms: number | null; sample_count: number; hardware_label: string; source: "local" | "community" } | null;

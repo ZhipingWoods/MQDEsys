@@ -138,6 +138,17 @@ std::string_view to_string(RunMode m) {
   }
   return "unknown";
 }
+std::string_view to_string(InferenceRuntime r) {
+  switch (r) {
+    case InferenceRuntime::kVllm:          return "vllm";
+    case InferenceRuntime::kHfTransformers: return "hf_transformers";
+    case InferenceRuntime::kLlamaCpp:      return "llama_cpp";
+    case InferenceRuntime::kTrtEdgeLlm:    return "trt_edge_llm";
+    case InferenceRuntime::kUnsupported:   return "unsupported";
+  }
+  return "unknown";
+}
+
 std::string_view to_string(Confidence c) {
   switch (c) {
     case Confidence::kMeasuredLocal: return "measured_local";
@@ -458,6 +469,78 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
                                                     : ""));
   for (const auto& r : e.reasons)
     if (r.find("native kernel") != std::string::npos || r.find("natively") != std::string::npos) f.notes.push_back(r);
+  // T-R26: Populate supplementary ModelFit fields (llmfit A.15 / A.16).
+  // --- Runtime selection (A.16, adapted for our backends) ---
+  {
+    const bool is_quantized = spec.checkpoint_quant.has_value();
+    const bool is_edge = sys.backend.find("trt") != std::string::npos ||
+                         sys.backend.find("jetson") != std::string::npos;
+    if (f.run_mode == RunMode::kCpuOnly) {
+      f.runtime = InferenceRuntime::kLlamaCpp;
+    } else if (is_edge) {
+      f.runtime = InferenceRuntime::kTrtEdgeLlm;
+    } else if (is_quantized || f.best_quant == "w4a16" || f.best_quant == "w8a16" || f.best_quant == "fp8") {
+      f.runtime = InferenceRuntime::kVllm;
+    } else {
+      f.runtime = InferenceRuntime::kHfTransformers;
+    }
+  }
+
+  // --- verify_command (A.16) ---
+  {
+    const std::string model_arg = spec.path.empty() ? "MODEL_PATH" : spec.path;
+    switch (f.runtime) {
+      case InferenceRuntime::kLlamaCpp:
+        f.verify_command = fmt::format(
+            "llama-bench -m {}.gguf -ngl {} -t 1", model_arg,
+            f.run_mode == RunMode::kCpuOnly ? "0" : "all");
+        break;
+      case InferenceRuntime::kVllm:
+        f.verify_command = fmt::format(
+            "python -m vllm.entrypoints.openai.api_server --model {} --dtype auto", model_arg);
+        break;
+      case InferenceRuntime::kTrtEdgeLlm:
+        f.verify_command = fmt::format("trtllm-bench --model {}", model_arg);
+        break;
+      default:
+        f.verify_command = fmt::format(
+            "python -c 'from transformers import pipeline; p=pipeline(text-generation,{0}); print(p(hello)[0][generated_text])'",
+            model_arg);
+        break;
+    }
+  }
+
+  // --- usable_context ---
+  f.usable_context = e.context_tokens > 0 ? e.context_tokens
+                     : spec.text.max_position_embeddings > 0 ? spec.text.max_position_embeddings
+                     : 0;
+
+  // --- disk_size_gb (unquantized BF16 weight bytes) ---
+  f.disk_size_gb = spec.total_params > 0 ? static_cast<double>(spec.total_params) * 2.0 / (1ull << 30) : 0;
+
+  // --- supports_tp (legal TP sizes = divisors of n_kv_heads that are also ≤ gpu_count) ---
+  {
+    const int64_t n_kv = spec.text.n_kv_heads > 0 ? spec.text.n_kv_heads : 1;
+    for (int64_t d = 1; d <= std::min<int64_t>(n_kv, std::max(1, sys.gpu_count)); ++d) {
+      if (n_kv % d == 0) f.supports_tp.push_back(d);
+    }
+  }
+
+  // --- capability_ids ---
+  {
+    f.capability_ids.push_back("text");
+    if (spec.modality == "vla") { f.capability_ids.push_back("vision"); f.capability_ids.push_back("vla"); }
+    else if (spec.modality == "vlm" || spec.modality == "multimodal") f.capability_ids.push_back("vision");
+    if (!spec.text.layer_types.empty() &&
+        std::find(spec.text.layer_types.begin(), spec.text.layer_types.end(), "linear_attention") != spec.text.layer_types.end())
+      f.capability_ids.push_back("linear_attention");
+  }
+
+  // --- label fields (convenience pre-rendering) ---
+  f.fit_label = std::string(to_string(f.fit_level));
+  f.run_mode_label = std::string(to_string(f.run_mode));
+  f.estimate_confidence_label = std::string(to_string(f.confidence));
+
   (void)vram_total;
   f.detail = e;
   return f;
@@ -551,6 +634,17 @@ Json to_json(const ModelFit& f) {
           {"score", f.score},
           {"score_components",
            {{"quality", f.components.quality}, {"speed", f.components.speed}, {"fit", f.components.fit}, {"context", f.components.context}}},
+          {"runtime", to_string(f.runtime)},
+          {"installed", f.installed},
+          {"usable_context", f.usable_context},
+          {"disk_size_gb", f.disk_size_gb},
+          {"supports_tp", f.supports_tp},
+          {"verify_command", f.verify_command},
+          {"license", f.license},
+          {"capability_ids", f.capability_ids},
+          {"fit_label", f.fit_label},
+          {"run_mode_label", f.run_mode_label},
+          {"estimate_confidence_label", f.estimate_confidence_label},
           {"notes", f.notes},
           {"estimate_basis", {{"method", f.estimate_basis.method},
                               {"gpu_bandwidth_gbps", f.estimate_basis.gpu_bandwidth_gbps},

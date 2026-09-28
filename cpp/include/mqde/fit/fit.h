@@ -16,10 +16,13 @@ namespace mqde::fit {
 enum class FitLevel { kPerfect, kGood, kMarginal, kTooTight };
 enum class RunMode { kGpu, kTensorParallel, kMoeOffload, kCpuOffload, kCpuOnly };
 enum class Confidence { kMeasuredLocal, kMeasuredCommunity, kCalibrated, kEstimated, kUnsupported };
+// Adapted from llmfit A.16 for our actual supported backends.
+enum class InferenceRuntime { kVllm, kHfTransformers, kLlamaCpp, kTrtEdgeLlm, kUnsupported };
 
 std::string_view to_string(FitLevel);
 std::string_view to_string(RunMode);
 std::string_view to_string(Confidence);
+std::string_view to_string(InferenceRuntime);
 
 struct UseCase {
   std::string name;
@@ -150,6 +153,19 @@ struct ModelFit {
   int moe_tier = 0;
   double moe_vram_pressure = 1.0;  // cache-pressure factor applied (GPU mode), 1.0 = none
   double moe_offloaded_gb = 0;     // expert weights placed in system RAM (MoE offload mode)
+  // T-R26: A.15 supplementary fields.
+  InferenceRuntime runtime = InferenceRuntime::kHfTransformers;
+  bool installed = false;              // a local runtime can serve this model right now (filled by T-R24)
+  int64_t usable_context = 0;         // largest context that fits with current concurrency
+  double disk_size_gb = 0;            // estimated on-disk size (weight bytes, unquantized BF16)
+  std::vector<int64_t> supports_tp;   // legal tensor-parallel sizes (divisors of n_kv_heads, ≥1)
+  std::string verify_command;         // a ready-to-run verification command for this runtime/mode
+  std::string license;                // from model family or catalog; empty if unknown
+  std::vector<std::string> capability_ids;  // e.g. {"text", "vision", "vla"}
+  // Convenience label fields (duplicates of to_string, but pre-rendered for the API consumer).
+  std::string fit_label;
+  std::string run_mode_label;
+  std::string estimate_confidence_label;
   estimator::Estimate detail;  // full memory breakdown for the chosen quant
 };
 
