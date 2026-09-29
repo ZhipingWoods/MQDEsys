@@ -51,8 +51,9 @@ Result<void> save_catalog(const Catalog& c, const std::filesystem::path& p = def
 void apply_hygiene(CatalogEntry& e);
 
 // Case-insensitive substring search over name; demoted entries only when include_demoted.
+// If capability is non-empty, only returns entries that have that capability.
 std::vector<const CatalogEntry*> search(const Catalog& c, const std::string& query, const std::string& provider,
-                                        size_t limit, bool include_demoted = false);
+                                        const std::string& capability, size_t limit, bool include_demoted = false);
 const CatalogEntry* find(const Catalog& c, const std::string& name);
 
 // Builds a weight-less ModelSpec from the stored config so the fit/estimator path works unchanged.

@@ -33,7 +33,7 @@ add_library(mqde_estimator STATIC src/estimator/recipe.cpp src/estimator/hardwar
 target_link_libraries(mqde_estimator PUBLIC mqde_modelspec mqde_quant)
 
 # ---- fit (llmfit-style deployment pre-evaluation) ----
-add_library(mqde_fit STATIC src/fit/fit.cpp src/fit/benchmarks.cpp src/fit/concurrency.cpp src/fit/claim.cpp src/fit/installed.cpp
+add_library(mqde_fit STATIC src/fit/fit.cpp src/fit/benchmarks.cpp src/fit/concurrency.cpp src/fit/claim.cpp
                              src/fit/installed.cpp)
 target_link_libraries(mqde_fit PUBLIC mqde_estimator PRIVATE httplib::httplib)
 
@@ -85,5 +85,3 @@ if(MQDE_BUILD_TESTS)
   gtest_discover_tests(mqde_unit_tests)
 endif()
 
-# ---- mqde_installed (optional link for fit when runtime detection is needed) ----
-# No separate library; installed.cpp is already part of mqde_fit

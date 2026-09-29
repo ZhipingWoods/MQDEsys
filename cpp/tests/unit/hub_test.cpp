@@ -122,8 +122,8 @@ TEST(hub, catalog_roundtrip_and_search) {
   ASSERT_TRUE(l);
   ASSERT_EQ(l->entries.size(), 2u);
   EXPECT_EQ(l->entries[0].config.value("num_hidden_layers", 0), 28);
-  EXPECT_EQ(search(*l, "qwen2.5", "", 10).size(), 1u);  // draft is demoted
-  EXPECT_EQ(search(*l, "qwen2.5", "", 10, true).size(), 2u);
+  EXPECT_EQ(search(*l, "qwen2.5", "", "", 10).size(), 1u);  // draft is demoted
+  EXPECT_EQ(search(*l, "qwen2.5", "", "", 10, true).size(), 2u);
   EXPECT_NE(find(*l, "hf:qwen/qwen2.5-7b-instruct"), nullptr);
   std::filesystem::remove(p);
 }

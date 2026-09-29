@@ -1,50 +1,47 @@
-// Copyright 2024 MQDEsys
-// SPDX-License-Identifier: Apache-2.0
 #pragma once
+// Installed runtime detection (docs/REFERENCES.md A.11).
+// Probes 8 sources in parallel: HTTP-based (ollama, LM Studio, vLLM) and
+// filesystem-based (llama.cpp, MLX, RamaLama, HF cache, Docker Model Runner).
+// Single-source HTTP timeout: 400 ms. Overall deadline: 2 s.
 
-#include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "mqde/common/result.h"
+#include "mqde/common/config.h"
 
-namespace mqde::fit {
+namespace mqde {
+namespace fit {
 
-struct InstalledSource {
-  std::string name;
-  std::string type;  // "http" | "filesystem"
-  std::string url;
-  std::vector<std::string> paths;
-  std::string pattern;
-  int timeout_ms = 400;
+// A single detected model from any source.
+struct InstalledModel {
+  std::string name;       // raw name as returned by the source
+  std::string canonical;  // normalized (lowercase, no quant suffix, no provider prefix)
+  std::string source;     // "ollama" | "lm_studio" | "vllm" | "llama_cpp" | "hf_cache" | etc.
 };
 
-struct InstalledConfig {
-  std::vector<InstalledSource> sources;
-};
-
-struct InstalledModels {
-  std::set<std::string> all_names;  // canonical normalized names
-  std::vector<std::pair<std::string, std::string>> provider_models;  // (provider, original_name)
+struct InstalledIndex {
+  std::vector<InstalledModel> models;
+  std::vector<std::string> active_sources;   // sources that responded / had files
   double elapsed_ms = 0;
 
-  // Returns the list of providers/runtimes that have this model installed.
-  // model_name is normalized before lookup.
-  std::vector<std::string> installed_providers(const std::string& model_name) const;
+  // Returns true when any installed model's canonical form matches the given name
+  // (or a version with provider prefix stripped, e.g. "openbmb/minicpm-4b" -> "minicpm-4b").
+  bool is_installed(std::string_view model_name) const;
+
+  // Returns source names of all installed providers for this model.
+  std::vector<std::string> installed_providers(std::string_view model_name) const;
 };
 
+// Probe all sources in parallel and return the aggregate index.
+// Reads timeouts from data/installed.yaml (falls back to built-in defaults if absent).
+InstalledIndex probe_installed();
 
-Result<InstalledConfig> load_installed_config(const std::string& repo_root = ".");
+// Normalize a model name for matching: lowercase, strip quant suffix tokens, strip provider prefix.
+std::string normalize_installed_name(std::string_view raw);
 
-std::string normalize_model_name(const std::string& name);
+nlohmann::json to_json(const InstalledIndex& idx);
 
-Result<InstalledModels> detect_installed(const InstalledConfig& cfg, int deadline_ms = 2000);
-
-bool is_installed(const std::set<std::string>& installed, const std::string& canonical_name,
-                  const std::string& ollama_style_name = "");
-
-std::vector<std::string> installed_providers(const std::vector<std::pair<std::string, std::string>>& pm,
-                                              const std::string& canonical_name);
-
-}  // namespace mqde::fit
+}  // namespace fit
+}  // namespace mqde

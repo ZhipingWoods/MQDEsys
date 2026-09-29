@@ -456,7 +456,7 @@ Result<void> serve(const ServerOptions& o) {
     const std::string source = body->value("source", "local");
     if (models.empty() && source == "catalog") {
       const auto c = catalog_snapshot();
-      for (const auto* e : hub::search(c, body->value("search", ""), body->value("provider", ""),
+      for (const auto* e : hub::search(c, body->value("search", ""), body->value("provider", ""), body->value("capability", ""),
                                        body->value("limit", size_t{50})))
         models.push_back("hf:" + e->name);
     } else if (models.empty())
@@ -480,7 +480,7 @@ Result<void> serve(const ServerOptions& o) {
       }
       // T-R24: a model is installed when a local runtime/cache holds it. A model directory on this
       // machine also counts ("local_dir"): the HF-transformers runtime can load it as-is.
-      f->installed_providers = mqde::fit::installed_providers(installed_index(),(m.starts_with("hf:") ? m.substr(3) : m));
+      f->installed_providers = installed_index().installed_providers(m.starts_with("hf:") ? m.substr(3) : m);
       if (std::filesystem::exists(std::filesystem::path(m) / "config.json"))
         f->installed_providers.insert(f->installed_providers.begin(), "local_dir");
       f->installed = !f->installed_providers.empty();
@@ -670,7 +670,8 @@ Result<void> serve(const ServerOptions& o) {
   svr.Get("/api/v1/catalog", [&](const httplib::Request& req, httplib::Response& res) {
     const auto c = catalog_snapshot();
     const size_t limit = req.has_param("limit") ? std::stoul(req.get_param_value("limit")) : 100;
-    const auto hits = hub::search(c, req.get_param_value("search"), req.get_param_value("provider"), limit,
+    const auto hits = hub::search(c, req.get_param_value("search"), req.get_param_value("provider"),
+                                  req.get_param_value("capability"), limit,
                                   req.get_param_value("include_demoted") == "1");
     Json arr = Json::array();
     for (const auto* e : hits) arr.push_back(hub::to_json(*e));

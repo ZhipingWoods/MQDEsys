@@ -1,5 +1,4 @@
 #include "mqde/fit/fit.h"
-#include "mqde/fit/installed.h"
 
 #include <algorithm>
 #include <chrono>
@@ -696,47 +695,3 @@ Json to_json(const System& s) {
 }
 
 }  // namespace mqde::fit
-
-// ---- T-R24: Installed runtime detection ----
-
-namespace mqde::fit {
-InstalledIndex probe_installed(const std::string& repo_root) {
-  const auto start = std::chrono::steady_clock::now();
-  auto cfg_r = load_installed_config(repo_root);
-  InstalledIndex idx;
-  if (!cfg_r) {
-    idx.elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-    return idx;
-  }
-  const auto results_r = detect_installed(*cfg_r);
-  if (!results_r) {
-    idx.elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-    return idx;
-  }
-  const auto& installed = *results_r;
-  idx.all_names = installed.all_names;
-  idx.provider_models = installed.provider_models;
-  
-  // active_sources = providers that returned at least one model
-  std::set<std::string> active;
-  for (const auto& pm : installed.provider_models) {
-    active.insert(pm.first);
-  }
-  idx.active_sources.assign(active.begin(), active.end());
-  
-  idx.elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-  return idx;
-}
-}
-
-namespace mqde::fit {
-nlohmann::json to_json(const mqde::fit::InstalledIndex& idx) {
-  nlohmann::json providers = nlohmann::json::array();
-  for (const auto& [p, m] : idx.provider_models) providers.push_back({{"provider", p}, {"model", m}});
-  return {{"active_sources", idx.active_sources},
-          {"models", std::vector<std::string>(idx.all_names.begin(), idx.all_names.end())},
-          {"provider_models", providers},
-          {"elapsed_ms", idx.elapsed_ms}};
-}
-}
-

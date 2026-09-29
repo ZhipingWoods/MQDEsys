@@ -444,7 +444,7 @@ int cmd_catalog_search(const std::string& q, const std::string& provider, size_t
   auto c = mqde::hub::load_catalog();
   if (!c) return fail(c.error());
   std::vector<Json> rows;
-  for (const auto* e : mqde::hub::search(*c, q, provider, n, demoted)) rows.push_back(mqde::hub::to_json(*e));
+  for (const auto* e : mqde::hub::search(*c, q, provider, "", n, demoted)) rows.push_back(mqde::hub::to_json(*e));
   if (json) std::cout << Json(rows).dump(2) << "\n";
   else print_catalog_rows(rows);
   return 0;

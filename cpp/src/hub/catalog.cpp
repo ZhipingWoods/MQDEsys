@@ -253,13 +253,19 @@ Result<void> save_catalog(const Catalog& c, const fs::path& p) {
 }
 
 std::vector<const CatalogEntry*> search(const Catalog& c, const std::string& query, const std::string& provider,
-                                        size_t limit, bool include_demoted) {
-  const std::string q = lower(query), pv = lower(provider);
+                                        const std::string& capability, size_t limit, bool include_demoted) {
+  const std::string q = lower(query), pv = lower(provider), cap = lower(capability);
   std::vector<const CatalogEntry*> out;
   for (const auto& e : c.entries) {
     if (e.demoted && !include_demoted) continue;
     if (!q.empty() && lower(e.name).find(q) == std::string::npos) continue;
     if (!pv.empty() && lower(e.provider) != pv) continue;
+    if (!cap.empty()) {
+      bool has_cap = false;
+      for (const auto& c : e.capabilities)
+        if (lower(c) == cap) { has_cap = true; break; }
+      if (!has_cap) continue;
+    }
     out.push_back(&e);
   }
   std::stable_sort(out.begin(), out.end(), [](auto* a, auto* b) { return a->hf_downloads > b->hf_downloads; });
