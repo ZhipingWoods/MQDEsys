@@ -181,7 +181,9 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
   - `ctest` 98/98（新增 `hub_remote.*` 5 项：本地 httplib 桩，4 MiB payload 场景只传 8+header 字节；revision；重试 3 次后成功）；`pytest python/tests/trace` 4 passed。
   - 在线：`mqde model inspect hf:Qwen/Qwen2.5-7B-Instruct` → 339 个张量、7.616 B 参数，仅取 37.95 KiB（config + 4 个分片头），经代理 60 s；`hf:meta-llama/Llama-3.1-8B` → `HTTP 401 (gated or private repo; set HF_TOKEN)`；`mqde estimate -m hf:Qwen/Qwen2.5-7B-Instruct -r w4a16,fp8` 可直接出预估。
   - Qwen2.5-0.5B W4A16 RTN 按块敏感度（8 窗口 PPL，CPU 16 线程 204 s）：最敏感 block 23 / 16 / 17 / 8 / 0 / 2；建议 6 块升 8 bit（+44.7 MB）。按建议经 API 提交的新作业实测：8 窗口 PPL 24.036 → 22.014（预测 21.748，预测偏乐观：实际挽回 2.02 / 预测 2.29）；40 窗口 PPL 22.064 → **20.271**（优于整模型 GPTQ W4A16 的 20.550）。W4A8 RTN 最敏感 block 2 / 23 / 8。
-  - 后台 sweep 新增：GPTQ W4A8 22.098、GPTQ W2A16 2142.6（仍崩溃）、AWQ+GPTQ W4A16 20.475。
+  - 后台 sweep 最终结果（40 窗口 PPL，W+A / +KV int8 KIVI，原模型 18.102）：GPTQ W4A8 22.098 / 22.109；GPTQ W2A16 2142.6（崩溃）；AWQ+GPTQ W4A16 20.475 / 20.478、W4A8 22.269 / 22.231、W2A16 10390（崩溃）。
+  - 静态激活 GPTQ W4A8（per-tensor minmax）：**116.26**（动态 per-token 为 22.10）——Qwen2 激活离群值使单一静态 scale 不可用，静态激活需配合 SmoothQuant 或 percentile。
+  - W2A16 GPTQ + 混合精度（block 0、23 为 8 bit，down_proj 4 bit）：2142.6 → **94.38**，仍远差于 W4。
 - **未完成 / 下一步**：7B 单卡 < 1 h 的 T-0902 验收待 GPU；T-0904 的 Playwright 用例未写；Hub 离线模式（读 `~/.cache/huggingface/hub`）未做。
 
 
