@@ -22,6 +22,10 @@ struct ClaimBounds {
   int64_t max_context_at_min_tps = 0;
   double memory_gb = 0;
   double efficiency_used = 0;    // the efficiency factor used for the conservative estimate
+  std::string speed_unit = "tok/s";  // "steps/s" for VLA
+  // "formula" or "measured": with a local/community measurement the bounds are the measurement
+  // +-10 % (run-to-run spread) instead of the roofline, which overstates eager-mode VLA ~10x.
+  std::string basis = "formula";
 };
 
 // Compute claim bounds for a model on a system.
@@ -32,7 +36,8 @@ ClaimBounds fit_bounds(const modelspec::ModelSpec& spec,
                        const System& sys,
                        const FitConfig& cfg,
                        const estimator::BackendProfile& backend,
-                       double min_tps);
+                       double min_tps,
+                       const Request& base = {});  // carries bench / use case / concurrency
 
 nlohmann::json to_json(const ClaimBounds& b);
 

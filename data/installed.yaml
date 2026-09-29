@@ -1,55 +1,47 @@
-# Runtime detection configuration (docs/REFERENCES.md A.11).
-# Paths and ports are user-configurable; detection logic is in cpp/src/fit/installed.cpp.
-
-http_timeout_ms: 400
-overall_deadline_ms: 2000
+# Installed runtime detection sources (T-R24)
+# Paths and ports are configurable; timeout per source: 400 ms
 
 sources:
-  ollama:
-    kind: http
-    url: "http://127.0.0.1:11434/api/tags"
-    field: models[].name   # extract name from each entry
-
-  lm_studio:
-    kind: http
-    url: "http://127.0.0.1:1234/v1/models"
-    field: data[].id
-
-  vllm:
-    kind: http
-    url: "http://127.0.0.1:8000/v1/models"
-    field: data[].id
-
-  llama_cpp:
-    kind: fs
+  - name: ollama
+    type: http
+    url: http://127.0.0.1:11434/api/tags
+    timeout_ms: 400
+    
+  - name: lm_studio
+    type: http
+    url: http://127.0.0.1:1234/v1/models
+    timeout_ms: 400
+    
+  - name: llamacpp
+    type: http
+    url: http://127.0.0.1:8080/v1/models
+    timeout_ms: 400
+    
+  - name: vllm
+    type: http
+    url: http://127.0.0.1:8000/v1/models
+    timeout_ms: 400
+    
+  - name: mlx
+    type: filesystem
     paths:
-      - "~/.cache/llama.cpp"
-      - "~/models"
-      - "/opt/models"
-    ext: ".gguf"
-    depth: 3
-
-  mlx:
-    kind: fs
+      - ~/.cache/huggingface/hub
+    pattern: "models--.*"
+    
+  - name: docker_model_runner
+    type: http
+    url: http://127.0.0.1:5000/v1/models
+    timeout_ms: 400
+    
+  - name: ramalama
+    type: filesystem
     paths:
-      - "~/.cache/huggingface/hub"
-    marker: "config.json"  # MLX models have a config.json
-    depth: 2
-
-  ramalama:
-    kind: fs
+      - ~/.local/share/ramalama
+    pattern: "models--.*"
+    
+  - name: hf_cache
+    type: filesystem
     paths:
-      - "~/.local/share/ramalama/models"
-    depth: 2
-
-  hf_cache:
-    kind: fs
-    paths:
-      - "~/.cache/huggingface/hub"
-    marker: "config.json"
-    depth: 3
-
-  docker_model_runner:
-    kind: cmd
-    command: "docker"
-    args: ["model", "ls", "--format", "{{.Name}}"]
+      - ~/.cache/huggingface/hub
+      - $HF_HOME/hub
+    pattern: "models--.*"

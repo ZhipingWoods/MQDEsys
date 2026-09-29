@@ -242,7 +242,7 @@ export interface ModelFit {
   /** estimated_tps is an unreachable roofline ceiling (launch overhead not modeled), not a prediction. */
   speed_is_upper_bound: boolean;
   estimate_confidence: string; score: number;
-  runtime: string; installed: boolean; usable_context: number; disk_size_gb: number;
+  runtime: string; installed: boolean; installed_providers: string[]; usable_context: number; disk_size_gb: number;
   supports_tp: number[]; verify_command: string; license: string; capability_ids: string[];
   fit_label: string; run_mode_label: string; estimate_confidence_label: string;
   estimate_basis: { method: string; gpu_bandwidth_gbps: number; ddr_bandwidth_gbps: number; efficiency: number; assumed_context: number; local_calibration: number; };
@@ -254,6 +254,23 @@ export interface ModelFit {
 export interface FitQuery {
   hardware: string; gpu_count?: number; ram_gb?: number; vram_gb?: number; mem_bw_gbps?: number;
   use_case?: string; context?: number; concurrency?: number; quant?: string; sort?: string; models?: string[];
+  /** "local" = scan the model library; "catalog" = HF catalog entries (evaluated without weights). */
+  source?: "local" | "catalog"; search?: string; provider?: string; limit?: number;
+}
+export interface CatalogModel {
+  name: string; provider: string; parameter_count: string; parameters_raw: number; quantization: string; format: string;
+  context_length: number; architecture: string; pipeline_tag: string; license: string; release_date: string;
+  capabilities: string[]; hf_downloads: number; hf_likes: number; demoted: boolean; demote_reason: string;
+}
+export interface HfHit { name: string; provider: string; pipeline_tag: string; hf_downloads: number; hf_likes: number; parameters_raw: number }
+export interface DownloadStatus {
+  id: string; repo: string; group: string; dir: string; state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  error: string; bytes_done: number; bytes_total: number; files_done: number; files_total: number;
+}
+export interface InstalledIndex { models: { name: string; canonical: string; source: string }[]; active_sources: string[]; elapsed_ms: number }
+export interface ClaimBounds {
+  conservative_tps: number; optimistic_tps: number; holds: boolean; best_quant: string; max_context_at_min_tps: number;
+  memory_gb: number; efficiency_used: number; speed_unit: string; basis: "formula" | "measured";
 }
 // ---- model library + netron-style graph ----
 export interface LibraryModel {
@@ -272,6 +289,14 @@ export interface TensorView {
   stats?: { min: number; max: number; absmax: number; mean: number; std: number; kurtosis: number; outlier_ratio: number };
   hist?: { min: number; max: number; counts: number[] };
   quant_preview?: { recipe: string; metrics: { sqnr_db: number | null; cosine: number; rel_l2: number | null; max_abs: number } };
+}
+
+export interface RunPath { run_mode: string; best_quant: string; memory_required_gb: number; estimated_tps: number; speed_unit: string; fit_level: FitLevel; runtime: string; utilization_pct: number }
+export interface FitPlan {
+  model: string; rows: ModelFit[]; run_paths: RunPath[];
+  minimum_hardware: ModelFit | null; recommended_hardware: ModelFit | null;
+  upgrades: { hardware: string; vram_delta_gb: number; tps_delta: number; best_quant: string }[];
+  kv_alternatives: { kv_quant: string; kv_bytes_per_token: number; memory_delta_gb: number }[];
 }
 
 export interface ConcurrencyEstimate {
@@ -301,7 +326,17 @@ export const api = {
   graph: (path: string, focus = "", depth = 2) => req<GraphNode>("POST", "/models:graph", { path, focus, depth }),
   tensor: (path: string, tensor: string, recipe = "") => req<TensorView>("POST", "/models:tensor", { path, tensor, recipe }),
   fit: (q: FitQuery) => req<{ system: FitSystem; models: ModelFit[]; errors: { model: string; error: string }[]; use_cases: string[] }>("POST", "/fit", q),
-  plan: (model: string, q: Omit<FitQuery, "hardware">) => req<{ model: string; rows: ModelFit[] }>("POST", "/fit:plan", { model, ...q }),
+  plan: (model: string, q: Partial<FitQuery>) => req<FitPlan>("POST", "/fit:plan", { model, ...q }),
+  claim: (model: string, hardware: string, min_tps: number) => req<ClaimBounds>("POST", "/fit:claim", { model, hardware, min_tps }),
+  installed: () => req<InstalledIndex>("GET", "/installed"),
+  catalog: (search = "", provider = "", limit = 100, include_demoted = false) =>
+    req<{ updated_at: string; total: number; demoted: number; models: CatalogModel[] }>(
+      "GET", `/catalog?search=${encodeURIComponent(search)}&provider=${encodeURIComponent(provider)}&limit=${limit}&include_demoted=${include_demoted ? 1 : 0}`),
+  hfSearch: (q: string, limit = 20) => req<{ models: HfHit[] }>("GET", `/hf/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+  download: (model: string, opts: { quant?: string; budget?: string; list?: boolean } = {}) =>
+    req<DownloadStatus & { groups?: { group: string; bytes: number; files: number; quality: number }[]; chosen?: string }>("POST", "/download", { model, ...opts }),
+  downloadStatus: (id: string) => req<DownloadStatus>("GET", `/download/${id}/status`),
+  cancelDownload: (id: string) => req<DownloadStatus>("POST", `/download/${id}:cancel`),
   concurrency: (model: string, hardware: string, recipe: string, users: number, context: number) =>
     req<ConcurrencyEstimate>("POST", "/fit:concurrency", { model, hardware, recipe, users, context }),
 };

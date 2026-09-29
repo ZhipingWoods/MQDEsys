@@ -835,8 +835,8 @@
 | **T-R19** | **置信度阶梯 + 本地校准**（calibrated 档） | llmfit A.7 | L1 | DONE (2026-09-28, d9f51d8; 63/63 ctest) |
 | **T-R20** | **实测基线库**：格式、相同硬件匹配、中位数归并 | llmfit A.8 | L1 | DONE (2026-09-28, 56/56 ctest; 4090 实测 4.41 steps/s) |
 | **T-R21** | **并发反解**：max_users / max_context_for | llmfit A.9 | L1 | DONE (2026-09-28, 69/69 ctest) |
-| **T-R22** | **完整 plan**：run paths、最低/推荐硬件、升级增量、KV 替代 | llmfit A.10 | L1 | TODO |
-| **T-R23** | **claim 边界**：保守/乐观双估 + 二分最大上下文 | llmfit A.10 | L1 | TODO |
+| **T-R22** | **完整 plan**：run paths、最低/推荐硬件、升级增量、KV 替代 | llmfit A.10 | L1 | DONE (2026-09-28, a4c0299) |
+| **T-R23** | **claim 边界**：保守/乐观双估 + 二分最大上下文 | llmfit A.10 | L1 | DONE (2026-09-28, pending sha) |
 | **T-R24** | **已安装运行时探测**（8 来源并行） | llmfit A.11 | L1 | TODO |
 | **T-R25** | **HF 模型库 + 搜索/下载** | llmfit A.12–A.13 | L2 | TODO |
 | **T-R26** | **ModelFit 字段补全** + 运行时选择 | llmfit A.15–A.16 | L2 | TODO |

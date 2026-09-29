@@ -2,7 +2,7 @@
 // ModelTable (fit / mode / quant / mem / speed / score), DetailPanel (score components, memory
 // breakdown, notes) and a "plan" view that grades one model on every hardware profile.
 import { useEffect, useMemo, useState } from "react";
-import { api, FitLevel, FitQuery, fmt, fmtBytes, ModelFit } from "../api";
+import { api, DownloadStatus, FitLevel, FitQuery, fmt, fmtBytes, HfHit, ModelFit } from "../api";
 import { barItem, baseOption, Chart, token } from "../charts";
 import { useAsync, useDebounced } from "../hooks";
 
@@ -18,7 +18,7 @@ const MODE_LABEL: Record<string, string> = {
 const USE_LABEL: Record<string, string> = {
   auto: "自动", general: "通用", chat: "对话", coding: "代码", reasoning: "推理", multimodal: "多模态", vla: "VLA 具身",
 };
-const name = (m: ModelFit) => m.model.split("/").pop() ?? m.model;
+const name = (m: ModelFit) => (m.model.startsWith("hf:") ? m.model.slice(3) : m.model.split("/").pop() ?? m.model);
 const UPPER_BOUND_HINT = `屋顶线上限：未计入逐内核发射开销（实测 4.41 vs 公式 46.9 steps/s）。VLA 的一步是数千个小内核，eager 模式下发射开销主导步时。请用 mqde bench 取实测值。`;
 
 export function FitBadge({ level }: { level: FitLevel }) {
@@ -70,15 +70,18 @@ export default function FitPage() {
   const [search, setSearch] = useState("");
   const [minFit, setMinFit] = useState<"all" | "runnable" | "good">("all");
   const [selected, setSelected] = useState<string | null>(null);
-  const dq = useDebounced(q, 250);
+  const [source, setSource] = useState<"local" | "catalog">("local");
+  // Catalog search runs on the server (it can hold thousands of entries); local search filters in the page.
+  const dq = useDebounced(source === "catalog" ? { ...q, source, search, limit: 60 } : { ...q, source }, 300);
   const res = useAsync(() => api.fit(dq), [JSON.stringify(dq)]);
+  const cat = useAsync(() => api.catalog("", "", 1), []);
   const rows = useMemo(() => {
     let r = res.data?.models ?? [];
-    if (search) r = r.filter((m) => m.model.toLowerCase().includes(search.toLowerCase()));
+    if (search && source === "local") r = r.filter((m) => m.model.toLowerCase().includes(search.toLowerCase()));
     if (minFit === "runnable") r = r.filter((m) => m.fit_level !== "too_tight");
     if (minFit === "good") r = r.filter((m) => m.fit_level === "perfect" || m.fit_level === "good");
     return r;
-  }, [res.data, search, minFit]);
+  }, [res.data, search, minFit, source]);
   const sel = rows.find((m) => m.model === selected) ?? rows[0];
   useEffect(() => {
     if (!selected && rows[0]) setSelected(rows[0].model);
@@ -142,9 +145,19 @@ export default function FitPage() {
 
       <div className="card flush">
         <div className="form-row" style={{ padding: "12px 14px 0" }}>
+          <div className="field">
+            <label>模型来源</label>
+            <div className="seg">
+              <button className={source === "local" ? "on" : ""} onClick={() => setSource("local")}>本地模型库</button>
+              <button className={source === "catalog" ? "on" : ""} onClick={() => setSource("catalog")}
+                title={cat.data ? `${cat.data.total} 条，更新于 ${cat.data.updated_at}` : "mqde catalog update 生成"}>
+                HF 模型库{cat.data ? ` · ${cat.data.total - cat.data.demoted}` : ""}
+              </button>
+            </div>
+          </div>
           <div className="field grow">
             <label>搜索</label>
-            <input placeholder="模型名…" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <input placeholder={source === "catalog" ? "在 HF 模型库中搜索，如 qwen3、llama…" : "模型名…"} value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
           <div className="field">
             <label>适配</label>
@@ -189,6 +202,8 @@ export default function FitPage() {
                 <tr key={m.model} className={`clickable ${sel?.model === m.model ? "selected" : ""}`} onClick={() => setSelected(m.model)}>
                   <td>
                     <b>{name(m)}</b>
+                    {m.installed && <span className="badge good" style={{ marginLeft: 6 }} title={m.installed_providers.join(", ")}>已安装</span>}
+                    {m.model.startsWith("hf:") && !m.installed && <span className="badge" style={{ marginLeft: 6 }} title="仅元数据，未下载权重">目录</span>}
                   </td>
                   <td>
                     <span className="badge">{m.modality.toUpperCase()}</span> {m.is_moe && <span className="badge accent">MoE</span>}
@@ -225,7 +240,7 @@ export default function FitPage() {
               {!res.loading && rows.length === 0 && (
                 <tr>
                   <td colSpan={10} className="empty">
-                    没有符合条件的模型
+                    {source === "catalog" && cat.data?.total === 0 ? "HF 模型库为空：在服务器上运行 mqde catalog update" : "没有符合条件的模型"}
                   </td>
                 </tr>
               )}
@@ -235,9 +250,127 @@ export default function FitPage() {
       </div>
 
       {sel && <Detail m={sel} query={dq} />}
+
+      <HubPanel />
     </>
   );
 }
+
+// ---- HF live search + download (llmfit hf-search / download) ----
+function HubPanel() {
+  const [q, setQ] = useState("");
+  const dq = useDebounced(q, 400);
+  const hits = useAsync(() => (dq.length >= 2 ? api.hfSearch(dq, 15) : Promise.resolve({ models: [] as HfHit[] })), [dq]);
+  const [budget, setBudget] = useState("");
+  const [picked, setPicked] = useState<string | null>(null);
+  const groups = useAsync(
+    () => (picked ? api.download(picked, { list: true, budget: budget || undefined }) : Promise.resolve(null)),
+    [picked, budget],
+  );
+  const [jobs, setJobs] = useState<DownloadStatus[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const active = jobs.some((j) => j.state === "queued" || j.state === "running");
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(async () => {
+      const next = await Promise.all(jobs.map((j) => (j.state === "queued" || j.state === "running" ? api.downloadStatus(j.id).catch(() => j) : j)));
+      setJobs(next);
+    }, 1000);
+    return () => clearInterval(t);
+  }, [active, jobs]);
+  const start = async (quant?: string) => {
+    if (!picked) return;
+    setErr(null);
+    try {
+      const d = await api.download(picked, { quant, budget: budget || undefined });
+      setJobs((js) => [d, ...js]);
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
+  return (
+    <div className="card">
+      <div className="card-head">
+        <h2>HF 搜索与下载</h2>
+        <span className="muted small">实时查询 huggingface.co；下载到服务器 --allow 的第一个目录，完成后出现在本地模型库</span>
+      </div>
+      <div className="form-row">
+        <div className="field grow">
+          <label>搜索 Hub</label>
+          <input placeholder="如 Qwen3 8B GGUF" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <div className="field">
+          <label>下载预算（如 12G，可空）</label>
+          <input value={budget} onChange={(e) => setBudget(e.target.value)} style={{ width: 120 }} />
+        </div>
+      </div>
+      {hits.error && <div className="error-box">{hits.error}</div>}
+      {err && <div className="error-box">{err}</div>}
+      <div className="grid-2">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>模型</th><th className="num">参数</th><th className="num">下载量</th><th>类型</th></tr>
+            </thead>
+            <tbody>
+              {hits.data?.models.map((h) => (
+                <tr key={h.name} className={`clickable ${picked === h.name ? "selected" : ""}`} onClick={() => setPicked(h.name)}>
+                  <td><b>{h.name}</b></td>
+                  <td className="num">{h.parameters_raw ? `${fmt(h.parameters_raw / 1e9, 2)} B` : "–"}</td>
+                  <td className="num">{h.hf_downloads.toLocaleString()}</td>
+                  <td className="muted small">{h.pipeline_tag}</td>
+                </tr>
+              ))}
+              {dq.length >= 2 && !hits.loading && hits.data?.models.length === 0 && (
+                <tr><td colSpan={4} className="empty">无结果</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div>
+          {!picked && <div className="muted">选择左侧模型查看可下载的权重组</div>}
+          {picked && groups.loading && <div className="muted">读取文件列表…</div>}
+          {picked && groups.error && <div className="error-box">{groups.error}</div>}
+          {picked && groups.data?.groups && (
+            <table>
+              <thead><tr><th>权重组</th><th className="num">大小</th><th className="num">文件</th><th></th></tr></thead>
+              <tbody>
+                {groups.data.groups.map((g) => (
+                  <tr key={g.group} className={g.group === groups.data?.chosen ? "selected" : ""}>
+                    <td><b>{g.group}</b>{g.group === groups.data?.chosen && <span className="badge accent" style={{ marginLeft: 6 }}>推荐</span>}</td>
+                    <td className="num">{fmtBytes(g.bytes)}</td>
+                    <td className="num">{g.files}</td>
+                    <td><button className="secondary" onClick={() => start(g.group)}>下载</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+      {jobs.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          {jobs.map((j) => (
+            <div key={j.id} className="form-row" style={{ alignItems: "center" }}>
+              <div className="grow">
+                <b>{j.repo}</b> <span className="badge">{j.group}</span> <span className="muted small">{j.dir}</span>
+                <Meter pct={j.bytes_total ? (100 * j.bytes_done) / j.bytes_total : 0} />
+                <span className="muted small">
+                  {fmtBytes(j.bytes_done)} / {fmtBytes(j.bytes_total)} · {j.files_done}/{j.files_total} 文件 · {STATE_LABEL[j.state]}
+                  {j.error && ` · ${j.error}`}
+                </span>
+              </div>
+              {(j.state === "running" || j.state === "queued") && (
+                <button className="secondary" onClick={() => api.cancelDownload(j.id)}>取消</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+const STATE_LABEL: Record<DownloadStatus["state"], string> = { queued: "排队", running: "下载中", succeeded: "完成", failed: "失败", cancelled: "已取消" };
 
 function Detail({ m, query }: { m: ModelFit; query: FitQuery }) {
   const plan = useAsync(() => api.plan(m.model, { use_case: query.use_case, concurrency: query.concurrency, context: query.context }), [m.model, query.use_case, query.concurrency, query.context]);

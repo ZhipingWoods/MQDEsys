@@ -19,6 +19,8 @@
 #include "mqde/fit/benchmarks.h"
 #include "mqde/fit/claim.h"
 #include "mqde/fit/fit.h"
+#include "mqde/hub/catalog.h"
+#include "mqde/hub/hf.h"
 #include "mqde/server/server.h"
 #include "mqde_probe.h"
 
@@ -408,6 +410,109 @@ int cmd_bench(const BenchArgs& a, bool json) {
   return 0;
 }
 
+// ---- catalog / hf-search / download (T-R25) ----
+
+int cmd_catalog_update(const mqde::hub::HfOptions& ho, const mqde::hub::UpdateOptions& uo, bool json) {
+  auto base = mqde::hub::load_catalog();
+  if (!base) return fail(base.error());
+  auto c = mqde::hub::update_catalog(ho, uo, *base, [](size_t n, size_t total, const std::string& id) {
+    fmt::print(stderr, "\r[{}/{}] {:<60}", n, total, id.substr(0, 60));
+  });
+  fmt::print(stderr, "\n");
+  if (!c) return fail(c.error());
+  if (auto r = mqde::hub::save_catalog(*c); !r) return fail(r.error());
+  size_t demoted = 0;
+  for (const auto& e : c->entries) demoted += e.demoted;
+  if (json) {
+    std::cout << Json{{"path", mqde::hub::default_catalog_path().string()}, {"total", c->entries.size()}, {"demoted", demoted},
+                      {"updated_at", c->updated_at}}.dump(2) << "\n";
+  } else {
+    fmt::print("wrote {} ({} entries, {} demoted)\n", mqde::hub::default_catalog_path().string(), c->entries.size(), demoted);
+  }
+  return 0;
+}
+
+void print_catalog_rows(const std::vector<Json>& rows) {
+  fmt::print("{:<52} {:>8} {:>6} {:>8} {:>12}  {}\n", "model", "params", "quant", "ctx", "downloads", "note");
+  for (const auto& r : rows)
+    fmt::print("{:<52} {:>8} {:>6} {:>8} {:>12}  {}\n", r.value("name", "").substr(0, 52), r.value("parameter_count", ""),
+               r.value("quantization", ""), r.value("context_length", 0), r.value("hf_downloads", 0),
+               r.value("demote_reason", ""));
+}
+
+int cmd_catalog_search(const std::string& q, const std::string& provider, size_t n, bool demoted, bool json) {
+  auto c = mqde::hub::load_catalog();
+  if (!c) return fail(c.error());
+  std::vector<Json> rows;
+  for (const auto* e : mqde::hub::search(*c, q, provider, n, demoted)) rows.push_back(mqde::hub::to_json(*e));
+  if (json) std::cout << Json(rows).dump(2) << "\n";
+  else print_catalog_rows(rows);
+  return 0;
+}
+
+int cmd_hf_search(const mqde::hub::HfOptions& ho, const std::string& q, int n, bool json) {
+  auto l = mqde::hub::list_models(ho, "search=" + mqde::hub::url_encode(q) + "&limit=" + std::to_string(n) +
+                                          "&sort=downloads&direction=-1&expand[]=safetensors&expand[]=downloads"
+                                          "&expand[]=pipeline_tag&expand[]=author");
+  if (!l) return fail(l.error());
+  if (json) { std::cout << l->dump(2) << "\n"; return 0; }
+  fmt::print("{:<56} {:>10} {:>12}  {}\n", "model", "params", "downloads", "pipeline");
+  for (const auto& m : *l) {
+    const int64_t p = m.contains("safetensors") ? m["safetensors"].value("total", int64_t{0}) : 0;
+    fmt::print("{:<56} {:>9.2f}B {:>12} {}\n", m.value("id", "").substr(0, 56), static_cast<double>(p) / 1e9,
+               m.value("downloads", 0), m.value("pipeline_tag", ""));
+  }
+  return 0;
+}
+
+struct DownloadArgs {
+  std::string model, quant, budget, output_dir = ".";
+  bool list = false;
+};
+
+int cmd_download(const mqde::hub::HfOptions& ho, const DownloadArgs& a, bool json) {
+  std::string repo = a.model.starts_with("hf:") ? a.model.substr(3) : a.model;
+  auto files = mqde::hub::list_files(ho, repo);
+  if (!files) return fail(files.error());
+  const auto groups = mqde::hub::group_files(*files);
+  if (groups.empty()) return fail(mqde::Error{mqde::Errc::kNotFound, "no safetensors / gguf weights in " + repo});
+  uint64_t budget = 0;
+  if (!a.budget.empty()) {
+    auto b = mqde::hub::parse_size(a.budget);
+    if (!b) return fail(mqde::Error{mqde::Errc::kInvalidArgument, "bad --budget '" + a.budget + "'"});
+    budget = *b;
+  }
+  const auto g = mqde::hub::choose_group(groups, budget, a.quant);
+  if (a.list || !g) {
+    if (json) {
+      Json arr = Json::array();
+      for (const auto& x : groups) arr.push_back({{"group", x.key}, {"bytes", x.bytes}, {"files", x.files.size()}});
+      std::cout << Json{{"groups", arr}, {"chosen", g ? g->key : ""}}.dump(2) << "\n";
+    } else {
+      for (const auto& x : groups)
+        fmt::print("{} {:<14} {:>10}  {} file(s)\n", g && x.key == g->key ? "*" : " ", x.key, format_bytes(x.bytes),
+                   x.files.size());
+    }
+    return g ? 0 : fail(mqde::Error{mqde::Errc::kNotFound, "quant '" + a.quant + "' not found in " + repo});
+  }
+  if (budget > 0 && g->bytes > budget)
+    fmt::print(stderr, "note: nothing fits {} — downloading the smallest group ({})\n", a.budget, g->key);
+  const auto dir = std::filesystem::path(a.output_dir) / repo.substr(repo.find('/') + 1);
+  uint64_t done = 0;
+  for (const auto& f : g->files) {
+    auto r = mqde::hub::download_file(ho, repo, f.path, dir / f.path, [&](uint64_t cur, uint64_t) {
+      fmt::print(stderr, "\r{} / {}  {:<40}", format_bytes(done + cur), format_bytes(g->bytes), f.path.substr(0, 40));
+      return true;
+    });
+    if (!r) { fmt::print(stderr, "\n"); return fail(r.error()); }
+    done += *r;
+  }
+  fmt::print(stderr, "\n");
+  if (json) std::cout << Json{{"dir", dir.string()}, {"group", g->key}, {"bytes", done}}.dump(2) << "\n";
+  else fmt::print("downloaded {} ({}, {}) to {}\n", repo, g->key, format_bytes(done), dir.string());
+  return 0;
+}
+
 int main(int argc, char** argv) {
   CLI::App app{"MQDEsys - model quantization & deployment evaluation"};
   app.require_subcommand(1);
@@ -484,6 +589,42 @@ int main(int argc, char** argv) {
   serve->add_option("--gpus", gpus, "GPU pool for jobs, e.g. 2,3");
   serve->add_option("--allow", allow, "allowed root for model/dataset paths (repeatable)");
 
+  // HF token: --token or HF_TOKEN. Never printed.
+  mqde::hub::HfOptions ho;
+  auto* catalog = app.add_subcommand("catalog", "HF model catalog (data/models/catalog.json)");
+  catalog->require_subcommand(1);
+  auto* cat_update = catalog->add_subcommand("update", "fetch trending + most-downloaded models and their configs");
+  mqde::hub::UpdateOptions uo;
+  bool only_trending = false, only_downloads = false;
+  cat_update->add_option("--limit", uo.limit, "number of entries to fetch")->default_val(500);
+  cat_update->add_flag("--trending", only_trending, "only the trending list");
+  cat_update->add_flag("--downloads", only_downloads, "only the most-downloaded list");
+  cat_update->add_option("--token", ho.token, "HF token (default: $HF_TOKEN)");
+  auto* cat_search = catalog->add_subcommand("search", "search the local catalog");
+  std::string cq, cprov;
+  size_t cn = 20;
+  bool cdemoted = false;
+  cat_search->add_option("query", cq, "substring of the repo name");
+  cat_search->add_option("--provider", cprov, "exact provider / org");
+  cat_search->add_option("-n", cn, "max rows");
+  cat_search->add_flag("--include-demoted", cdemoted, "also show draft / incomplete entries");
+
+  auto* hfs = app.add_subcommand("hf-search", "search huggingface.co live (needs network)");
+  std::string hq;
+  int hn = 20;
+  hfs->add_option("query", hq)->required();
+  hfs->add_option("-n", hn, "max rows");
+  hfs->add_option("--token", ho.token, "HF token (default: $HF_TOKEN)");
+
+  auto* dl = app.add_subcommand("download", "download a model's weights (best quant within a budget)");
+  DownloadArgs da;
+  dl->add_option("model", da.model, "<org>/<name> or hf:<org>/<name>")->required();
+  dl->add_option("--quant", da.quant, "GGUF quant tag (Q4_K_M ...) or 'safetensors'");
+  dl->add_option("--budget", da.budget, "max download size, e.g. 12G");
+  dl->add_option("--output-dir", da.output_dir, "parent directory");
+  dl->add_flag("--list", da.list, "list file groups and exit");
+  dl->add_option("--token", ho.token, "HF token (default: $HF_TOKEN)");
+
   auto* recipes = app.add_subcommand("recipes", "list quantization recipes");
   auto* hardware = app.add_subcommand("hardware", "list hardware profiles");
 
@@ -515,21 +656,40 @@ int main(int argc, char** argv) {
     auto cfg = mqde::fit::load_fit_config();
     if (!cfg) { fmt::print(stderr, "error: {}\n", cfg.error().to_string()); return 1; }
     auto sys = mqde::fit::system_from_profile(*hw);
-    auto b = mqde::fit::fit_bounds(*spec, sys, *cfg, be, claim_min_tps);
+    mqde::fit::Request cr;
+    std::optional<mqde::fit::BenchmarkIndex> cbench;
+    const auto host = host_identity(-1);
+    if (!host.gpu_name.empty())
+      if (auto local = mqde::estimator::match_hardware(host.gpu_name); local && local->id == hw->id) {
+        cbench = mqde::fit::BenchmarkIndex::load(host);
+        cr.bench = &*cbench;
+      }
+    auto b = mqde::fit::fit_bounds(*spec, sys, *cfg, be, claim_min_tps, cr);
     if (json) {
       fmt::print("{}\n", mqde::fit::to_json(b).dump(2));
     } else {
       fmt::print("model: {}\n", spec->path);
       fmt::print("hardware: {}\n", claim_hw);
       fmt::print("quant: {}\n", b.best_quant);
-      fmt::print("conservative: {:.1f} tok/s  optimistic: {:.1f} tok/s\n", b.conservative_tps, b.optimistic_tps);
-      fmt::print("holds (>= {:.1f} tok/s): {}\n", claim_min_tps, b.holds ? "yes" : "no");
+      fmt::print("conservative: {:.2f} {}  optimistic: {:.2f} {}  (basis: {})\n", b.conservative_tps, b.speed_unit,
+                 b.optimistic_tps, b.speed_unit, b.basis);
+      fmt::print("holds (>= {:.1f} {}): {}\n", claim_min_tps, b.speed_unit, b.holds ? "yes" : "no");
       if (b.holds)
         fmt::print("max context at threshold: {} tokens\n", b.max_context_at_min_tps);
-      fmt::print("memory: {:.2f} GiB  efficiency assumed: {:.0f}%%\n", b.memory_gb, b.efficiency_used * 100);
+      if (b.basis == "formula")
+        fmt::print("memory: {:.2f} GiB  efficiency assumed: {:.0f}%\n", b.memory_gb, b.efficiency_used * 100);
+      else
+        fmt::print("memory: {:.2f} GiB  bounds: measured ±10%\n", b.memory_gb);
     }
     return 0;
   }
+  if (*cat_update) {
+    if (only_trending != only_downloads) uo.trending = only_trending, uo.downloads = only_downloads;
+    return cmd_catalog_update(ho, uo, json);
+  }
+  if (*cat_search) return cmd_catalog_search(cq, cprov, cn, cdemoted, json);
+  if (*hfs) return cmd_hf_search(ho, hq, hn, json);
+  if (*dl) return cmd_download(ho, da, json);
   if (*recipes) return cmd_list("recipes", json);
   if (*hardware) return cmd_list("hardware_db", json);
   return 0;

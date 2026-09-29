@@ -33,17 +33,21 @@ add_library(mqde_estimator STATIC src/estimator/recipe.cpp src/estimator/hardwar
 target_link_libraries(mqde_estimator PUBLIC mqde_modelspec mqde_quant)
 
 # ---- fit (llmfit-style deployment pre-evaluation) ----
-add_library(mqde_fit STATIC src/fit/fit.cpp src/fit/benchmarks.cpp src/fit/concurrency.cpp src/fit/claim.cpp
+add_library(mqde_fit STATIC src/fit/fit.cpp src/fit/benchmarks.cpp src/fit/concurrency.cpp src/fit/claim.cpp src/fit/installed.cpp
                              src/fit/installed.cpp)
 target_link_libraries(mqde_fit PUBLIC mqde_estimator PRIVATE httplib::httplib)
 
+# ---- hub (Hugging Face client + model catalog) ----
+add_library(mqde_hub STATIC src/hub/hf.cpp src/hub/catalog.cpp)
+target_link_libraries(mqde_hub PUBLIC mqde_modelspec PRIVATE httplib::httplib)
+
 # ---- server (REST + SSE, job runner) ----
 add_library(mqde_server STATIC src/server/server.cpp src/server/job_runner.cpp)
-target_link_libraries(mqde_server PUBLIC mqde_fit mqde_estimator mqde_probe PRIVATE httplib::httplib)
+target_link_libraries(mqde_server PUBLIC mqde_fit mqde_hub mqde_estimator mqde_probe PRIVATE httplib::httplib)
 
 # ---- CLI ----
 add_executable(mqde apps/mqde_cli/main.cpp)
-target_link_libraries(mqde PRIVATE mqde_server mqde_fit mqde_estimator mqde_probe CLI11::CLI11)
+target_link_libraries(mqde PRIVATE mqde_server mqde_fit mqde_hub mqde_estimator mqde_probe CLI11::CLI11)
 set_target_properties(mqde PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # ---- Python extension mqde._core ----
@@ -73,9 +77,13 @@ if(MQDE_BUILD_TESTS)
     tests/unit/fit_test.cpp
     tests/unit/benchmarks_test.cpp
     tests/unit/concurrency_test.cpp
-    tests/unit/installed_test.cpp)
-  target_link_libraries(mqde_unit_tests PRIVATE mqde_fit mqde_estimator mqde_probe GTest::gtest_main)
+    tests/unit/installed_test.cpp
+    tests/unit/hub_test.cpp)
+  target_link_libraries(mqde_unit_tests PRIVATE mqde_fit mqde_hub mqde_estimator mqde_probe GTest::gtest_main)
   target_compile_definitions(mqde_unit_tests PRIVATE MQDE_TEST_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures")
   include(GoogleTest)
   gtest_discover_tests(mqde_unit_tests)
 endif()
+
+# ---- mqde_installed (optional link for fit when runtime detection is needed) ----
+# No separate library; installed.cpp is already part of mqde_fit

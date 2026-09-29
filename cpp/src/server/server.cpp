@@ -4,7 +4,9 @@
 #include <filesystem>
 #include <mutex>
 #include <fstream>
+#include <regex>
 #include <thread>
+#include <atomic>
 
 #include <fmt/ranges.h>
 #include <httplib.h>
@@ -16,6 +18,8 @@
 #include "mqde/fit/installed.h"
 #include "mqde/fit/concurrency.h"
 #include "mqde/fit/fit.h"
+#include "mqde/hub/catalog.h"
+#include "mqde/hub/hf.h"
 #include "mqde/quant/metrics.h"
 #include "mqde/quant/ops.h"
 #include "mqde_probe.h"
@@ -129,7 +133,31 @@ Result<void> serve(const ServerOptions& o) {
   std::mutex spec_mu;
   std::map<std::string, modelspec::ModelSpec> spec_cache;  // model path -> spec
 
+  // HF catalog (T-R25), reloaded when data/models/catalog.json changes.
+  std::mutex catalog_mu;
+  hub::Catalog catalog;
+  std::filesystem::file_time_type catalog_mtime{};
+  auto catalog_snapshot = [&]() -> hub::Catalog {
+    std::lock_guard lk(catalog_mu);
+    const auto p = hub::default_catalog_path();
+    std::error_code ec;
+    const auto mt = std::filesystem::last_write_time(p, ec);
+    if (!ec && mt != catalog_mtime) {
+      if (auto c = hub::load_catalog(p)) catalog = std::move(*c), catalog_mtime = mt;
+      else MQDE_LOG_WARN("catalog: {}", c.error().to_string());
+    }
+    return catalog;
+  };
+  // "hf:<repo>" names a catalog entry (no local file access); anything else must be under an allowed root.
+  auto model_allowed = [&](const std::string& m) { return m.starts_with("hf:") || path_allowed(o.allowed_roots, m); };
+
   auto get_spec = [&](const std::string& path) -> Result<modelspec::ModelSpec> {
+    if (path.starts_with("hf:")) {
+      const auto c = catalog_snapshot();
+      const auto* e = hub::find(c, path);
+      if (!e) return make_error(Errc::kNotFound, "model {} is not in the catalog (run `mqde catalog update`)", path);
+      return hub::to_spec(*e);
+    }
     std::lock_guard lk(spec_mu);
     if (auto it = spec_cache.find(path); it != spec_cache.end()) return it->second;
     auto s = modelspec::inspect_local(path);
@@ -211,7 +239,7 @@ Result<void> serve(const ServerOptions& o) {
     auto body = parse_body(req, res);
     if (!body) return;
     const auto path = body->value("model", "");
-    if (!path_allowed(o.allowed_roots, path)) return send_error(res, 403, "forbidden", "model path is outside allowed roots");
+    if (!model_allowed(path)) return send_error(res, 403, "forbidden", "model path is outside allowed roots");
     auto spec = get_spec(path);
     if (!spec) return send_error(res, spec.error());
     auto hw = estimator::load_hardware(body->value("hardware", "nvidia/rtx4090"));
@@ -242,7 +270,7 @@ Result<void> serve(const ServerOptions& o) {
     auto body = parse_body(req, res);
     if (!body) return;
     const auto path = body->value("model", "");
-    if (!path_allowed(o.allowed_roots, path)) return send_error(res, 403, "forbidden", "model path is outside allowed roots");
+    if (!model_allowed(path)) return send_error(res, 403, "forbidden", "model path is outside allowed roots");
     auto spec = get_spec(path);
     if (!spec) return send_error(res, spec.error());
     auto be = estimator::load_backend(body->value("backend", "hf_transformers"));
@@ -424,12 +452,19 @@ Result<void> serve(const ServerOptions& o) {
     std::optional<fit::BenchmarkIndex> bench;
     attach_bench(r, body->value("hardware", "nvidia/rtx4090"), *sys, bench);
     std::vector<std::string> models = body->value("models", std::vector<std::string>{});
-    if (models.empty())
+    // source: "local" (default: scan the model library) | "catalog" (HF catalog, filtered by search).
+    const std::string source = body->value("source", "local");
+    if (models.empty() && source == "catalog") {
+      const auto c = catalog_snapshot();
+      for (const auto* e : hub::search(c, body->value("search", ""), body->value("provider", ""),
+                                       body->value("limit", size_t{50})))
+        models.push_back("hf:" + e->name);
+    } else if (models.empty())
       for (const auto& p : scan_library()) models.push_back(p.string());
     std::vector<fit::ModelFit> fits;
     Json errors = Json::array();
     for (const auto& m : models) {
-      if (!path_allowed(o.allowed_roots, m)) {
+      if (!model_allowed(m)) {
         errors.push_back({{"model", m}, {"error", "outside allowed roots"}});
         continue;
       }
@@ -445,7 +480,7 @@ Result<void> serve(const ServerOptions& o) {
       }
       // T-R24: a model is installed when a local runtime/cache holds it. A model directory on this
       // machine also counts ("local_dir"): the HF-transformers runtime can load it as-is.
-      f->installed_providers = installed_index().installed_providers(m);
+      f->installed_providers = mqde::fit::installed_providers(installed_index(),(m.starts_with("hf:") ? m.substr(3) : m));
       if (std::filesystem::exists(std::filesystem::path(m) / "config.json"))
         f->installed_providers.insert(f->installed_providers.begin(), "local_dir");
       f->installed = !f->installed_providers.empty();
@@ -462,7 +497,7 @@ Result<void> serve(const ServerOptions& o) {
     auto body = parse_body(req, res);
     if (!body) return;
     const auto path = body->value("model", "");
-    if (!path_allowed(o.allowed_roots, path)) return send_error(res, 403, "forbidden", "model path is outside allowed roots");
+    if (!model_allowed(path)) return send_error(res, 403, "forbidden", "model path is outside allowed roots");
     auto s = get_spec(path);
     if (!s) return send_error(res, s.error());
     auto be = estimator::load_backend(body->value("backend", "hf_transformers"));
@@ -597,7 +632,7 @@ Result<void> serve(const ServerOptions& o) {
     auto body = parse_body(req, res);
     if (!body) return;
     const auto path = body->value("model", "");
-    if (!path_allowed(o.allowed_roots, path)) return send_error(res, 403, "forbidden", "model path is outside allowed roots");
+    if (!model_allowed(path)) return send_error(res, 403, "forbidden", "model path is outside allowed roots");
     auto s = get_spec(path);
     if (!s) return send_error(res, s.error());
     auto hw = estimator::load_hardware(body->value("hardware", "nvidia/rtx4090"));
@@ -605,7 +640,10 @@ Result<void> serve(const ServerOptions& o) {
     auto be = estimator::load_backend(body->value("backend", "hf_transformers"));
     if (!be) return send_error(res, be.error());
     auto sys = fit::system_from_profile(*hw);
-    auto b = fit::fit_bounds(*s, sys, *fit_cfg, *be, body->value("min_tps", 1.0));
+    fit::Request cr;
+    std::optional<fit::BenchmarkIndex> cbench;
+    attach_bench(cr, body->value("hardware", "nvidia/rtx4090"), sys, cbench);
+    auto b = fit::fit_bounds(*s, sys, *fit_cfg, *be, body->value("min_tps", 1.0), cr);
     send_json(res, fit::to_json(b));
   });
 
@@ -614,7 +652,7 @@ Result<void> serve(const ServerOptions& o) {
     auto body = parse_body(req, res);
     if (!body) return;
     const auto path = body->value("model", "");
-    if (!path_allowed(o.allowed_roots, path)) return send_error(res, 403, "forbidden", "model path is outside allowed roots");
+    if (!model_allowed(path)) return send_error(res, 403, "forbidden", "model path is outside allowed roots");
     auto s = get_spec(path);
     if (!s) return send_error(res, s.error());
     auto hw = estimator::load_hardware(body->value("hardware", "nvidia/rtx4090"));
@@ -626,6 +664,124 @@ Result<void> serve(const ServerOptions& o) {
     const int64_t context = body->value("context", 4096);
     auto c = fit::estimate_concurrency(*s, recipe, *hw, *be, users, context);
     send_json(res, fit::to_json(c));
+  });
+
+  // ---------------- catalog / HF search / download (T-R25) ----------------
+  svr.Get("/api/v1/catalog", [&](const httplib::Request& req, httplib::Response& res) {
+    const auto c = catalog_snapshot();
+    const size_t limit = req.has_param("limit") ? std::stoul(req.get_param_value("limit")) : 100;
+    const auto hits = hub::search(c, req.get_param_value("search"), req.get_param_value("provider"), limit,
+                                  req.get_param_value("include_demoted") == "1");
+    Json arr = Json::array();
+    for (const auto* e : hits) arr.push_back(hub::to_json(*e));
+    size_t demoted = 0;
+    for (const auto& e : c.entries) demoted += e.demoted;
+    send_json(res, {{"updated_at", c.updated_at}, {"total", c.entries.size()}, {"demoted", demoted}, {"models", arr}});
+  });
+
+  // Live Hub search (llmfit hf-search). Needs network; the token (if any) comes from HF_TOKEN.
+  svr.Get("/api/v1/hf/search", [&](const httplib::Request& req, httplib::Response& res) {
+    const std::string q = req.get_param_value("q");
+    if (q.empty()) return send_error(res, 400, "invalid_argument", "q is required");
+    const std::string limit = req.has_param("limit") ? req.get_param_value("limit") : "20";
+    auto l = hub::list_models({}, "search=" + hub::url_encode(q) + "&limit=" + std::to_string(std::stoi(limit)) +
+                                      "&sort=downloads&direction=-1&expand[]=safetensors&expand[]=downloads"
+                                      "&expand[]=likes&expand[]=pipeline_tag&expand[]=author");
+    if (!l) return send_error(res, l.error());
+    Json arr = Json::array();
+    for (const auto& m : *l)
+      arr.push_back(Json{{"name", m.value("id", "")}, {"provider", m.value("author", "")},
+                     {"pipeline_tag", m.value("pipeline_tag", "")}, {"hf_downloads", m.value("downloads", 0)},
+                     {"hf_likes", m.value("likes", 0)},
+                     {"parameters_raw", m.contains("safetensors") ? m["safetensors"].value("total", int64_t{0}) : int64_t{0}}});
+    send_json(res, {{"models", arr}});
+  });
+
+  // Written by the download thread, read by status handlers: counters are atomic, state/error under `m`.
+  struct Download {
+    std::string id, repo, group, dir;  // immutable after creation
+    uint64_t total = 0;
+    size_t files_total = 0;
+    std::atomic<uint64_t> done{0};
+    std::atomic<size_t> files_done{0};
+    std::atomic<bool> cancel{false};
+    mutable std::mutex m;
+    std::string state = "queued", error;
+    void set(std::string st, std::string err = {}) { std::lock_guard lk(m); state = std::move(st); error = std::move(err); }
+  };
+  std::mutex dl_mu;
+  std::map<std::string, std::shared_ptr<Download>> downloads;
+  auto dl_json = [](const Download& d) {
+    std::lock_guard lk(d.m);
+    return Json{{"id", d.id}, {"repo", d.repo}, {"group", d.group}, {"dir", d.dir}, {"state", d.state},
+                {"error", d.error}, {"bytes_done", d.done.load()}, {"bytes_total", d.total},
+                {"files_done", d.files_done.load()}, {"files_total", d.files_total}};
+  };
+
+  svr.Post("/api/v1/download", [&](const httplib::Request& req, httplib::Response& res) {
+    auto body = parse_body(req, res);
+    if (!body) return;
+    std::string repo = body->value("model", "");
+    if (repo.starts_with("hf:")) repo = repo.substr(3);
+    static const std::regex repo_re(R"(^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$)");
+    if (!std::regex_match(repo, repo_re)) return send_error(res, 400, "invalid_argument", "model must be <org>/<name>");
+    if (o.allowed_roots.empty()) return send_error(res, 403, "forbidden", "server has no --allow root to download into");
+    const std::string out_root = body->value("output_dir", o.allowed_roots.front());
+    if (!path_allowed(o.allowed_roots, out_root)) return send_error(res, 403, "forbidden", "output_dir is outside allowed roots");
+    auto files = hub::list_files({}, repo);
+    if (!files) return send_error(res, files.error());
+    const auto groups = hub::group_files(*files);
+    uint64_t budget = 0;
+    if (const auto b = body->value("budget", ""); !b.empty()) {
+      auto p = hub::parse_size(b);
+      if (!p) return send_error(res, 400, "invalid_argument", "bad budget '" + b + "'");
+      budget = *p;
+    }
+    const auto g = hub::choose_group(groups, budget, body->value("quant", ""));
+    if (!g) return send_error(res, 404, "not_found", "no downloadable weights (or requested quant) in " + repo);
+    if (body->value("list", false)) {
+      Json arr = Json::array();
+      for (const auto& x : groups) arr.push_back({{"group", x.key}, {"bytes", x.bytes}, {"files", x.files.size()}, {"quality", x.quality}});
+      return send_json(res, {{"groups", arr}, {"chosen", g->key}});
+    }
+    auto d = std::make_shared<Download>();
+    d->id = fmt::format("dl-{}", std::chrono::steady_clock::now().time_since_epoch().count());
+    d->repo = repo;
+    d->group = g->key;
+    d->dir = (std::filesystem::path(out_root) / repo.substr(repo.find('/') + 1)).string();
+    d->total = g->bytes;
+    d->files_total = g->files.size();
+    {
+      std::lock_guard lk(dl_mu);
+      downloads[d->id] = d;
+    }
+    std::thread([d, files = g->files] {
+      d->set("running");
+      for (const auto& f : files) {
+        const uint64_t base = d->done.load();
+        auto r = hub::download_file({}, d->repo, f.path, std::filesystem::path(d->dir) / f.path,
+                                    [&](uint64_t cur, uint64_t) { d->done = base + cur; return !d->cancel.load(); });
+        if (!r) return d->set(d->cancel ? "cancelled" : "failed", r.error().message);
+        d->done = base + *r;
+        ++d->files_done;
+      }
+      d->set("succeeded");
+    }).detach();
+    send_json(res, dl_json(*d), 202);
+  });
+
+  svr.Get(R"(/api/v1/download/([A-Za-z0-9-]+)/status)", [&](const httplib::Request& req, httplib::Response& res) {
+    std::lock_guard lk(dl_mu);
+    const auto it = downloads.find(req.matches[1]);
+    if (it == downloads.end()) return send_error(res, 404, "not_found", "no such download");
+    send_json(res, dl_json(*it->second));
+  });
+  svr.Post(R"(/api/v1/download/([A-Za-z0-9-]+):cancel)", [&](const httplib::Request& req, httplib::Response& res) {
+    std::lock_guard lk(dl_mu);
+    const auto it = downloads.find(req.matches[1]);
+    if (it == downloads.end()) return send_error(res, 404, "not_found", "no such download");
+    it->second->cancel = true;
+    send_json(res, dl_json(*it->second));
   });
 
   // ---------------- jobs ----------------

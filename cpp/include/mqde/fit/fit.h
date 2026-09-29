@@ -5,6 +5,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -186,4 +187,21 @@ void apply_local_calibration(std::vector<ModelFit>& fits);
 Json to_json(const ModelFit& f);
 Json to_json(const System& s);
 
+// ---- T-R24: Installed runtime detection ----
+
+struct InstalledIndex {
+  std::set<std::string> all_names;  // canonical normalized model names
+  std::vector<std::pair<std::string, std::string>> provider_models;  // (provider, original_name)
+  std::vector<std::string> active_sources;  // sources that returned at least one model
+  double elapsed_ms = 0;
+};
+
+// Detect all installed models across 8 sources (ollama/LM Studio/llama.cpp/vLLM/MLX/Docker/RamaLama/HF cache).
+// Uses data/installed.yaml for source config; parallel probes with 2s total deadline.
+InstalledIndex probe_installed(const std::string& repo_root = ".");
+
+Json to_json(const InstalledIndex& idx);
+
+
+std::vector<std::string> installed_providers(const InstalledIndex& idx, const std::string& model_name);
 }  // namespace mqde::fit

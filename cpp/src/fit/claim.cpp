@@ -9,9 +9,10 @@ ClaimBounds fit_bounds(const modelspec::ModelSpec& spec,
                        const System& sys,
                        const FitConfig& cfg,
                        const estimator::BackendProfile& backend,
-                       double min_tps) {
+                       double min_tps,
+                       const Request& base) {
   // Run analyze() to get the chosen quant and base formula_tps.
-  Request req;
+  const Request& req = base;
   auto f = analyze(spec, sys, cfg, backend, req);
   if (!f || f->fit_level == FitLevel::kTooTight || f->formula_tps <= 0)
     return {};
@@ -23,8 +24,11 @@ ClaimBounds fit_bounds(const modelspec::ModelSpec& spec,
 
   // Scale formula_tps linearly by efficiency ratio (bandwidth-roofline formula is linear in eff).
   const double base_tps = f->formula_tps > 0 ? f->formula_tps : f->estimated_tps;
-  const double cons_tps = base_tps * (cons_eff / base_eff);
-  const double opt_tps  = base_tps * (opt_eff  / base_eff);
+  double cons_tps = base_tps * (cons_eff / base_eff);
+  double opt_tps  = base_tps * (opt_eff  / base_eff);
+  // A measurement beats any efficiency assumption.
+  const double measured = f->measured_tps ? f->measured_tps->tok_s : 0;
+  if (measured > 0) cons_tps = measured * 0.9, opt_tps = measured * 1.1;
 
   ClaimBounds b;
   b.conservative_tps = cons_tps;
@@ -33,6 +37,8 @@ ClaimBounds fit_bounds(const modelspec::ModelSpec& spec,
   b.best_quant       = f->best_quant;
   b.memory_gb        = f->memory_required_gb;
   b.efficiency_used  = cons_eff;
+  b.speed_unit       = f->speed_unit;
+  b.basis            = measured > 0 ? "measured" : "formula";
 
   // Binary search for max_context_at_min_tps: find largest power-of-two context
   // at which the conservative estimate still >= min_tps.
@@ -44,11 +50,15 @@ ClaimBounds fit_bounds(const modelspec::ModelSpec& spec,
     const int64_t max_pos = spec.text.max_position_embeddings > 0 ? spec.text.max_position_embeddings : (1 << 20);
     b.max_context_at_min_tps = 0;
     for (int64_t p = 1; p <= max_pos; p *= 2) {
-      Request rctx;
+      Request rctx = req;
       rctx.context = p;
+      rctx.measured.reset();
+      rctx.bench = nullptr;
       auto fc = analyze(spec, sys, cfg, backend, rctx);
       if (!fc || fc->fit_level == FitLevel::kTooTight) break;
-      const double ctps = fc->formula_tps * (cons_eff / base_eff);
+      // Scale the measured value by how the formula moves with context; otherwise use the formula.
+      const double ctps = measured > 0 ? cons_tps * fc->formula_tps / std::max(1e-9, base_tps)
+                                       : fc->formula_tps * (cons_eff / base_eff);
       if (ctps < min_tps) break;
       b.max_context_at_min_tps = p;
     }
@@ -64,7 +74,9 @@ nlohmann::json to_json(const ClaimBounds& b) {
           {"best_quant", b.best_quant},
           {"max_context_at_min_tps", b.max_context_at_min_tps},
           {"memory_gb", b.memory_gb},
-          {"efficiency_used", b.efficiency_used}};
+          {"efficiency_used", b.efficiency_used},
+          {"speed_unit", b.speed_unit},
+          {"basis", b.basis}};
 }
 
 }  // namespace mqde::fit
