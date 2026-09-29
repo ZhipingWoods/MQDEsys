@@ -52,7 +52,8 @@ std::optional<Json> parse_body(const httplib::Request& req, httplib::Response& r
 }
 
 bool path_allowed(const std::vector<std::string>& roots, const std::string& p) {
-  if (p == "synthetic") return true;
+  // Built-in datasets resolved by the executor from the local HF cache (not filesystem paths).
+  if (p == "synthetic" || p == "wikitext-2-raw-v1:train" || p == "wikitext-2-raw-v1:test") return true;
   std::error_code ec;
   const auto canon = fs::weakly_canonical(p, ec).string();
   if (ec) return false;
@@ -834,7 +835,11 @@ Result<void> serve(const ServerOptions& o) {
       for (const auto& a : *known) ok = ok || a.value("name", "") == algo;
       if (!ok) return send_error(res, 400, "invalid_argument", "unknown quant.algorithm '" + algo + "'");
     }
-    if (o.gpus.empty()) return send_error(res, 503, "unavailable", "server started without a GPU pool (--gpus)");
+    const auto mtype = job.value("/model/type"_json_pointer, std::string("vla"));
+    if (mtype != "vla" && mtype != "llm") return send_error(res, 400, "invalid_argument", "model.type must be 'vla' or 'llm'");
+    const bool cpu = job.value("/deploy/device"_json_pointer, std::string()) == "cpu";
+    if (cpu && mtype != "llm") return send_error(res, 400, "invalid_argument", "deploy.device=cpu is only supported for model.type=llm");
+    if (!cpu && o.gpus.empty()) return send_error(res, 503, "unavailable", "server started without a GPU pool (--gpus)");
     job["apiVersion"] = "mqde/v1";
     job["kind"] = "Job";
     const auto id = runner.submit(job);

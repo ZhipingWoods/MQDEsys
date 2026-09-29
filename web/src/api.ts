@@ -167,8 +167,59 @@ export interface RecipeReport {
   };
 }
 
+export interface PplResult {
+  ppl: number;
+  tokens: number;
+  windows: number;
+  seq_len: number;
+  seconds: number;
+}
+
+/** report.json of mqde.pipeline.llm_job (kind === "llm"). */
+export interface LLMRecipeReport {
+  recipe: string;
+  algorithm: string;
+  weight: QuantSpecJson;
+  act: QuantSpecJson;
+  layers: LayerTrace[];
+  skipped: string[];
+  quantize_seconds: number;
+  kv?: QuantSpecJson & { method: string; granularity: string };
+  eval: { fake_quant_wo_kv: PplResult; fake_quant?: PplResult };
+  summary: { ppl: number; ppl_delta_pct: number; kv_delta_pct: number | null; worst_layers: { name: string; out_sqnr_db: number }[] };
+  export?: Record<string, LLMExport>;
+}
+
+export interface LLMExport {
+  status: "exported" | "unsupported";
+  problems?: { layer: string; reason: string }[];
+  n_problems?: number;
+  out_dir?: string;
+  bytes?: number;
+  quantized?: string[];
+  kept_fp?: string[];
+  notes?: string[];
+  quantization_config?: Record<string, unknown>;
+  real_check?: { codes_identical: boolean; code_mismatch: number; zero_mismatch: number; w_max_abs: number; w_rel_l2_mean: number; layers: number };
+  real_ppl?: number;
+  real_vs_fake_ppl_pct?: number;
+}
+
+export interface LLMJobReport {
+  job_id: string;
+  kind: "llm";
+  error?: string;
+  spec: { name: string; model_path: string; recipes: string[]; algorithm: string; act_static: string | null; kv_method: string; device: string; mixed_precision: unknown };
+  stages: { stage: string; status: string; seconds?: number; error?: string }[];
+  model?: { path: string; blocks: number; linears: number };
+  data?: { calib: { dataset: string; n: number; seq_len: number }; eval: { dataset: string; windows: number; seq_len: number } };
+  baseline?: PplResult;
+  recipes?: Record<string, LLMRecipeReport>;
+}
+
 export interface JobReport {
   job_id: string;
+  kind?: string;
   verdict?: string;
   error?: string;
   spec: Record<string, unknown> & { name: string; recipes: string[]; model_path: string; hardware: string };
@@ -201,7 +252,7 @@ export interface JobEvent {
   job_id: string;
   seq: number;
   ts: number;
-  type: "job_state" | "stage_started" | "stage_finished" | "log" | "metric" | "trace";
+  type: "job_state" | "stage_started" | "stage_finished" | "log" | "metric" | "trace" | "progress";
   stage: string | null;
   msg?: string;
   state?: string;

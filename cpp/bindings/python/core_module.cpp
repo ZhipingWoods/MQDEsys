@@ -12,11 +12,14 @@
 #include "mqde/estimator/estimator.h"
 #include "mqde/quant/metrics.h"
 #include "mqde/quant/ops.h"
+#include "mqde/quant/pack.h"
 #include "mqde_probe.h"
 
 namespace py = pybind11;
 using mqde::Json;
 using FloatArray = py::array_t<float, py::array::c_style | py::array::forcecast>;
+using U8Array = py::array_t<uint8_t, py::array::c_style | py::array::forcecast>;
+using I32Array = py::array_t<int32_t, py::array::c_style | py::array::forcecast>;
 
 namespace {
 
@@ -49,6 +52,37 @@ py::tuple qparams_tuple(const mqde::quant::QParams& qp, int64_t rows) {
     zero = z;
   }
   return py::make_tuple(scale, zero);
+}
+
+namespace pk = mqde::quant::pack;
+
+// (codes [out,in] u8, zeros [out,groups] u8, scales [out,groups] f32) -> (qweight i32, qzeros i32, scales f16)
+py::tuple packed_tuple(const pk::IntPacked& p) {
+  I32Array qw({p.qweight_rows, p.qweight_cols});
+  std::memcpy(qw.mutable_data(), p.qweight.data(), p.qweight.size() * 4);
+  I32Array qz({p.qzeros_rows, p.qzeros_cols});
+  std::memcpy(qz.mutable_data(), p.qzeros.data(), p.qzeros.size() * 4);
+  py::array sc(py::dtype("float16"), {p.qzeros_rows, static_cast<py::ssize_t>(p.scales.size() / p.qzeros_rows)});
+  std::memcpy(sc.mutable_data(), p.scales.data(), p.scales.size() * 2);
+  return py::make_tuple(qw, qz, sc);
+}
+
+void check_int_inputs(const U8Array& codes, const U8Array& zeros, const FloatArray& scales) {
+  if (codes.ndim() != 2 || zeros.ndim() != 2 || scales.ndim() != 2) throw py::value_error("codes/zeros/scales must be 2-D");
+  if (zeros.shape(0) != codes.shape(0) || scales.shape(0) != codes.shape(0) || scales.shape(1) != zeros.shape(1))
+    throw py::value_error("zeros/scales must be [out, groups] matching codes [out, in]");
+}
+
+pk::IntPacked packed_from(const I32Array& qw, const I32Array& qz) {
+  if (qw.ndim() != 2 || qz.ndim() != 2) throw py::value_error("qweight/qzeros must be 2-D");
+  pk::IntPacked p;
+  p.qweight.assign(qw.data(), qw.data() + qw.size());
+  p.qzeros.assign(qz.data(), qz.data() + qz.size());
+  p.qweight_rows = qw.shape(0);
+  p.qweight_cols = qw.shape(1);
+  p.qzeros_rows = qz.shape(0);
+  p.qzeros_cols = qz.shape(1);
+  return p;
 }
 
 }  // namespace
@@ -103,6 +137,71 @@ PYBIND11_MODULE(_core, m) {
         return out;
       },
       py::arg("x"), py::arg("fmt") = "e4m3");
+
+  // ---- bit packing (T-0405): GPTQ / AWQ checkpoint tensors and GGUF blocks ----
+  m.def(
+      "pack_int",
+      [](const std::string& layout, const U8Array& codes, const U8Array& zeros, const FloatArray& scales, int bits, bool v1) {
+        check_int_inputs(codes, zeros, scales);
+        const int64_t out = codes.shape(0), in = codes.shape(1), gs = in / zeros.shape(1);
+        auto p = layout == "gptq" ? pk::pack_gptq(codes.data(), zeros.data(), scales.data(), out, in, gs, bits, v1)
+               : layout == "awq"  ? pk::pack_awq(codes.data(), zeros.data(), scales.data(), out, in, gs, bits)
+                                  : std::unexpected(mqde::Error{mqde::Errc::kInvalidArgument, "layout must be gptq | awq"});
+        if (!p) raise(p.error());
+        return packed_tuple(*p);
+      },
+      py::arg("layout"), py::arg("codes"), py::arg("zeros"), py::arg("scales"), py::arg("bits"), py::arg("v1") = true,
+      "Pack unsigned codes into GPTQ/AWQ tensors. Returns (qweight int32, qzeros int32, scales float16 [groups, out]).");
+
+  m.def(
+      "unpack_int",
+      [](const std::string& layout, const I32Array& qweight, const I32Array& qzeros, int64_t out, int64_t in,
+         int64_t group_size, int bits, bool v1) {
+        const auto p = packed_from(qweight, qzeros);
+        U8Array codes({out, in});
+        U8Array zeros({out, in / group_size});
+        auto r = layout == "gptq" ? pk::unpack_gptq(p, out, in, group_size, bits, v1, codes.mutable_data(), zeros.mutable_data())
+               : layout == "awq"  ? pk::unpack_awq(p, out, in, group_size, bits, codes.mutable_data(), zeros.mutable_data())
+                                  : std::unexpected(mqde::Error{mqde::Errc::kInvalidArgument, "layout must be gptq | awq"});
+        if (!r) raise(r.error());
+        return py::make_tuple(codes, zeros);
+      },
+      py::arg("layout"), py::arg("qweight"), py::arg("qzeros"), py::arg("out"), py::arg("in_features"),
+      py::arg("group_size"), py::arg("bits"), py::arg("v1") = true);
+
+  m.def(
+      "gguf_quantize",
+      [](const FloatArray& x, const std::string& type) {
+        auto t = pk::gguf_type_from_name(type);
+        if (!t) raise(t.error());
+        std::vector<uint8_t> q;
+        {
+          py::gil_scoped_release nogil;
+          auto r = pk::gguf_quantize(*t, x.data(), x.size());
+          py::gil_scoped_acquire gil;
+          if (!r) raise(r.error());
+          q = std::move(*r);
+        }
+        U8Array out(static_cast<py::ssize_t>(q.size()));
+        std::memcpy(out.mutable_data(), q.data(), q.size());
+        return out;
+      },
+      py::arg("x"), py::arg("type"), "GGUF block quantization (bit-identical to ggml quantize_row_*_ref).");
+
+  m.def(
+      "gguf_dequantize",
+      [](const U8Array& data, const std::string& type, int64_t n) {
+        auto t = pk::gguf_type_from_name(type);
+        if (!t) raise(t.error());
+        const auto tr = pk::gguf_traits(*t);
+        if (n % tr.block_elems || data.size() != n / tr.block_elems * tr.block_bytes)
+          throw py::value_error("data size does not match n elements of " + std::string(tr.name));
+        FloatArray out(n);
+        auto r = pk::gguf_dequantize(*t, data.data(), n, out.mutable_data());
+        if (!r) raise(r.error());
+        return out;
+      },
+      py::arg("data"), py::arg("type"), py::arg("n"));
 
   m.def(
       "measure",

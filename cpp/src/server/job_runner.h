@@ -20,7 +20,9 @@ namespace mqde::server {
 struct JobProc {
   std::string id;
   std::string state;  // QUEUED | RUNNING | SUCCEEDED | FAILED | CANCELLED
-  int gpu = -1;
+  int gpu = -1;  // -1 while queued, and for CPU jobs
+  bool cpu = false;  // deploy.device == "cpu": runs outside the GPU pool (one CPU job at a time)
+  std::string module = "mqde.pipeline.vla_job";  // model.type == "llm" -> mqde.pipeline.llm_job
   pid_t pid = -1;
   int exit_code = 0;
   double submitted_at = 0, started_at = 0, finished_at = 0;
@@ -52,6 +54,7 @@ class JobRunner {
   std::deque<std::string> queue_;
   std::map<std::string, JobProc> jobs_;
   std::map<int, std::string> busy_;  // gpu -> job id
+  std::string cpu_busy_;             // job id holding the CPU slot
   bool stop_ = false;
   std::thread thread_;
 };

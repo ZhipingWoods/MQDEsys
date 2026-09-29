@@ -96,7 +96,7 @@
 | T-0402 | quant 核心：标定算法 MinMax/MSE/百分位/MovingAvg | P4 | T-0401 | L1 | DONE (2026-09-24, MinMax/MSE) |
 | T-0403 | quant 核心：INT/FP8 量化、反量化、假量化 + golden | P4 | T-0402 | L2 | DONE (2026-09-24, INT2-8/FP8 bit-exact) |
 | T-0404 | quant 核心：误差度量 | P4 | T-0401 | L1 | DONE (2026-09-24) |
-| T-0405 | quant 核心：位打包（GPTQ/AWQ/Marlin/GGUF） | P4 | T-0403 | L1 | TODO |
+| T-0405 | quant 核心：位打包（GPTQ/AWQ/Marlin/GGUF） | P4 | T-0403 | L1 | PARTIAL (2026-09-29, GPTQ v1/v2 2/3/4/8, AWQ GEMM, GGUF Q8_0/Q4_0/Q4_K/Q2_K byte-exact vs ggml; Marlin pending) |
 | T-0406 | quant 核心：SIMD/CUDA 加速 | P4 | T-0403 | L1 | TODO |
 | T-0407 | pybind11 绑定 `mqde._core`（DLPack） | P4 | T-0403,T-0404,T-0003 | L2 | DONE (2026-09-24, buffer protocol (DLPack later)) |
 | T-0408 | Python Torch 快速路径与双端 golden 对拍 | P4 | T-0407 | L1 | DONE (2026-09-24) |
@@ -107,29 +107,29 @@
 | T-0505 | 模型下载（fetch_model 阶段） | P5 | T-0204,T-0503 | L1 | TODO |
 | T-0506 | Python 模型抽象层 BaseModel + HFDecoderModel | P5 | T-0502,T-0206 | L2 | DONE (2026-09-24, VLA adapter) |
 | T-0507 | 校准数据与首块捕获 | P5 | T-0506 | L1 | DONE (2026-09-24, LeRobot v3 + synthetic) |
-| T-0508 | Blockwise 引擎 + Fake/Real 模块包装 + RTN | P5 | T-0507,T-0408 | L2 | PARTIAL (2026-09-24, RTN fake-quant only) |
+| T-0508 | Blockwise 引擎 + Fake/Real 模块包装 + RTN | P5 | T-0507,T-0408 | L2 | DONE (2026-09-29, quant/blockwise.py sequential blocks; real = export + use_real_weights) |
 | T-0509 | 误差追踪 trace（逐层/逐块） | P5 | T-0508,T-0404 | L1 | DONE (2026-09-24) |
-| T-0510 | 评测：PPL + logits 探针 | P5 | T-0506 | L1 | TODO |
+| T-0510 | 评测：PPL + logits 探针 | P5 | T-0506 | L1 | PARTIAL (2026-09-29, wikitext-2 PPL 3 positions; logits probe only in tests) |
 | T-0511 | 阶段实现 S00–S08 + S14 并串通 | P5 | T-0504,T-0505,T-0509,T-0510 | L1 | PARTIAL (2026-09-24, VLA stages S00-S08,S14) |
-| T-0512 | server：作业端点 + WebSocket 事件流 | P5 | T-0511,T-0301 | L2 | PARTIAL (2026-09-24, SSE instead of WebSocket) |
+| T-0512 | server：作业端点 + WebSocket 事件流 | P5 | T-0511,T-0301 | L2 | PARTIAL (2026-09-29, SSE; model.type vla/llm, CPU slot) |
 | T-0513 | 前端：作业执行页（DAG + 日志 + 资源） | P5 | T-0512,T-0303 | L1 | PARTIAL (2026-09-24) |
 | T-0514 | 前端：量化误差页（初版：热力图 + Top-K） | P5 | T-0512,T-0509 | L1 | PARTIAL (2026-09-24, heatmap + Top-K + attribution) |
 | T-0515 | 端到端最小闭环验收（M3） | P5 | T-0513,T-0514 | L1 | TODO |
 | T-0601 | 算法：AWQ | P6 | T-0508 | L1 | DONE (2026-09-29, b2248e4; per-layer scale search, VLA eval pending GPU) |
 | T-0602 | 算法：GPTQ | P6 | T-0508 | L1 | DONE (2026-09-29, b2248e4; per-layer OBS on FP inputs, not sequential-block) |
 | T-0603 | 算法：SmoothQuant（等效变换 + transformed 位点） | P6 | T-0508 | L1 | PARTIAL (2026-09-29, b2248e4; per-layer X/s, W*s; transformed eval position not yet) |
-| T-0604 | 激活量化（动态/静态）→ W4A8、W2A8 | P6 | T-0603 | L1 | PARTIAL (2026-09-24, dynamic per-token INT8 act fake-quant; no static / SmoothQuant) |
+| T-0604 | 激活量化（动态/静态）→ W4A8、W2A8 | P6 | T-0603 | L1 | DONE (2026-09-29, dynamic per-token + static per-tensor minmax/ema/percentile) |
 | T-0605 | FP8 配方（E4M3/E5M2，per_channel/per_block） | P6 | T-0508 | L1 | PARTIAL (2026-09-24, FP8 E4M3/E5M2 per-channel/per-tensor fake-quant; no per-block) |
 | T-0606 | 2bit 配方（W2A16/W2A8）与 HQQ | P6 | T-0602,T-0604 | L1 | PARTIAL (2026-09-24, W2A16/W2A8 fake-quant via RTN-MSE; no GPTQ/HQQ) |
-| T-0607 | KV Cache 量化（KV_REGISTRY） | P6 | T-0508 | L1 | TODO |
-| T-0608 | 混合精度与 keep_fp 策略 | P6 | T-0509 | L1 | TODO |
+| T-0607 | KV Cache 量化（KV_REGISTRY） | P6 | T-0508 | L1 | DONE (2026-09-29, naive/KIVI; INT8 KIVI -0.03% PPL on Qwen2.5-0.5B) |
+| T-0608 | 混合精度与 keep_fp 策略 | P6 | T-0509 | L1 | DONE (2026-09-29, regex/block rules, skip; exported as GPTQModel dynamic) |
 | T-0609 | 外部算法适配器（GPTQModel / llm-compressor） | P6 | T-0508 | L3 | TODO |
 | T-0610 | 算法组合（AWQ+GPTQ）与 QuaRot（扩展） | P6 | T-0601,T-0602 | L1 | PARTIAL (2026-09-29, awq+gptq / smoothquant+gptq; no QuaRot) |
-| T-0701 | Exporter 接口 + vLLM 导出 | P7 | T-0405,T-0602 | L2 | TODO |
-| T-0702 | Fake/Real 一致性检查（S10） | P7 | T-0701 | L1 | TODO |
+| T-0701 | Exporter 接口 + vLLM 导出 | P7 | T-0405,T-0602 | L2 | PARTIAL (2026-09-29, GPTQ/AWQ checkpoints; vLLM load smoke + compressed-tensors pending GPU) |
+| T-0702 | Fake/Real 一致性检查（S10） | P7 | T-0701 | L1 | DONE (2026-09-29, 0 code mismatches; real PPL +0.0005% vs fake) |
 | T-0703 | 部署后端接口 + vLLM 适配器（S11） | P7 | T-0701,T-0504 | L2 | TODO |
 | T-0704 | SGLang 导出与适配 | P7 | T-0703 | L1 | TODO |
-| T-0705 | llama.cpp（GGUF）导出与适配 | P7 | T-0703,T-0405 | L1 | TODO |
+| T-0705 | llama.cpp（GGUF）导出与适配 | P7 | T-0703,T-0405 | L1 | PARTIAL (2026-09-29, GGUF export + llama-perplexity/bench on CPU; llama-server + Metal pending) |
 | T-0706 | TensorRT-LLM 导出与适配（扩展） | P7 | T-0703 | L1 | TODO |
 | T-0801 | 精度评测：lm-eval-harness / evalscope / 自定义 | P8 | T-0510 | L3 | TODO |
 | T-0802 | 部署后精度评测（S12） | P8 | T-0801,T-0703 | L1 | TODO |

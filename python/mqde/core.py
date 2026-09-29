@@ -56,3 +56,35 @@ def measure(ref: np.ndarray, approx: np.ndarray) -> dict[str, float | None]:
 
 def tensor_stats(x: np.ndarray) -> dict[str, float]:
     return json.loads(_core.tensor_stats(np.ascontiguousarray(x, dtype=np.float32)))
+
+
+# ---------------------------------------------------------------- bit packing (T-0405)
+def pack_int(
+    layout: str, codes: np.ndarray, zeros: np.ndarray, scales: np.ndarray, bits: int, v1: bool = True
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """codes [out, in] / zeros, scales [out, groups] -> GPTQ or AWQ (qweight int32, qzeros int32, scales fp16 [groups, out])."""
+    return _core.pack_int(
+        layout,
+        np.ascontiguousarray(codes, dtype=np.uint8),
+        np.ascontiguousarray(zeros, dtype=np.uint8),
+        np.ascontiguousarray(scales, dtype=np.float32),
+        bits,
+        v1,
+    )
+
+
+def unpack_int(
+    layout: str, qweight: np.ndarray, qzeros: np.ndarray, out: int, in_features: int, group_size: int, bits: int, v1: bool = True
+) -> tuple[np.ndarray, np.ndarray]:
+    return _core.unpack_int(
+        layout, np.ascontiguousarray(qweight, dtype=np.int32), np.ascontiguousarray(qzeros, dtype=np.int32),
+        out, in_features, group_size, bits, v1,
+    )
+
+
+def gguf_quantize(x: np.ndarray, type_: str) -> np.ndarray:
+    return _core.gguf_quantize(np.ascontiguousarray(x, dtype=np.float32).reshape(-1), type_)
+
+
+def gguf_dequantize(data: np.ndarray, type_: str, n: int) -> np.ndarray:
+    return _core.gguf_dequantize(np.ascontiguousarray(data, dtype=np.uint8), type_, n)

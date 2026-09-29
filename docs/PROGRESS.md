@@ -16,7 +16,7 @@
 | 环境 | conda env `mqde`（python 3.11, torch 2.11+cu128, transformers 5.7.0, cmake/gcc12/fmt/yaml-cpp/httplib 来自 conda-forge） |
 | 服务 | `mqde serve` 监听 127.0.0.1:18080，GPU 池 2,3；本机访问：`ssh -N -L 18080:127.0.0.1:18080 4090` → http://localhost:18080 |
 | 下一步建议 | ① 真实部署路径（T-0405 打包 → T-0705 llama.cpp / T-0701 vLLM）让显存真正下降；② GPTQ/AWQ/SmoothQuant（T-0601~0603）改善 W4A8/W2；③ 敏感层混合精度（T-0608/T-0904，数据已指向视觉前 5 块）；④ T-0005/T-0006 CI |
-| 最后更新 | 2026-09-24 · Claude（Opus 5.5） |
+| 最后更新 | 2026-09-29 · Claude（Opus 5.5） |
 
 ### 快速复现
 
@@ -172,6 +172,44 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **下一步**（按顺序）：T-R06→R07→R08（GPTQModel 式量化流程），T-R11→R12→R13（evalscope 式评测），T-R14→R15（FlagTree 式多硬件）。
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
+
+### 2026-09-29 · LLM 路径 + 真实导出（T-0508/0510/0604/0607/0608/0405/0701/0702/0705）
+- **状态**：见 TASKS.md（T-0508/0604/0607/0608/0702 DONE；T-0405/0510/0701/0705 PARTIAL）
+- **本次完成**：
+  - `mqde.pipeline.llm_job`：HF CausalLM 的逐块顺序量化（`quant/blockwise.py`，块 i 用已量化 0..i-1 的输出校准）→ wikitext-2 PPL 三位点（pretrain / fake_quant_wo_kv / fake_quant）→ 可选导出 + 一致性检查。server 通过 `model.type: llm` 调度，`deploy.device: cpu` 不占 GPU 池；前端新建作业页/作业页支持 LLM。
+  - 静态激活（minmax / ema / percentile，per-tensor）；修复 percentile 下界取成全局最小值的 bug。
+  - KV 量化 `quant/kv.py`（naive / KIVI），经 HF attention 接口包装；**修复**：自定义 attention 名必须同时注册到 `ALL_MASK_ATTENTION_FUNCTIONS` 的全局表，否则 eager 路径没有因果 mask（sdpa 恰好推断成 causal 才没暴露）。
+  - 混合精度 `MixedPrecisionPolicy`：正则 / `block:i`、`block:lo-hi`、负索引；`skip` 保持 FP。
+  - C++ `quant/pack.h`：连续位流（GPTQ 2/3/4/8、AWQ 交错序）、GPTQ v1/v2、AWQ GEMM、GGUF Q8_0/Q4_0/Q4_K/Q2_K（ggml `*_ref` 逐行移植）+ fp16 RNE；pybind 暴露。
+  - `mqde.export`：GPTQ / AWQ checkpoint（混合精度写 GPTQModel `dynamic`），`real_check`（读回解包比对整数码）、`use_real_weights`；`export/gguf.py`（llama.cpp 转换器出 F16 → 我们的块量化重编码 blk.* 线性层）；`backend/llamacpp.py`（llama-perplexity / llama-bench）。llama.cpp CPU 工具在仓库外源码树上 out-of-tree 构建到 `build/llamacpp`（未改动源码树与其原有 build 目录）。
+- **校验结果**（均为本次实测）：
+  - `ctest --test-dir build/dev` → 93/93；`pytest python/tests` → 57 passed（含 `test_pack_compat.py` 14 项、`tests/export/*` 14 项）。
+  - GGUF：4 种块格式与 ggml `quantize_row_*_ref`/`dequantize_row_*` **逐字节一致**（ctypes 调 libggml-base，含全零/常数/离群/全正块）；gguf-py 可读且反量化一致；Qwen2.5-0.5B 上与 `llama-quantize` 输出对比，类型相同的 blk.* 张量全部逐字节一致（Q4_0 168/168、Q8_0 168/168、Q4_K 21、Q2_K 120；其余为 llama-quantize 选了不同类型/回退 Q5_0）。
+  - AWQ 打包与 GPTQModel `pack_awq` 逐 word 一致；GPTQ 与经典公式一致；3bit 与 10-1-10-1-10 方案一致。
+  - Qwen2.5-0.5B-Instruct（CPU，校准 wikitext-2 train 32×512，评估 test 40×512 不重叠窗口，原模型 PPL 18.102）：
+
+    | 配方 | 算法 | PPL（W+A） | PPL（+KV int8 KIVI） | 相对原模型 | 量化耗时 |
+    |---|---|---|---|---|---|
+    | W4A16 | RTN | 22.064 | 22.064 | +21.9% | 53 s |
+    | W4A16 | AWQ | 20.591 | 20.612 | +13.9% | 826 s |
+    | W4A16 | GPTQ | 20.550 / 20.387* | 20.548 / 20.392* | +13.5% / +12.6%* | 220 s |
+    | W4A8 | RTN | 24.432 | 24.453 | +35.1% | 120 s |
+    | W4A8 | AWQ | 23.376 | 23.329 | +28.9% | 848 s |
+    | W2A16 | RTN | 13791.8 | 13839.1 | 崩溃 | 38 s |
+    | W2A16 | AWQ | 5269.8 | 5290.1 | 崩溃 | 792 s |
+    | W8A16 | GPTQ | 18.145 | 18.145 | +0.24% | 180 s |
+
+    \* 同配置两次运行：32 线程 vs 16 线程。GPTQ 的 Cholesky/GEMM 结果随 BLAS 线程数在末位不同，经顺序误差反馈放大（同一线程数下可复现，已实测）；报告现记录 `env.torch_threads`。
+  - KV（FP 模型，20 窗口）：INT8 KIVI −0.03%、INT8 naive per-token +3.06%（Qwen2 key 离群通道）、INT4 KIVI +6.3%、FP8 per-token +5.4%（与 torch float8_e4m3fn 参考逐元素一致，属格式本身）→ LLM 作业默认 KIVI。
+  - 真实导出（W4A16 GPTQ、W8A16 GPTQ）：GPTQ/AWQ checkpoint 读回后整数码/零点 **0 处不一致**；fp16 scale 使权重 rel-L2 2.0e-4；真实权重 PPL 20.3867 vs 伪量化 20.3866（+0.0005%），W8A16 18.1442 vs 18.1445。W4A16 GPTQ checkpoint 471 MB。
+  - llama.cpp CPU（24 线程，ctx 512，40 chunks，llama-perplexity 协议：只计每块后半，数值与上表不可直接比）：F16 13.890（988 MB，tg 18.5 tok/s）；我们的 Q8_0 13.935（653 MB，28.4）；Q4_0 15.843（474 MB，47.0）；Q4_K 15.741（24 个 Q4_K + 144 个 Q4_0 回退，47.0/46.1）；Q2_K 27.047；对照 llama-quantize Q4_K_S 混合 14.570（380 MB，61.5）。
+- **未完成 / 下一步**：
+  1. vLLM 加载 smoke（GPU 2/3 仍被他人进程占用，且环境无 vLLM）→ T-0701 保持 PARTIAL；compressed-tensors（FP8/W8A8）导出未做。
+  2. Marlin 布局；GGUF 的 Q5_0/IQ4_NL 回退（目前回退 Q4_0，896 维模型 Q4_K 实际大多是 Q4_0）；llama-server 部署适配（T-0705）。
+  3. AWQ/SmoothQuant 的激活缩放按层独立搜索，导出前需按共享输入分组并折叠进前一 norm/linear（exporter 现会拒绝并说明）。
+  4. 后台仍在跑：GPTQ W4A8/W2A16、AWQ+GPTQ 三配方、GPTQ W4A8 静态激活、W2A16 混合精度（`/cache/wuzhiping/llm_sweep*`），结果出来后补表。
+- **发现的问题 / 风险**：GPTQ 结果依赖线程数（~1% PPL）；W2 在 0.5B 模型上 RTN/AWQ 均崩溃，需 GPTQ + 混合精度。
+
 
 ### 2026-09-29 · 前端修复 + 可选量化算法（T-0601/0602/0603/0610）
 - **状态**：DONE（b45a46c 前端；b2248e4 算法）

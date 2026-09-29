@@ -74,9 +74,12 @@ std::string JobRunner::submit(const Json& job) {
   YAML::Emitter out;
   out << to_yaml(j);
   std::ofstream(dir / "job.yaml") << out.c_str() << "\n";
+  JobProc proc{.id = id, .state = "QUEUED", .submitted_at = now_s()};
+  proc.cpu = job.value("/deploy/device"_json_pointer, std::string()) == "cpu";
+  if (job.value("/model/type"_json_pointer, std::string()) == "llm") proc.module = "mqde.pipeline.llm_job";
   {
     std::lock_guard lk(mu_);
-    jobs_[id] = JobProc{.id = id, .state = "QUEUED", .submitted_at = now_s()};
+    jobs_[id] = proc;
     queue_.push_back(id);
   }
   cv_.notify_all();
@@ -120,7 +123,7 @@ Json JobRunner::gpu_status() const {
   std::lock_guard lk(mu_);
   Json arr = Json::array();
   for (int g : gpus_) arr.push_back({{"gpu", g}, {"job", busy_.contains(g) ? Json(busy_.at(g)) : Json(nullptr)}});
-  return {{"pool", arr}, {"queued", queue_.size()}};
+  return {{"pool", arr}, {"cpu", cpu_busy_.empty() ? Json(nullptr) : Json(cpu_busy_)}, {"queued", queue_.size()}};
 }
 
 void JobRunner::launch(JobProc& j, int gpu) {
@@ -137,13 +140,13 @@ void JobRunner::launch(JobProc& j, int gpu) {
       ::dup2(fd, STDERR_FILENO);
       ::close(fd);
     }
-    ::setenv("CUDA_VISIBLE_DEVICES", std::to_string(gpu).c_str(), 1);
+    ::setenv("CUDA_VISIBLE_DEVICES", gpu >= 0 ? std::to_string(gpu).c_str() : "", 1);
     const char* old = std::getenv("PYTHONPATH");
     ::setenv("PYTHONPATH", old && *old ? (pythonpath + ":" + old).c_str() : pythonpath.c_str(), 1);
     ::setenv("MQDE_DATA_DIR", (repo_ / "data").c_str(), 1);
     ::setenv("PYTHONUNBUFFERED", "1", 1);
-    ::execlp(python_.c_str(), python_.c_str(), "-m", "mqde.pipeline.vla_job", job_yaml.c_str(), "--job-id", j.id.c_str(),
-             "--device", "cuda:0", static_cast<char*>(nullptr));
+    ::execlp(python_.c_str(), python_.c_str(), "-m", j.module.c_str(), job_yaml.c_str(), "--job-id", j.id.c_str(),
+             "--device", gpu >= 0 ? "cuda:0" : "cpu", static_cast<char*>(nullptr));
     std::fprintf(stderr, "exec %s failed: %s\n", python_.c_str(), std::strerror(errno));
     ::_exit(127);
   }
@@ -151,8 +154,9 @@ void JobRunner::launch(JobProc& j, int gpu) {
   j.gpu = gpu;
   j.state = pid > 0 ? "RUNNING" : "FAILED";
   j.started_at = now_s();
-  if (pid > 0) busy_[gpu] = j.id;
-  MQDE_LOG_INFO("job {} started on GPU {} (pid {})", j.id, gpu, pid);
+  if (pid > 0 && gpu >= 0) busy_[gpu] = j.id;
+  if (pid > 0 && gpu < 0) cpu_busy_ = j.id;
+  MQDE_LOG_INFO("job {} started on {} (pid {}, {})", j.id, gpu >= 0 ? fmt::format("GPU {}", gpu) : "CPU", pid, j.module);
 }
 
 void JobRunner::reap() {
@@ -164,7 +168,8 @@ void JobRunner::reap() {
       j.exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
       if (j.state != "CANCELLED") j.state = j.exit_code == 0 ? "SUCCEEDED" : "FAILED";
       j.finished_at = now_s();
-      busy_.erase(j.gpu);
+      if (j.gpu >= 0) busy_.erase(j.gpu);
+      if (cpu_busy_ == id) cpu_busy_.clear();
       MQDE_LOG_INFO("job {} finished: {} (exit {})", id, j.state, j.exit_code);
     }
   }
@@ -174,17 +179,25 @@ void JobRunner::loop() {
   std::unique_lock lk(mu_);
   while (!stop_) {
     reap();
-    while (!queue_.empty()) {
-      int free_gpu = -1;
-      for (int g : gpus_)
-        if (!busy_.contains(g)) {
-          free_gpu = g;
-          break;
-        }
-      if (free_gpu < 0) break;
-      const auto id = queue_.front();
-      queue_.pop_front();
-      launch(jobs_[id], free_gpu);
+    // FIFO per resource: a CPU job does not wait behind GPU jobs that cannot start yet, and vice versa.
+    for (auto it = queue_.begin(); it != queue_.end();) {
+      JobProc& j = jobs_[*it];
+      int slot = -2;
+      if (j.cpu) {
+        if (cpu_busy_.empty()) slot = -1;
+      } else {
+        for (int g : gpus_)
+          if (!busy_.contains(g)) {
+            slot = g;
+            break;
+          }
+      }
+      if (slot == -2) {
+        ++it;
+        continue;
+      }
+      it = queue_.erase(it);
+      launch(j, slot);
     }
     cv_.wait_for(lk, std::chrono::milliseconds(500));
   }

@@ -175,7 +175,7 @@ class FakeQuantEngine:
         x_cal = acts.to(w.device) if acts is not None and acts.numel() > 0 else None
         ar = algorithms.run(self.algorithm, w, x_cal, self.recipe.weight, self.recipe.act)
         # Effective weight the layer applies to the *original* input: Q(W*s)/s for scaled algorithms.
-        wq = ar.w if ar.final else fake_quant(ar.w, self.recipe.weight)[0]
+        wq, w_scale, w_zero = algorithms.materialize(ar, self.recipe.weight)
         dq = wq / ar.in_scale if ar.in_scale is not None else wq
         wm = compare(w, dq)
         wstats = core.tensor_stats(w.cpu().numpy())
@@ -207,7 +207,8 @@ class FakeQuantEngine:
                 astats["outlier_ratio"],
             )
         self.originals[u.name] = lin
-        fq = FakeQuantLinear(lin, self.recipe.weight, self.recipe.act, u.name, w_override=wq, in_scale=ar.in_scale, final=True)
+        fq = FakeQuantLinear(lin, self.recipe.weight, self.recipe.act, u.name, w_override=wq, in_scale=ar.in_scale, final=True,
+                             w_qparams=(w_scale, w_zero))
         fq.algo = self.algorithm
         replace_module(self.qm.model, u.name, fq)
         tr.seconds = time.perf_counter() - t0

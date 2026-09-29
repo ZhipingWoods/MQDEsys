@@ -22,7 +22,7 @@ add_library(mqde_modelspec STATIC src/modelspec/safetensors.cpp src/modelspec/mo
 target_link_libraries(mqde_modelspec PUBLIC mqde_common)
 
 # ---- quant (numerical core, single source of truth for quantization semantics) ----
-add_library(mqde_quant STATIC src/quant/quant_spec.cpp src/quant/ops.cpp src/quant/metrics.cpp)
+add_library(mqde_quant STATIC src/quant/quant_spec.cpp src/quant/ops.cpp src/quant/metrics.cpp src/quant/pack.cpp)
 target_link_libraries(mqde_quant PUBLIC mqde_common)
 # Bit-exactness contract: no FMA contraction / fast-math in the numerical core.
 target_compile_options(mqde_quant PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-ffp-contract=off -fno-fast-math>)
@@ -72,6 +72,7 @@ if(MQDE_BUILD_TESTS)
     tests/unit/common_test.cpp
     tests/unit/modelspec_test.cpp
     tests/unit/quant_test.cpp
+    tests/unit/pack_test.cpp
     tests/unit/estimator_test.cpp
     tests/unit/probe_test.cpp
     tests/unit/fit_test.cpp

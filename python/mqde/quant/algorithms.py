@@ -37,6 +37,8 @@ class AlgoResult:
     in_scale: torch.Tensor | None = None  # [in] divisor applied to activations (None = identity)
     info: dict[str, Any] | None = None
     final: bool = False  # w is already quantize-dequantized (GPTQ); do not re-quantize
+    scale: torch.Tensor | None = None  # when final: the weight qparams used, [n_groups, 1] (QuantSpec group order)
+    zero: torch.Tensor | None = None
 
 
 AlgoFn = Callable[[torch.Tensor, torch.Tensor | None, QuantSpec, QuantSpec, dict[str, Any]], AlgoResult]
@@ -91,6 +93,7 @@ def run(name: str, w: torch.Tensor, x: torch.Tensor | None, ws: QuantSpec, as_: 
     in_scale: torch.Tensor | None = None
     info: dict[str, Any] = {}
     final = False
+    scale = zero = None
     for step in resolve(name):
         needs_x = step != "rtn"
         if needs_x and (x is None or x.numel() == 0):
@@ -103,8 +106,19 @@ def run(name: str, w: torch.Tensor, x: torch.Tensor | None, ws: QuantSpec, as_: 
             in_scale = r.in_scale if in_scale is None else in_scale * r.in_scale
         if r.info:
             info[step] = r.info
-        final = final or r.final
-    return AlgoResult(w=w, in_scale=in_scale, info=info, final=final)
+        if r.final:
+            final, scale, zero = True, r.scale, r.zero
+    return AlgoResult(w=w, in_scale=in_scale, info=info, final=final, scale=scale, zero=zero)
+
+
+def materialize(ar: AlgoResult, ws: QuantSpec) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """(quantize-dequantized weight, scale, zero) of an algorithm result. The qparams are exactly the
+    ones that produced the weight, so exporters can recover integer codes without re-deriving them."""
+    if ar.final and ar.scale is not None:
+        return ar.w, ar.scale, ar.zero
+    if ar.final:  # a quantizer that did not report qparams: the weight is on its grid already
+        raise ValueError("final algorithm result without qparams")
+    return fake_quant(ar.w, ws)
 
 
 def _subsample(x: torch.Tensor, rows: int) -> torch.Tensor:
@@ -196,6 +210,7 @@ def gptq(w: torch.Tensor, x: torch.Tensor | None, ws: QuantSpec, as_: QuantSpec,
     gs = ws.group_size if ws.granularity == "per_group" else cols
     col_spec = ws.with_granularity("per_channel")  # a [rows, g] slice with one scale per row
     scale = zero = None
+    params: list[tuple[torch.Tensor, torch.Tensor]] = []
     Q = torch.zeros_like(W)
     for i1 in range(0, cols, block):
         i2 = min(i1 + block, cols)
@@ -208,8 +223,10 @@ def gptq(w: torch.Tensor, x: torch.Tensor | None, ws: QuantSpec, as_: QuantSpec,
             if ws.granularity == "per_tensor":
                 if scale is None:
                     scale, zero = compute_qparams(W, ws)
+                    params.append((scale, zero))
             elif c % gs == 0:
                 scale, zero = compute_qparams(W[:, c : c + gs].contiguous() if ws.granularity == "per_group" else W, col_spec)
+                params.append((scale, zero))
             wcol = W1[:, i : i + 1]
             q = qdq(wcol, scale, zero, ws)
             Q1[:, i : i + 1] = q
@@ -218,4 +235,7 @@ def gptq(w: torch.Tensor, x: torch.Tensor | None, ws: QuantSpec, as_: QuantSpec,
             Err1[:, i : i + 1] = e
         Q[:, i1:i2] = Q1
         W[:, i2:] -= Err1 @ Hinv[i1:i2, i2:]
-    return AlgoResult(w=Q, final=True, info={"damp": damp, "block": block, "rows": int(x.shape[0])})
+    # [rows, groups] -> [rows * groups, 1]: the row-major group order of QuantSpec / compute_qparams
+    sc = torch.cat([p_[0] for p_ in params], dim=1).reshape(-1, 1)
+    zr = torch.cat([p_[1] for p_ in params], dim=1).reshape(-1, 1)
+    return AlgoResult(w=Q, final=True, scale=sc, zero=zr, info={"damp": damp, "block": block, "rows": int(x.shape[0])})
