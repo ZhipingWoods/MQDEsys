@@ -27,6 +27,7 @@ from torch import nn
 
 from mqde import core
 from mqde.models.base import QuantModel, Unit
+from mqde.quant import algorithms
 from mqde.quant.modules import FakeQuantLinear, replace_module
 from mqde.quant.numerics import QuantSpec, fake_quant, fake_quant_act
 
@@ -40,6 +41,7 @@ class RecipeSpec:
     act: QuantSpec
     modalities: list[str]
     maturity: str = "production"
+    default_algorithm: str = "rtn"
 
     @classmethod
     def load(cls, name: str) -> RecipeSpec:
@@ -50,6 +52,7 @@ class RecipeSpec:
             act=QuantSpec.from_dict(r["act"]),
             modalities=list(r["modalities"]),
             maturity=r["maturity"],
+            default_algorithm=str(r.get("default_algorithm", "rtn")),
         )
 
 
@@ -71,6 +74,8 @@ class LayerTrace:
     act_outlier_ratio: float | None = None
     w_kurtosis: float | None = None
     seconds: float = 0.0
+    algorithm: str = "rtn"
+    algo_info: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {k: (list(v) if isinstance(v, tuple) else v) for k, v in self.__dict__.items()}
@@ -123,9 +128,13 @@ def compare(ref: torch.Tensor, approx: torch.Tensor) -> dict[str, float | None]:
 
 
 class FakeQuantEngine:
-    def __init__(self, qmodel: QuantModel, recipe: RecipeSpec, progress: ProgressFn | None = None) -> None:
+    def __init__(
+        self, qmodel: QuantModel, recipe: RecipeSpec, progress: ProgressFn | None = None, algorithm: str = "rtn"
+    ) -> None:
         self.qm = qmodel
         self.recipe = recipe
+        self.algorithm = algorithm
+        algorithms.resolve(algorithm)  # fail fast on unknown names
         self.progress = progress or (lambda e: None)
         self.originals: dict[str, nn.Linear] = {}
         self.traces: dict[str, LayerTrace] = {}
@@ -163,7 +172,11 @@ class FakeQuantEngine:
         lin = self.qm.get_module(u.name)
         assert isinstance(lin, nn.Linear), f"{u.name} is already replaced"
         w = lin.weight.detach().to(torch.float32)
-        dq, _, _ = fake_quant(w, self.recipe.weight)
+        x_cal = acts.to(w.device) if acts is not None and acts.numel() > 0 else None
+        ar = algorithms.run(self.algorithm, w, x_cal, self.recipe.weight, self.recipe.act)
+        # Effective weight the layer applies to the *original* input: Q(W*s)/s for scaled algorithms.
+        wq = ar.w if ar.final else fake_quant(ar.w, self.recipe.weight)[0]
+        dq = wq / ar.in_scale if ar.in_scale is not None else wq
         wm = compare(w, dq)
         wstats = core.tensor_stats(w.cpu().numpy())
         tr = LayerTrace(
@@ -177,11 +190,14 @@ class FakeQuantEngine:
             w_cosine=wm["cosine"] or 1.0,
             w_kurtosis=wstats["kurtosis"],
         )
-        if acts is not None and acts.numel() > 0:
-            x = acts.to(w.device)
+        tr.algorithm = self.algorithm
+        tr.algo_info = ar.info or {}
+        if x_cal is not None:
+            x = x_cal
             y_ref = x @ w.T
-            xq = fake_quant_act(x, self.recipe.act) if self.recipe.act.enabled else x
-            y_q = xq @ dq.T
+            xs = x / ar.in_scale if ar.in_scale is not None else x
+            xq = fake_quant_act(xs, self.recipe.act) if self.recipe.act.enabled else xs
+            y_q = xq @ wq.T
             om = compare(y_ref, y_q)
             astats = core.tensor_stats(acts.numpy())
             tr.out_sqnr_db, tr.out_rel_l2, tr.out_cosine = om["sqnr_db"], om["rel_l2"], om["cosine"]
@@ -191,7 +207,9 @@ class FakeQuantEngine:
                 astats["outlier_ratio"],
             )
         self.originals[u.name] = lin
-        replace_module(self.qm.model, u.name, FakeQuantLinear(lin, self.recipe.weight, self.recipe.act, u.name))
+        fq = FakeQuantLinear(lin, self.recipe.weight, self.recipe.act, u.name, w_override=wq, in_scale=ar.in_scale, final=True)
+        fq.algo = self.algorithm
+        replace_module(self.qm.model, u.name, fq)
         tr.seconds = time.perf_counter() - t0
         self.traces[u.name] = tr
         return tr

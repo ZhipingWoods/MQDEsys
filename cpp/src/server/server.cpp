@@ -220,6 +220,16 @@ Result<void> serve(const ServerOptions& o) {
       }
     send_json(res, arr);
   });
+  // Quantization algorithms (data/algorithms.yaml). The job endpoint validates quant.algorithm against it.
+  auto load_algorithms = []() -> Result<Json> {
+    MQDE_ASSIGN_OR_RETURN(Json j, load_structured_file(data_dir() / "algorithms.yaml"));
+    return j.value("algorithms", Json::array());
+  };
+  svr.Get("/api/v1/algorithms", [&](const httplib::Request&, httplib::Response& res) {
+    auto a = load_algorithms();
+    if (!a) return send_error(res, a.error());
+    send_json(res, *a);
+  });
   svr.Get("/api/v1/config", [&](const httplib::Request&, httplib::Response& res) {
     send_json(res, {{"allowed_roots", o.allowed_roots}, {"gpus", o.gpus}, {"runs_dir", fs::absolute(o.runs_dir).string()}});
   });
@@ -817,6 +827,13 @@ Result<void> serve(const ServerOptions& o) {
     if (!recipes.is_array() || recipes.empty()) return send_error(res, 400, "invalid_argument", "quant.recipe must be a non-empty list");
     for (const auto& r : recipes)
       if (auto rr = estimator::load_recipe(r.get<std::string>()); !rr) return send_error(res, rr.error());
+    if (const auto algo = job.value("/quant/algorithm"_json_pointer, std::string("recipe")); algo != "recipe") {
+      auto known = load_algorithms();
+      if (!known) return send_error(res, known.error());
+      bool ok = false;
+      for (const auto& a : *known) ok = ok || a.value("name", "") == algo;
+      if (!ok) return send_error(res, 400, "invalid_argument", "unknown quant.algorithm '" + algo + "'");
+    }
     if (o.gpus.empty()) return send_error(res, 503, "unavailable", "server started without a GPU pool (--gpus)");
     job["apiVersion"] = "mqde/v1";
     job["kind"] = "Job";

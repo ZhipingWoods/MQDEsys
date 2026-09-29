@@ -263,6 +263,7 @@ function Overview({ rep }: { rep: JobReport }) {
           <thead>
             <tr>
               <th>配方</th>
+              <th>算法</th>
               <th className="num">动作 rel-L2</th>
               <th className="num">× 噪声下限</th>
               <th className="num">动作 cos</th>
@@ -278,6 +279,9 @@ function Overview({ rep }: { rep: JobReport }) {
                 <td>
                   <b>{r.recipe}</b>
                   {r.maturity === "experimental" && <span className="muted small"> 实验</span>}
+                </td>
+                <td>
+                  <span className="badge accent">{r.algorithm ?? "rtn"}</span>
                 </td>
                 <td className="num">{fmt(r.eval.action_rel_l2, 4)}</td>
                 <td className="num">{fmt(r.summary.action_rel_l2_over_noise_floor, 2)}</td>

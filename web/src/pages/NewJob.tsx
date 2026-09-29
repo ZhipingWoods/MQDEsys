@@ -6,6 +6,8 @@ import { DEFAULT_DATASET, DEFAULT_MODEL, useAsync } from "../hooks";
 export default function NewJobPage() {
   const nav = useNavigate();
   const recipes = useAsync(api.recipes, []);
+  const algos = useAsync(api.algorithms, []);
+  const [algorithm, setAlgorithm] = useState("recipe");
   const profiles = useAsync(api.hardwareProfiles, []);
   const cfg = useAsync(api.config, []);
   const [name, setName] = useState("minicpm-vla-eval");
@@ -23,7 +25,7 @@ export default function NewJobPage() {
   const job = {
     metadata: { name },
     model: { source: "local", path: model, modality: "vla" },
-    quant: { recipe: picked, ...(action ? { also_quantize: ["action"] } : {}) },
+    quant: { recipe: picked, algorithm, ...(action ? { also_quantize: ["action"] } : {}) },
     calibration: { dataset, n_samples: nCalib },
     evaluation: { dataset, n_samples: nEval, concurrency: [1, 4, 16, 64], attribution },
     deploy: { hardware: hw },
@@ -77,9 +79,33 @@ export default function NewJobPage() {
         <label className="small">
           <input type="checkbox" checked={action} onChange={(e) => setAction(e.target.checked)} /> 同时量化 DiT 动作头（默认保持 FP32）
         </label>
+        <h2 style={{ marginTop: 16 }}>③ 量化算法</h2>
+        <div className="form-row">
+          <div className="field" style={{ minWidth: 260 }}>
+            <label>算法（所有勾选配方共用）</label>
+            <select value={algorithm} onChange={(e) => setAlgorithm(e.target.value)}>
+              <option value="recipe">按配方默认（{recipes.data?.filter((r) => picked.includes(r.id)).map((r) => `${r.name}:${r.default_algorithm}`).join(" · ") || "—"}）</option>
+              {algos.data?.map((a) => (
+                <option key={a.name} value={a.name}>
+                  {a.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field grow">
+            <label>说明</label>
+            <div className="small muted" style={{ minHeight: 32, display: "flex", alignItems: "center" }}>
+              {algorithm === "recipe"
+                ? "每个配方使用 data/recipes/*.yaml 里的 default_algorithm。"
+                : algos.data?.find((a) => a.name === algorithm)?.description}
+              {algos.data?.find((a) => a.name === algorithm)?.needs_calibration && " 需要校准数据。"}
+            </div>
+          </div>
+        </div>
+        {algos.error && <div className="error-box">{algos.error}</div>}
       </div>
       <div className="card">
-        <h2>③ 评估数据</h2>
+        <h2>④ 评估数据</h2>
         <div className="form-row">
           <div className="field grow">
             <label>数据集（LeRobot v3 目录，或 synthetic）</label>
@@ -99,7 +125,7 @@ export default function NewJobPage() {
         </label>
       </div>
       <div className="card">
-        <h2>④ 部署硬件</h2>
+        <h2>⑤ 部署硬件</h2>
         <div className="form-row">
           <div className="field">
             <label>目标硬件画像（用于资源预估）</label>

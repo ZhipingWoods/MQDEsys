@@ -49,6 +49,7 @@ class JobSpec:
     name: str
     model_path: str
     recipes: list[str]
+    algorithm: str = "recipe"  # rtn | gptq | awq | smoothquant | awq+gptq | ...; "recipe" = recipe default
     calib_source: str = "synthetic"
     calib_samples: int = 16
     eval_source: str = "synthetic"
@@ -70,6 +71,7 @@ class JobSpec:
             name=d.get("metadata", {}).get("name", Path(path).stem),
             model_path=m["path"],
             recipes=recipes,
+            algorithm=str(q.get("algorithm", "recipe")),
             calib_source=c.get("dataset", "synthetic"),
             calib_samples=int(c.get("n_samples", 16)),
             eval_source=e.get("dataset", c.get("dataset", "synthetic")),
@@ -272,7 +274,11 @@ class VLAJob:
         for recipe in recipes:
             rep: dict[str, Any] = {"recipe": recipe.name, "weight": recipe.weight.to_dict(), "act": recipe.act.to_dict(), "maturity": recipe.maturity}
             modalities = list(dict.fromkeys(recipe.modalities + spec.extra_modalities))
-            engine = FakeQuantEngine(vla.qmodel, recipe, progress=lambda e: self.ev.emit("trace", **e) if e["kind"] == "layer" else None)
+            algo = recipe.default_algorithm if spec.algorithm in ("", "recipe") else spec.algorithm
+            rep["algorithm"] = algo
+            engine = FakeQuantEngine(
+                vla.qmodel, recipe, progress=lambda e: self.ev.emit("trace", **e) if e["kind"] == "layer" else None, algorithm=algo
+            )
             if not recipe.weight.enabled:
                 continue
 
@@ -284,7 +290,7 @@ class VLAJob:
                         units = engine.select_units([mod])
                         if not units:
                             continue
-                        engine.apply(units)
+                        engine.apply(units, engine.capture(units, calibrate, max_rows=256) if algo != "rtn" else None)
                         cur = self._run_eval(vla, evals, eval_inputs)
                         score = self._score(ref, cur, evals)
                         engine.restore()
@@ -349,6 +355,7 @@ def main() -> None:
     ap.add_argument("job", help="job YAML")
     ap.add_argument("--device", default=None)
     ap.add_argument("--recipes", default=None, help="override recipes, comma separated")
+    ap.add_argument("--algorithm", default=None, help="rtn | gptq | awq | smoothquant | awq+gptq | smoothquant+gptq")
     ap.add_argument("--eval-samples", type=int, default=None)
     ap.add_argument("--calib-samples", type=int, default=None)
     ap.add_argument("--job-id", default=None, help="assigned by mqde-server")
@@ -358,6 +365,8 @@ def main() -> None:
         spec.device = args.device
     if args.recipes:
         spec.recipes = args.recipes.split(",")
+    if args.algorithm:
+        spec.algorithm = args.algorithm
     if args.eval_samples:
         spec.eval_samples = args.eval_samples
     if args.calib_samples:

@@ -155,6 +155,7 @@ export interface RecipeReport {
   weight: QuantSpecJson;
   act: QuantSpecJson;
   maturity: string;
+  algorithm?: string;
   attribution?: ({ modality: string; units: number } & Score)[];
   layers: LayerTrace[];
   eval: Score;
@@ -300,6 +301,8 @@ export interface FitPlan {
   kv_alternatives: { kv_quant: string; kv_bytes_per_token: number; memory_delta_gb: number }[];
 }
 
+export interface Algorithm { name: string; label: string; kind: "quantizer" | "transform" | "combo"; description: string; needs_calibration: boolean; params?: Record<string, number> }
+
 export interface ConcurrencyEstimate {
   requested_users: number; max_users: number; context: number;
   weights_gb: number; kv_per_user_gb: number; overhead_gb: number;
@@ -313,6 +316,7 @@ export const api = {
   health: () => req<{ status: string; version: string }>("GET", "/health"),
   config: () => req<{ allowed_roots: string[]; gpus: number[]; runs_dir: string }>("GET", "/config"),
   recipes: () => req<Recipe[]>("GET", "/recipes"),
+  algorithms: () => req<Algorithm[]>("GET", "/algorithms"),
   hardwareProfiles: () => req<HardwareProfile[]>("GET", "/hardware/profiles"),
   hardware: () => req<{ devices: Device[]; job_gpus: { pool: { gpu: number; job: string | null }[]; queued: number } }>("GET", "/hardware"),
   inspect: (path: string) => req<Record<string, any>>("POST", "/models:inspect", { path }),

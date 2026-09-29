@@ -1,0 +1,37 @@
+# Quantization algorithms selectable per job (quant.algorithm). Data-driven: the server lists these
+# at GET /api/v1/algorithms and rejects unknown names; the Python engine reads defaults from here.
+# A "+" joins an equivalent transform (awq / smoothquant) with a weight quantizer (rtn / gptq).
+algorithms:
+  - name: rtn
+    label: RTN
+    kind: quantizer
+    description: Round-to-nearest with the recipe calibration (minmax / MSE range search). No calibration data needed.
+    needs_calibration: false
+  - name: gptq
+    label: GPTQ
+    kind: quantizer
+    description: Second-order (Hessian) column-wise error compensation, per layer on captured FP activations.
+    needs_calibration: true
+    params: {block_size: 128, damp: 0.01, max_rows: 2048}
+  - name: awq
+    label: AWQ
+    kind: transform
+    description: Activation-aware per-input-channel scaling searched to minimise output error, then RTN.
+    needs_calibration: true
+    params: {grid: 20, max_rows: 512}
+  - name: smoothquant
+    label: SmoothQuant
+    kind: transform
+    description: Migrates activation outliers into weights (s = max|X|^a / max|W|^(1-a)); mainly for W8A8 / W4A8.
+    needs_calibration: true
+    params: {alpha: 0.5, max_rows: 512}
+  - name: awq+gptq
+    label: AWQ + GPTQ
+    kind: combo
+    description: AWQ scaling first, then GPTQ on the scaled weights.
+    needs_calibration: true
+  - name: smoothquant+gptq
+    label: SmoothQuant + GPTQ
+    kind: combo
+    description: SmoothQuant migration first, then GPTQ. Recipe default for W4A8.
+    needs_calibration: true
