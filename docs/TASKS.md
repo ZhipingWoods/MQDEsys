@@ -115,16 +115,16 @@
 | T-0513 | 前端：作业执行页（DAG + 日志 + 资源） | P5 | T-0512,T-0303 | L1 | PARTIAL (2026-09-24) |
 | T-0514 | 前端：量化误差页（初版：热力图 + Top-K） | P5 | T-0512,T-0509 | L1 | PARTIAL (2026-09-24, heatmap + Top-K + attribution) |
 | T-0515 | 端到端最小闭环验收（M3） | P5 | T-0513,T-0514 | L1 | TODO |
-| T-0601 | 算法：AWQ | P6 | T-0508 | L1 | TODO |
-| T-0602 | 算法：GPTQ | P6 | T-0508 | L1 | TODO |
-| T-0603 | 算法：SmoothQuant（等效变换 + transformed 位点） | P6 | T-0508 | L1 | TODO |
+| T-0601 | 算法：AWQ | P6 | T-0508 | L1 | DONE (2026-09-29, b2248e4; per-layer scale search, VLA eval pending GPU) |
+| T-0602 | 算法：GPTQ | P6 | T-0508 | L1 | DONE (2026-09-29, b2248e4; per-layer OBS on FP inputs, not sequential-block) |
+| T-0603 | 算法：SmoothQuant（等效变换 + transformed 位点） | P6 | T-0508 | L1 | PARTIAL (2026-09-29, b2248e4; per-layer X/s, W*s; transformed eval position not yet) |
 | T-0604 | 激活量化（动态/静态）→ W4A8、W2A8 | P6 | T-0603 | L1 | PARTIAL (2026-09-24, dynamic per-token INT8 act fake-quant; no static / SmoothQuant) |
 | T-0605 | FP8 配方（E4M3/E5M2，per_channel/per_block） | P6 | T-0508 | L1 | PARTIAL (2026-09-24, FP8 E4M3/E5M2 per-channel/per-tensor fake-quant; no per-block) |
 | T-0606 | 2bit 配方（W2A16/W2A8）与 HQQ | P6 | T-0602,T-0604 | L1 | PARTIAL (2026-09-24, W2A16/W2A8 fake-quant via RTN-MSE; no GPTQ/HQQ) |
 | T-0607 | KV Cache 量化（KV_REGISTRY） | P6 | T-0508 | L1 | TODO |
 | T-0608 | 混合精度与 keep_fp 策略 | P6 | T-0509 | L1 | TODO |
 | T-0609 | 外部算法适配器（GPTQModel / llm-compressor） | P6 | T-0508 | L3 | TODO |
-| T-0610 | 算法组合（AWQ+GPTQ）与 QuaRot（扩展） | P6 | T-0601,T-0602 | L1 | TODO |
+| T-0610 | 算法组合（AWQ+GPTQ）与 QuaRot（扩展） | P6 | T-0601,T-0602 | L1 | PARTIAL (2026-09-29, awq+gptq / smoothquant+gptq; no QuaRot) |
 | T-0701 | Exporter 接口 + vLLM 导出 | P7 | T-0405,T-0602 | L2 | TODO |
 | T-0702 | Fake/Real 一致性检查（S10） | P7 | T-0701 | L1 | TODO |
 | T-0703 | 部署后端接口 + vLLM 适配器（S11） | P7 | T-0701,T-0504 | L2 | TODO |
@@ -836,10 +836,10 @@
 | **T-R20** | **实测基线库**：格式、相同硬件匹配、中位数归并 | llmfit A.8 | L1 | DONE (2026-09-28, 56/56 ctest; 4090 实测 4.41 steps/s) |
 | **T-R21** | **并发反解**：max_users / max_context_for | llmfit A.9 | L1 | DONE (2026-09-28, 69/69 ctest) |
 | **T-R22** | **完整 plan**：run paths、最低/推荐硬件、升级增量、KV 替代 | llmfit A.10 | L1 | DONE (2026-09-28, a4c0299) |
-| **T-R23** | **claim 边界**：保守/乐观双估 + 二分最大上下文 | llmfit A.10 | L1 | DONE (2026-09-28, pending sha) |
-| **T-R24** | **已安装运行时探测**（8 来源并行） | llmfit A.11 | L1 | TODO |
-| **T-R25** | **HF 模型库 + 搜索/下载** | llmfit A.12–A.13 | L2 | TODO |
-| **T-R26** | **ModelFit 字段补全** + 运行时选择 | llmfit A.15–A.16 | L2 | TODO |
+| **T-R23** | **claim 边界**：保守/乐观双估 + 二分最大上下文 | llmfit A.10 | L1 | DONE (2026-09-28, 8cda15b) |
+| **T-R24** | **已安装运行时探测**（8 来源并行） | llmfit A.11 | L1 | DONE (2026-09-29, 5862e3c/4767c41) |
+| **T-R25** | **HF 模型库 + 搜索/下载** | llmfit A.12–A.13 | L2 | DONE (2026-09-29, b45a46c; 200-entry catalog, search, GGUF/safetensors download verified) |
+| **T-R26** | **ModelFit 字段补全** + 运行时选择 | llmfit A.15–A.16 | L2 | DONE (2026-09-29, 9715e98; license field still empty for local models) |
 | **T-R27** | **前端补全**：硬件模拟、对比模式、完整筛选、导出 | llmfit-web | L1 | TODO |
 | T-R05 | GGUF 结构解析 | netron gguf.js | L1 | TODO |
 | T-R06 | QuantizeConfig + module_tree | GPTQModel | L2 | TODO |

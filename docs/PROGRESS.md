@@ -173,6 +173,31 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-09-29 · 前端修复 + 可选量化算法（T-0601/0602/0603/0610）
+- **状态**：DONE（b45a46c 前端；b2248e4 算法）
+- **前端修复（用户反馈）**：
+  - 构建曾失败（Catalog.tsx 类型错误），服务一直在发旧 bundle；已修复。
+  - 部署预评估页新增“并发能力”整卡：4 个指标 + 两张图（显存堆叠 vs 路数、每路最大上下文 vs 路数）。后端 `/fit:concurrency` 新增 `curve[]`。
+  - HF 搜索加“查询”按钮 + 回车（原来只有防抖）。服务端启动需带 `https_proxy=http://127.0.0.1:17897`（反向隧道到 Mac Clash），否则搜索超时。
+  - 模型目录页重写：服务端过滤，提供者/能力下拉从全目录生成，点击行跳到 `/fit?source=catalog&search=`。
+  - 下拉 option 颜色跟随主题 token。
+- **量化算法**：`python/mqde/quant/algorithms.py`（ALGO_REGISTRY）：RTN、GPTQ、AWQ、SmoothQuant、awq+gptq、smoothquant+gptq。
+  作业字段 `quant.algorithm`（默认 recipe = 各配方 default_algorithm）；`GET /api/v1/algorithms`；新建作业页有下拉。
+- **校验**：pytest 20/20（新增 8 个算法测试），ctest 86/86；截图核对 fit/new/catalog。
+  真实模型逐层对比（MiniCPM-RobotManip，LIBERO 4 帧校准，12 层：语言块 0-1 + 视觉块 0，CPU），平均输出 SQNR dB：
+
+  | 配方 | RTN | AWQ | GPTQ | SmoothQuant | AWQ+GPTQ |
+  |---|---:|---:|---:|---:|---:|
+  | W4A16 | 22.1 | 24.4 | 36.5 | 23.3 | 38.7 |
+  | W4A8 | 20.6 | 22.5 | 29.8 | 21.2 | 33.4 |
+  | W2A16 | 11.4 | 13.6 | 22.9 | 12.6 | 25.5 |
+
+- **局限 / 下一步**：
+  1. GPTQ 是逐层（输入取 FP 模型的激活），不是 GPTQModel 的逐块顺序传播；下一步做 blockwise 顺序版（T-0508）。
+  2. 端到端动作误差（LIBERO 全作业）**未在 GPU 上跑**：GPU 2、3 被其他进程占用（各约 21 GB）。空出后运行 `python -m mqde.pipeline.vla_job examples/jobs/minicpm_vla_libero.yaml --algorithm gptq`。
+  3. SmoothQuant 的 transformed 评测位点、AWQ scale 吸收到上游 LayerNorm 尚未做（现为 X/s 在线缩放，精度等价但不省算）。
+  4. 下一批：T-0604 静态激活、T-0607 KV 量化、T-0608 混合精度、T-0405 位打包 → T-0701 vLLM 导出。
+
 ### 2026-09-28 · T-R21 并发反解
 
 - **状态**：DONE（待 commit sha）
