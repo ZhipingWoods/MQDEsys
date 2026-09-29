@@ -306,6 +306,7 @@ export interface ConcurrencyEstimate {
   total_gb: number; capacity_gb: number; utilization_pct: number;
   fits: boolean; high_pressure: boolean;
   max_context_for_users: number;
+  curve?: { users: number; total_gb: number; weights_gb: number; kv_gb: number; overhead_gb: number; utilization_pct: number; fits: boolean; max_context: number }[];
 }
 
 export const api = {

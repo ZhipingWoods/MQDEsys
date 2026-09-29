@@ -156,6 +156,8 @@ input, select, textarea {
   background: var(--surface-2); color: var(--text-primary); border: 1px solid var(--border-md);
   border-radius: var(--radius-sm); padding: 6px 9px; font: inherit; font-size: 13px; min-height: 32px;
 }
+select option, select optgroup { background: var(--surface-2); color: var(--text-primary); }
+select:disabled, input:disabled { opacity: 0.55; cursor: not-allowed; }
 input:hover, select:hover { border-color: var(--axis); }
 input[type="checkbox"] { min-height: 0; accent-color: var(--accent); }
 input[type="range"] { accent-color: var(--accent); padding: 0; }

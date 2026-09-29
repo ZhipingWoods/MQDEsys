@@ -1,201 +1,131 @@
-import { useEffect, useState } from "react";
-import api from "../api";
-import type { CatalogModel } from "../api";
+// HF model catalog (data/models/catalog.json, built by `mqde catalog update`). Filters run on the
+// server; picking a row opens the deployment pre-evaluation for that catalog entry (no weights needed).
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { api, fmt } from "../api";
+import { useAsync, useDebounced } from "../hooks";
+
+const CAP_LABEL: Record<string, string> = { text: "文本", vision: "视觉", moe: "MoE", audio: "音频" };
 
 export default function CatalogPage() {
-  const [models, setModels] = useState<CatalogModel[]>([]);
   const [search, setSearch] = useState("");
   const [provider, setProvider] = useState("");
   const [capability, setCapability] = useState("");
-  const [includeDemoted, setIncludeDemoted] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [meta, setMeta] = useState<{ updated_at: string; total: number; demoted: number } | null>(null);
-
-  const load = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const res = await api.catalog(search, provider, capability, 200, includeDemoted);
-      setModels(res.models);
-      setMeta({ updated_at: res.updated_at, total: res.total, demoted: res.demoted });
-    } catch (e: any) {
-      setError(e.message || "加载失败");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  const handleSearch = () => {
-    load();
-  };
-
-  const providers = Array.from(new Set(models.map(m => m.provider))).filter(Boolean).sort();
-  const capabilities = Array.from(new Set(models.flatMap(m => m.capabilities))).filter(Boolean).sort();
+  const [demoted, setDemoted] = useState(false);
+  const dq = useDebounced({ search, provider, capability, demoted }, 250);
+  const all = useAsync(() => api.catalog("", "", "", 5000, true), []);
+  const res = useAsync(() => api.catalog(dq.search, dq.provider, dq.capability, 500, dq.demoted), [JSON.stringify(dq)]);
+  const nav = useNavigate();
+  // Dropdown options come from the whole catalog, not from the filtered page.
+  const providers = useMemo(() => {
+    const n = new Map<string, number>();
+    for (const m of all.data?.models ?? []) n.set(m.provider, (n.get(m.provider) ?? 0) + 1);
+    return [...n.entries()].sort((a, b) => b[1] - a[1]);
+  }, [all.data]);
+  const caps = useMemo(() => [...new Set((all.data?.models ?? []).flatMap((m) => m.capabilities))].sort(), [all.data]);
+  const rows = res.data?.models ?? [];
 
   return (
-    <div className="page">
-      <header className="page-header">
-        <h1>模型目录</h1>
-        <p className="page-subtitle">
-          从 HuggingFace 模型库中搜索和浏览可用模型
-        </p>
-      </header>
-
-      <div className="card" style={{ marginBottom: "1rem" }}>
-        <div style={{ display: "grid", gap: "0.75rem" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "0.75rem" }}>
-            <input
-              type="text"
-              placeholder="搜索模型名称、作者或架构..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-              style={{ width: "100%" }}
-            />
-            <button onClick={handleSearch} disabled={loading}>
-              {loading ? "搜索中..." : "搜索"}
-            </button>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "0.75rem" }}>
-            <label>
-              <span style={{ fontSize: "0.875rem", opacity: 0.7 }}>提供者</span>
-              <select value={provider} onChange={(e) => setProvider(e.target.value)}>
-                <option value="">全部</option>
-                {providers.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
-            </label>
-
-            <label>
-              <span style={{ fontSize: "0.875rem", opacity: 0.7 }}>能力</span>
-              <select value={capability} onChange={(e) => setCapability(e.target.value)}>
-                <option value="">全部</option>
-                {capabilities.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </label>
-
-            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "1.25rem" }}>
-              <input
-                type="checkbox"
-                checked={includeDemoted}
-                onChange={(e) => setIncludeDemoted(e.target.checked)}
-              />
-              <span style={{ fontSize: "0.875rem" }}>包含降级模型</span>
-            </label>
-          </div>
-        </div>
-      </div>
-
-      {error && (
-        <div className="card" style={{ background: "var(--error-bg)", borderColor: "var(--error)", marginBottom: "1rem" }}>
-          <p style={{ color: "var(--error)", margin: 0 }}>{error}</p>
-        </div>
-      )}
-
-      {meta && (
-        <div style={{ fontSize: "0.875rem", opacity: 0.7, marginBottom: "0.75rem" }}>
-          找到 {meta.total} 个模型
-          {meta.demoted > 0 && !includeDemoted && ` (${meta.demoted} 个已降级)`}
-          {meta.updated_at && ` · 目录更新于 ${new Date(meta.updated_at).toLocaleString("zh-CN")}`}
-        </div>
-      )}
-
-      <div className="card">
-        {loading && models.length === 0 ? (
-          <p style={{ textAlign: "center", opacity: 0.5, padding: "2rem" }}>加载中...</p>
-        ) : models.length === 0 ? (
-          <p style={{ textAlign: "center", opacity: 0.5, padding: "2rem" }}>
-            {search || provider || capability ? "未找到匹配的模型" : "目录为空，请先运行 mqde catalog update"}
+    <>
+      <div className="page-head">
+        <div>
+          <h1>模型目录</h1>
+          <p className="subtitle">
+            HF 模型库（{all.data?.total ?? "–"} 条，{all.data?.demoted ?? 0} 条降级；更新于 {all.data?.updated_at || "–"}）。
+            服务器上运行 <code>mqde catalog update --limit N</code> 刷新。点击一行进入部署预评估。
           </p>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                  <th style={{ textAlign: "left", padding: "0.75rem 0.5rem", fontWeight: 600 }}>模型</th>
-                  <th style={{ textAlign: "left", padding: "0.75rem 0.5rem", fontWeight: 600 }}>架构</th>
-                  <th style={{ textAlign: "right", padding: "0.75rem 0.5rem", fontWeight: 600 }}>参数</th>
-                  <th style={{ textAlign: "left", padding: "0.75rem 0.5rem", fontWeight: 600 }}>提供者</th>
-                  <th style={{ textAlign: "left", padding: "0.75rem 0.5rem", fontWeight: 600 }}>能力</th>
-                  <th style={{ textAlign: "right", padding: "0.75rem 0.5rem", fontWeight: 600 }}>下载</th>
-                </tr>
-              </thead>
-              <tbody>
-                {models.map((m, idx) => (
-                  <tr
-                    key={idx}
-                    style={{
-                      borderBottom: idx < models.length - 1 ? "1px solid var(--border-subtle)" : undefined,
-                      opacity: m.demoted ? 0.5 : 1,
-                    }}
-                  >
-                    <td style={{ padding: "0.75rem 0.5rem" }}>
-                      <div style={{ fontWeight: 500 }}>{m.name}</div>
-                      {m.ollama_name && (
-                        <div style={{ fontSize: "0.8125rem", opacity: 0.6, marginTop: "0.125rem" }}>
-                          {m.ollama_name}
-                        </div>
-                      )}
-                    </td>
-                    <td style={{ padding: "0.75rem 0.5rem", fontSize: "0.875rem" }}>
-                      {m.architecture || "—"}
-                    </td>
-                    <td style={{ padding: "0.75rem 0.5rem", fontSize: "0.875rem", textAlign: "right" }}>
-                      {m.param_b ? `${m.param_b.toFixed(1)}B` : "—"}
-                    </td>
-                    <td style={{ padding: "0.75rem 0.5rem", fontSize: "0.875rem" }}>
-                      <span style={{
-                        padding: "0.125rem 0.5rem",
-                        borderRadius: "999px",
-                        background: "var(--accent-subtle)",
-                        color: "var(--accent)",
-                        fontSize: "0.8125rem",
-                      }}>
-                        {m.provider}
-                      </span>
-                    </td>
-                    <td style={{ padding: "0.75rem 0.5rem", fontSize: "0.8125rem" }}>
-                      {m.capabilities.length > 0 ? (
-                        <div style={{ display: "flex", gap: "0.25rem", flexWrap: "wrap" }}>
-                          {m.capabilities.map((cap, i) => (
-                            <span
-                              key={i}
-                              style={{
-                                padding: "0.125rem 0.375rem",
-                                borderRadius: "4px",
-                                background: "var(--surface-2)",
-                                opacity: 0.8,
-                              }}
-                            >
-                              {cap}
-                            </span>
-                          ))}
-                        </div>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td style={{ padding: "0.75rem 0.5rem", fontSize: "0.875rem", textAlign: "right", opacity: 0.7 }}>
-                      {m.downloads_30d != null ? (
-                        m.downloads_30d >= 1000
-                          ? `${(m.downloads_30d / 1000).toFixed(1)}k`
-                          : m.downloads_30d.toString()
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        </div>
       </div>
-    </div>
+      <div className="card">
+        <div className="form-row">
+          <div className="field grow">
+            <label>搜索</label>
+            <input placeholder="名称子串，如 qwen3、llama" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          <div className="field" style={{ minWidth: 200 }}>
+            <label>提供者</label>
+            <select value={provider} onChange={(e) => setProvider(e.target.value)}>
+              <option value="">全部（{providers.length}）</option>
+              {providers.map(([p, n]) => (
+                <option key={p} value={p}>
+                  {p} · {n}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field" style={{ minWidth: 140 }}>
+            <label>能力</label>
+            <select value={capability} onChange={(e) => setCapability(e.target.value)}>
+              <option value="">全部</option>
+              {caps.map((c) => (
+                <option key={c} value={c}>
+                  {CAP_LABEL[c] ?? c}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label>&nbsp;</label>
+            <label className="small" style={{ display: "flex", gap: 6, alignItems: "center", minHeight: 32 }}>
+              <input type="checkbox" checked={demoted} onChange={(e) => setDemoted(e.target.checked)} /> 包含降级条目
+            </label>
+          </div>
+        </div>
+        {(res.error || all.error) && <div className="error-box">{res.error || all.error}</div>}
+        <div className="muted small" style={{ marginBottom: 8 }}>
+          {res.loading ? "加载中…" : `${rows.length} 条`}
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>模型</th>
+                <th>架构</th>
+                <th className="num">参数</th>
+                <th>存储精度</th>
+                <th className="num">上下文</th>
+                <th>能力</th>
+                <th>许可证</th>
+                <th className="num">下载量</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((m) => (
+                <tr key={m.name} className="clickable" style={{ opacity: m.demoted ? 0.55 : 1 }}
+                  onClick={() => nav(`/fit?source=catalog&search=${encodeURIComponent(m.name)}`)}>
+                  <td>
+                    <b>{m.name}</b>
+                  </td>
+                  <td className="small muted">{m.architecture || "–"}</td>
+                  <td className="num">{m.parameter_count || "–"}</td>
+                  <td>
+                    <span className="badge">{m.quantization}</span>
+                  </td>
+                  <td className="num">{m.context_length ? m.context_length.toLocaleString() : "–"}</td>
+                  <td>
+                    {m.capabilities.map((c) => (
+                      <span key={c} className="badge" style={{ marginRight: 4 }}>
+                        {CAP_LABEL[c] ?? c}
+                      </span>
+                    ))}
+                  </td>
+                  <td className="small">{m.license || "–"}</td>
+                  <td className="num">{m.hf_downloads >= 1e6 ? `${fmt(m.hf_downloads / 1e6, 1)}M` : m.hf_downloads >= 1e3 ? `${fmt(m.hf_downloads / 1e3, 1)}k` : m.hf_downloads}</td>
+                  <td className="small muted">{m.demote_reason}</td>
+                </tr>
+              ))}
+              {!res.loading && rows.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="empty">
+                    {all.data?.total === 0 ? "目录为空：在服务器上运行 mqde catalog update" : "没有符合条件的模型"}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
   );
 }

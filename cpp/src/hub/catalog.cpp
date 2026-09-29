@@ -297,8 +297,9 @@ Result<modelspec::ModelSpec> to_spec(const CatalogEntry& e) {
   // tensor sized from the config so active-parameter math works; the rest is one dense tensor.
   const std::string dtype = e.quantization == "FP8" ? "F8_E4M3" : e.quantization == "F32" ? "F32"
                             : e.quantization == "F16" ? "F16" : "BF16";
-  const double bpp = e.quantization == "FP8" ? 1.0 : e.quantization == "F32" ? 4.0
-                     : e.quantization.starts_with("INT") ? std::stoi(e.quantization.substr(3)) / 8.0 : 2.0;
+  // Pre-quantized (INT) checkpoints are described by their logical BF16 weights: the fit path re-quantizes
+  // from logical parameters for every recipe, exactly as it does for local pre-quantized checkpoints.
+  const double bpp = e.quantization == "FP8" ? 1.0 : e.quantization == "F32" ? 4.0 : 2.0;
   const int64_t hidden = std::max<int64_t>(1, cfg_int(cfg, {"hidden_size", "n_embd", "d_model"}));
   const int64_t layers = cfg_int(cfg, {"num_hidden_layers", "n_layer", "num_layers"});
   const int64_t n_exp = cfg_int(cfg, {"num_experts", "n_routed_experts", "num_local_experts"});

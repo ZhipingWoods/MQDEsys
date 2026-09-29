@@ -2,6 +2,7 @@
 // ModelTable (fit / mode / quant / mem / speed / score), DetailPanel (score components, memory
 // breakdown, notes) and a "plan" view that grades one model on every hardware profile.
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api, DownloadStatus, FitLevel, FitQuery, fmt, fmtBytes, HfHit, ModelFit } from "../api";
 import { barItem, baseOption, Chart, token } from "../charts";
 import { useAsync, useDebounced } from "../hooks";
@@ -32,34 +33,75 @@ function ConcurrencyPanel({ model, hardware, recipe, users, context }: {
     () => api.concurrency(model, hardware, recipe, users, context),
     [model, hardware, recipe, users, context]
   );
-  if (res.loading) return <div className="muted small" style={{ padding: "8px 0" }}>并发能力计算中…</div>;
-  if (res.error) return null;
-  const c = res.data!;
+  if (res.loading && !res.data) return <div className="muted small" style={{ padding: "8px 0" }}>并发能力计算中…</div>;
+  if (res.error) return <div className="error-box">并发能力计算失败：{res.error}</div>;
+  if (!res.data) return null;
+  const c = res.data;
   const pct = Math.round(c.utilization_pct);
+  const curve = c.curve ?? [];
   return (
-    <div style={{ marginTop: 16 }}>
-      <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>并发能力</h3>
-      <dl className="detail-grid">
-        <dt>最大并发</dt>
-        <dd>
-          {c.max_users} 路
-          {c.high_pressure && <span className="badge warn" style={{ marginLeft: 6 }}>高压</span>}
-          {!c.fits && <span className="badge critical" style={{ marginLeft: 6 }}>放不下</span>}
-        </dd>
-        <dt>当前 {users} 路下的最大上下文</dt>
-        <dd>{c.max_context_for_users > 0 ? `${c.max_context_for_users.toLocaleString()} tokens` : "–"}</dd>
-        <dt>利用率（{users} 路 × {context} tok）</dt>
-        <dd>
-          <span style={{ marginRight: 8 }}>{fmt(c.total_gb, 2)} / {fmt(c.capacity_gb, 2)} GiB</span>
-          <span className={pct > 90 ? "badge warn" : "muted small"}>{pct}%</span>
-        </dd>
-        <dt>显存构成</dt>
-        <dd className="muted small">
-          权重 {fmt(c.weights_gb, 2)} GiB
-          {" · "} KV×用户 {fmt(c.kv_per_user_gb * users, 2)} GiB
-          {" · "} 运行时 {fmt(c.overhead_gb, 2)} GiB
-        </dd>
-      </dl>
+    <div className="card">
+      <div className="card-head">
+        <h2>并发能力（{recipe}，每路 {context.toLocaleString()} tok）</h2>
+        <span>
+          {c.high_pressure && <span className="badge warn">高压</span>}{" "}
+          {!c.fits && <span className="badge critical">当前配置放不下</span>}
+        </span>
+      </div>
+      <div className="tiles">
+        <Tile label="最大并发" value={`${c.max_users} 路`} hint={`每路 ${context.toLocaleString()} tokens`} />
+        <Tile label={`${users} 路时最大上下文`} value={c.max_context_for_users > 0 ? `${c.max_context_for_users.toLocaleString()}` : "–"} hint="tokens / 路（2 的幂）" />
+        <Tile label={`${users} 路显存`} value={`${fmt(c.total_gb, 1)} GiB`} hint={`容量 ${fmt(c.capacity_gb, 1)} GiB · ${pct}%`} />
+        <Tile label="每路 KV" value={`${fmt(c.kv_per_user_gb * 1024, 0)} MiB`} hint={`权重 ${fmt(c.weights_gb, 1)} · 运行时 ${fmt(c.overhead_gb, 1)} GiB`} />
+      </div>
+      {curve.length > 1 && (
+        <div className="grid-2">
+          <div>
+            <div className="lbl" style={{ marginBottom: 4 }}>显存 vs 并发路数</div>
+            <Chart
+              height={240}
+              option={() => {
+                const o = baseOption();
+                const xs = curve.map((p) => String(p.users));
+                const area = (name: string, key: "weights_gb" | "kv_gb" | "overhead_gb", i: number) => ({
+                  name, type: "line", stack: "mem", symbol: "none", areaStyle: { opacity: 0.85 },
+                  lineStyle: { width: 0 }, color: token(`--series-${i}`), data: curve.map((p) => +p[key].toFixed(2)),
+                });
+                return {
+                  ...o,
+                  grid: { left: 48, right: 24, top: 48, bottom: 30 },
+                  tooltip: { ...(o.tooltip as object), trigger: "axis" },
+                  xAxis: { ...(o.xAxis as object), type: "category", data: xs, name: "路数", nameGap: 6 },
+                  yAxis: { ...(o.yAxis as object), type: "value", name: "GiB", nameGap: 10 },
+                  series: [
+                    area("权重", "weights_gb", 1), area("运行时+激活", "overhead_gb", 4), area("KV cache", "kv_gb", 3),
+                    { name: "显存容量", type: "line", symbol: "none", lineStyle: { type: "dashed", color: token("--critical"), width: 1.5 },
+                      color: token("--critical"), data: curve.map(() => +c.capacity_gb.toFixed(2)) },
+                  ],
+                };
+              }}
+            />
+          </div>
+          <div>
+            <div className="lbl" style={{ marginBottom: 4 }}>每路最大上下文 vs 并发路数</div>
+            <Chart
+              height={240}
+              option={() => {
+                const o = baseOption();
+                return {
+                  ...o,
+                  grid: { left: 64, right: 24, top: 48, bottom: 30 },
+                  tooltip: { ...(o.tooltip as object), trigger: "axis" },
+                  xAxis: { ...(o.xAxis as object), type: "category", data: curve.map((p) => String(p.users)), name: "路数", nameGap: 6 },
+                  yAxis: { ...(o.yAxis as object), type: "log", name: "tokens", nameGap: 10, logBase: 2, min: 256 },
+                  series: [{ name: "最大上下文", type: "line", step: "end", color: token("--series-7"),
+                    data: curve.map((p) => (p.max_context > 0 ? p.max_context : null)) }],
+                };
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -67,14 +109,15 @@ function ConcurrencyPanel({ model, hardware, recipe, users, context }: {
 export default function FitPage() {
   const profiles = useAsync(api.hardwareProfiles, []);
   const [q, setQ] = useState<FitQuery>({ hardware: "nvidia/rtx4090", gpu_count: 1, use_case: "auto", concurrency: 1, context: 0, sort: "score" });
-  const [search, setSearch] = useState("");
+  const [params] = useSearchParams();
+  const [search, setSearch] = useState(params.get("search") ?? "");
   const [minFit, setMinFit] = useState<"all" | "runnable" | "good">("all");
   const [selected, setSelected] = useState<string | null>(null);
-  const [source, setSource] = useState<"local" | "catalog">("local");
+  const [source, setSource] = useState<"local" | "catalog">(params.get("source") === "catalog" ? "catalog" : "local");
   // Catalog search runs on the server (it can hold thousands of entries); local search filters in the page.
   const dq = useDebounced(source === "catalog" ? { ...q, source, search, limit: 60 } : { ...q, source }, 300);
   const res = useAsync(() => api.fit(dq), [JSON.stringify(dq)]);
-  const cat = useAsync(() => api.catalog("", "", 1), []);
+  const cat = useAsync(() => api.catalog("", "", "", 1), []);
   const rows = useMemo(() => {
     let r = res.data?.models ?? [];
     if (search && source === "local") r = r.filter((m) => m.model.toLowerCase().includes(search.toLowerCase()));
@@ -259,8 +302,10 @@ export default function FitPage() {
 // ---- HF live search + download (llmfit hf-search / download) ----
 function HubPanel() {
   const [q, setQ] = useState("");
-  const dq = useDebounced(q, 400);
-  const hits = useAsync(() => (dq.length >= 2 ? api.hfSearch(dq, 15) : Promise.resolve({ models: [] as HfHit[] })), [dq]);
+  const [dq, setDq] = useState("");
+  const [nonce, setNonce] = useState(0);
+  const runSearch = () => { setDq(q.trim()); setNonce((n) => n + 1); };
+  const hits = useAsync(() => (dq.length >= 2 ? api.hfSearch(dq, 20) : Promise.resolve({ models: [] as HfHit[] })), [dq, nonce]);
   const [budget, setBudget] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
   const groups = useAsync(
@@ -297,7 +342,14 @@ function HubPanel() {
       <div className="form-row">
         <div className="field grow">
           <label>搜索 Hub</label>
-          <input placeholder="如 Qwen3 8B GGUF" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input placeholder="如 Qwen3 8B GGUF" value={q} onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && runSearch()} />
+        </div>
+        <div className="field">
+          <label>&nbsp;</label>
+          <button onClick={runSearch} disabled={q.trim().length < 2 || hits.loading}>
+            {hits.loading ? "查询中…" : "查询"}
+          </button>
         </div>
         <div className="field">
           <label>下载预算（如 12G，可空）</label>
@@ -467,12 +519,12 @@ function Detail({ m, query }: { m: ModelFit; query: FitQuery }) {
                   </>
                 )}
               </dl>
-              <ConcurrencyPanel model={m.model} hardware={query.hardware}
-                recipe={m.best_quant || "bf16"} users={query.concurrency || 1}
-                context={m.context || 4096} />
             </div>
           </div>
         </div>
+        <ConcurrencyPanel model={m.model} hardware={query.hardware}
+          recipe={(m.best_quant || "bf16").toLowerCase()} users={query.concurrency || 1}
+          context={m.context || 4096} />
         {d && (
           <div className="card">
             <h2>显存构成（{m.best_quant}）</h2>

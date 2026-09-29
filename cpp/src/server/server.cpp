@@ -663,7 +663,24 @@ Result<void> serve(const ServerOptions& o) {
     const int64_t users   = body->value("users", 1);
     const int64_t context = body->value("context", 4096);
     auto c = fit::estimate_concurrency(*s, recipe, *hw, *be, users, context);
-    send_json(res, fit::to_json(c));
+    Json out = fit::to_json(c);
+    // Curves for the frontend: memory vs users at this context, and max context vs users.
+    if (body->value("curve", true)) {
+      const int64_t top = std::clamp<int64_t>(c.max_users > 0 ? c.max_users * 5 / 4 : 8, 4, 512);
+      std::vector<int64_t> xs;
+      for (int64_t u = 1; u <= top; u = u < 8 ? u + 1 : u * 3 / 2) xs.push_back(u);
+      if (xs.back() != top) xs.push_back(top);
+      Json by_users = Json::array();
+      for (int64_t u : xs) {
+        auto e = fit::estimate_concurrency(*s, recipe, *hw, *be, u, context);
+        by_users.push_back({{"users", u}, {"total_gb", e.total_gb}, {"weights_gb", e.weights_gb},
+                            {"kv_gb", e.kv_per_user_gb * static_cast<double>(u)}, {"overhead_gb", e.overhead_gb},
+                            {"utilization_pct", e.utilization_pct}, {"fits", e.fits},
+                            {"max_context", e.max_context_for_users}});
+      }
+      out["curve"] = by_users;
+    }
+    send_json(res, out);
   });
 
   // ---------------- catalog / HF search / download (T-R25) ----------------
