@@ -77,7 +77,7 @@
 | T-0201 | C 硬件探针：CPU（三平台） | P2 | T-0002 | L2 | DONE (2026-09-24) |
 | T-0202 | C 硬件探针：GPU/NPU（动态加载厂商库） | P2 | T-0201 | L1 | DONE (2026-09-24, NVML only) |
 | T-0203 | 硬件画像库与 HardwareProfile | P2 | T-0102,T-0201 | L1 | DONE (2026-09-24, 4 NVIDIA profiles) |
-| T-0204 | hub：HF/ModelScope 解析与元数据获取 | P2 | T-0102 | L2 | TODO |
+| T-0204 | hub：HF/ModelScope 解析与元数据获取 | P2 | T-0102 | L2 | PARTIAL (2026-09-29, @revision, HF_ENDPOINT, retries, Range headers, inspect_remote; ModelScope + offline cache pending) |
 | T-0205 | modelspec：ModelSpec 解析（config + safetensors 头） | P2 | T-0204 | L2 | DONE (2026-09-24) |
 | T-0206 | 架构模板与 QIR | P2 | T-0205 | L2 | DONE (2026-09-24, data-driven families; QIR = UnitInfo) |
 | T-0207 | 量化配方库 | P2 | T-0102 | L1 | DONE (2026-09-24) |
@@ -140,9 +140,9 @@
 | T-0807 | 前端：评估报告页 + 对比页 | P8 | T-0806 | L1 | TODO |
 | T-0808 | M4 验收：全配方 × 多后端参考集 | P8 | T-0807,T-0606,T-0705 | L1 | TODO |
 | T-0901 | 阶段归因（瀑布）数据链路 | P9 | T-0702,T-0802 | L1 | PARTIAL (2026-09-24, modality-level attribution only) |
-| T-0902 | 敏感度分析（逐层回退） | P9 | T-0509 | L1 | TODO |
+| T-0902 | 敏感度分析（逐层回退） | P9 | T-0509 | L1 | PARTIAL (2026-09-29, block/type FP fallback in llm_job; 7B GPU timing pending) |
 | T-0903 | 前端：误差页完整版 | P9 | T-0901,T-0902 | L1 | TODO |
-| T-0904 | 混合精度建议 → 一键生成新作业 | P9 | T-0903,T-0608 | L1 | TODO |
+| T-0904 | 混合精度建议 → 一键生成新作业 | P9 | T-0903,T-0608 | L1 | PARTIAL (2026-09-29, suggest() + UI one-click clone; Playwright spec pending) |
 | T-0905 | 反馈闭环（S15）：预估自动校准 | P9 | T-0209,T-0804 | L1 | TODO |
 | T-0906 | 误差归因验收（注入测试） | P9 | T-0903 | L1 | TODO |
 | T-1001 | 多模态框架：per_modality 配置与 set_modality | P10 | T-0508 | L2 | TODO |

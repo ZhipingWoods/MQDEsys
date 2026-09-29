@@ -118,7 +118,7 @@ export default function JobPage() {
         <EventLog events={events} />
       </div>
 
-      {rep && (isLLM ? <LLMReportView rep={rep as unknown as LLMJobReport} /> : <ReportView rep={rep} />)}
+      {rep && (isLLM ? <LLMReportView rep={rep as unknown as LLMJobReport} job={detail?.job} /> : <ReportView rep={rep} />)}
     </>
   );
 }

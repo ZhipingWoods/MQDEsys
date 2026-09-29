@@ -24,6 +24,7 @@ export default function NewJobPage() {
   const [keepEnds, setKeepEnds] = useState(false);
   const [downBits, setDownBits] = useState("");
   const [exportFmts, setExportFmts] = useState<string[]>(["gptq"]);
+  const [sens, setSens] = useState("");
   const [dataset, setDataset] = useState(DEFAULT_DATASET);
   const [nCalib, setNCalib] = useState(16);
   const [nEval, setNEval] = useState(24);
@@ -70,6 +71,7 @@ export default function NewJobPage() {
           evaluation: { dataset: "wikitext-2-raw-v1:test", seq_len: seqLen, max_windows: windows },
           deploy: { hardware: hw, device },
           ...(exportFmts.length ? { export: { formats: exportFmts } } : {}),
+          ...(sens ? { analysis: { sensitivity: sens, sensitivity_windows: 8 } } : {}),
         };
 
   const submit = async () => {
@@ -236,6 +238,16 @@ export default function NewJobPage() {
               <div className="field">
                 <label>PPL 窗口数（wikitext-2 test）</label>
                 <input type="number" value={windows} min={1} onChange={(e) => setWindows(Number(e.target.value))} />
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="field">
+                <label>敏感度分析（逐组回退 FP，8 窗口 PPL）</label>
+                <select value={sens} onChange={(e) => setSens(e.target.value)}>
+                  <option value="">不做</option>
+                  <option value="block">按块（每个 decoder block）</option>
+                  <option value="type">按层类型（q/k/v/o/gate/up/down）</option>
+                </select>
               </div>
             </div>
             <p className="note">评估位点：pretrain（原模型）→ fake_quant_wo_kv（权重+激活量化）→ fake_quant（再加 KV Cache 量化）。PPL 为不重叠窗口的 token 级困惑度。</p>

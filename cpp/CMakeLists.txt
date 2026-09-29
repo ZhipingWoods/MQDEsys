@@ -79,8 +79,9 @@ if(MQDE_BUILD_TESTS)
     tests/unit/benchmarks_test.cpp
     tests/unit/concurrency_test.cpp
     tests/unit/installed_test.cpp
-    tests/unit/hub_test.cpp)
-  target_link_libraries(mqde_unit_tests PRIVATE mqde_fit mqde_hub mqde_estimator mqde_probe GTest::gtest_main)
+    tests/unit/hub_test.cpp
+    tests/unit/hub_remote_test.cpp)
+  target_link_libraries(mqde_unit_tests PRIVATE mqde_fit mqde_hub mqde_estimator mqde_probe httplib::httplib GTest::gtest_main)
   target_compile_definitions(mqde_unit_tests PRIVATE MQDE_TEST_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures")
   include(GoogleTest)
   gtest_discover_tests(mqde_unit_tests)

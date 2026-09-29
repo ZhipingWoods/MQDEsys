@@ -98,8 +98,17 @@ int cmd_probe(bool json) {
   return 0;
 }
 
+// "hf:org/name[@rev]" (or hf://...) reads config.json + safetensors headers from the Hub over HTTP Range;
+// anything else is a local directory.
+uint64_t g_remote_bytes = 0;
+mqde::Result<mqde::modelspec::ModelSpec> inspect_any(const std::string& path) {
+  for (const std::string p : {"hf://", "hf:"})
+    if (path.starts_with(p)) return mqde::hub::inspect_remote(mqde::hub::HfOptions{}, path.substr(p.size()), &g_remote_bytes);
+  return mqde::modelspec::inspect_local(path);
+}
+
 int cmd_inspect(const std::string& path, bool json, bool tensors) {
-  auto spec = mqde::modelspec::inspect_local(path);
+  auto spec = inspect_any(path);
   if (!spec) return fail(spec.error());
   if (json) {
     std::cout << mqde::modelspec::to_json(*spec, tensors).dump(2) << "\n";
@@ -122,6 +131,7 @@ int cmd_inspect(const std::string& path, bool json, bool tensors) {
     fmt::print("{:<12} {:<9} {:>8} {:>10.2f} {:>12} {:>7} {:>9} {:>12.2f}\n", c.name, c.modality, c.n_tensors,
                c.params / 1e6, format_bytes(double(c.bytes)), c.n_blocks, c.n_quant_units, c.quant_params / 1e6);
   for (const auto& w : spec->warnings) fmt::print("warning: {}\n", w);
+  if (g_remote_bytes) fmt::print("remote     {} of config/headers fetched (no weights)\n", format_bytes(double(g_remote_bytes)));
   return 0;
 }
 
@@ -134,7 +144,7 @@ struct EstimateArgs {
 };
 
 int cmd_estimate(const EstimateArgs& a) {
-  auto spec = mqde::modelspec::inspect_local(a.model);
+  auto spec = inspect_any(a.model);
   if (!spec) return fail(spec.error());
   Json recipes = Json::array();
   std::vector<std::string> recipe_names;
@@ -255,7 +265,7 @@ int cmd_fit(const FitArgs& a) {
     }
   std::vector<mqde::fit::ModelFit> fits;
   for (const auto& m : scan_models(a.models)) {
-    auto spec = mqde::modelspec::inspect_local(m);
+    auto spec = inspect_any(m);
     if (!spec) {
       std::cerr << "skip " << m << ": " << spec.error().to_string() << "\n";
       continue;
@@ -529,12 +539,12 @@ int main(int argc, char** argv) {
   auto* inspect = model->add_subcommand("inspect", "parse config.json + safetensors headers (no weights loaded)");
   std::string model_path;
   bool with_tensors = false;
-  inspect->add_option("path", model_path, "local model directory")->required();
+  inspect->add_option("path", model_path, "local model directory, or hf:org/name[@revision]")->required();
   inspect->add_flag("--tensors", with_tensors, "include per-tensor listing (JSON only)");
 
   auto* est = app.add_subcommand("estimate", "estimate memory / KV / concurrency / latency floor");
   EstimateArgs ea;
-  est->add_option("-m,--model", ea.model, "local model directory")->required();
+  est->add_option("-m,--model", ea.model, "local model directory, or hf:org/name[@revision]")->required();
   est->add_option("-r,--recipe", ea.recipe, "recipe name(s), comma separated (w4a16,w4a8,w2a16,w2a8,fp8,...)");
   est->add_option("--hw", ea.hw, "hardware profile id (see `mqde hardware`)");
   est->add_option("--backend", ea.backend, "backend profile id");
@@ -648,7 +658,7 @@ int main(int argc, char** argv) {
     return cmd_fit(fa);
   }
   if (*claim) {
-    auto spec = mqde::modelspec::inspect_local(claim_model);
+    auto spec = inspect_any(claim_model);
     if (!spec) { fmt::print(stderr, "error: {}\n", spec.error().to_string()); return 1; }
     auto hw = mqde::estimator::load_hardware(claim_hw);
     if (!hw) { fmt::print(stderr, "error: {}\n", hw.error().to_string()); return 1; }

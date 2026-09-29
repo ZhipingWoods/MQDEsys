@@ -1,6 +1,11 @@
 #pragma once
-// Minimal Hugging Face Hub client (docs/REFERENCES.md A.12-A.13): model listing, config fetch,
-// repo file listing and resumable-by-restart file download.
+// Minimal Hugging Face Hub client (docs/REFERENCES.md A.12-A.13, T-0204): model listing, config fetch,
+// repo file listing, safetensors headers over HTTP Range (tensor shapes without downloading weights)
+// and resumable-by-restart file download.
+//
+// Repos may carry a revision: "org/name@revision" (branch, tag or commit; default "main") everywhere a
+// repo string is accepted. HF_ENDPOINT selects a mirror. Idempotent GETs are retried on network
+// errors, HTTP 429 and 5xx (3 attempts, exponential backoff).
 //
 // Security: the token comes only from the caller (CLI --token) or the HF_TOKEN environment variable.
 // It is sent as a bearer header and is never logged, stored, or echoed in errors.
@@ -16,15 +21,28 @@
 
 #include "mqde/common/config.h"
 #include "mqde/common/result.h"
+#include "mqde/modelspec/model_spec.h"
+#include "mqde/modelspec/safetensors.h"
 
 namespace mqde {
 namespace hub {
 
+// HF_ENDPOINT if set (mirrors such as https://hf-mirror.com), else https://huggingface.co.
+std::string default_endpoint();
+
 struct HfOptions {
-  std::string endpoint = "https://huggingface.co";
+  std::string endpoint = default_endpoint();
   std::string token;       // empty -> read HF_TOKEN from the environment
   int timeout_s = 30;
 };
+
+struct RepoRef {
+  std::string repo;              // "org/name"
+  std::string revision = "main";
+};
+
+// "org/name" | "org/name@rev" | "name" (legacy single-segment ids). Rejects empty parts, "..", spaces.
+Result<RepoRef> parse_repo_ref(std::string_view s);
 
 struct RepoFile {
   std::string path;
@@ -42,6 +60,15 @@ Result<Json> fetch_json_file(const HfOptions& o, const std::string& repo, const 
 
 // GET /api/models/<repo>/tree/main?recursive=1 -> files with sizes.
 Result<std::vector<RepoFile>> list_files(const HfOptions& o, const std::string& repo);
+
+// Tensor names / dtypes / shapes of one remote .safetensors file from two small Range requests
+// (8-byte length, then the JSON header); the payload is never fetched.
+Result<std::vector<modelspec::TensorInfo>> remote_safetensors_header(const HfOptions& o, const std::string& repo,
+                                                                     const std::string& file);
+
+// config.json + every weight shard's header -> the same ModelSpec inspect_local() builds, without downloading
+// weights. `bytes_fetched` (optional) receives the number of body bytes transferred.
+Result<modelspec::ModelSpec> inspect_remote(const HfOptions& o, const std::string& repo, uint64_t* bytes_fetched = nullptr);
 
 // Download one file to `dest` (parent dirs created). Writes to "<dest>.part" then renames.
 // `progress(done, total)` is called as bytes arrive; returning false (or `cancel`) aborts.

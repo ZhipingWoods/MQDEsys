@@ -173,6 +173,18 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-09-29 · 敏感度分析 + 混合精度建议（T-0902/T-0904）+ Hub 远程检查（T-0204）
+- **本次完成**：
+  - `mqde/trace/sensitivity.py`：全量化后逐组（按 block 或按层类型）单独恢复 FP，测 PPL 挽回量并排序；`suggest()` 按“挽回量/额外字节”贪心选组提升到 8 bit，直到覆盖目标比例（默认 50%）或超出显存预算，输出 `mixed_precision.rules` 与权重增量。`llm_job --sensitivity block|type`（作业 YAML `analysis.sensitivity`），前端作业页显示敏感度柱状图（建议组高亮）+ “按建议生成新作业”一键克隆提交；新建作业页可选敏感度分析。
+  - Hub（T-0204）：`org/name@revision`（`parse_repo_ref`，拒绝 `..`/空段）、`HF_ENDPOINT` 镜像、GET 重试（网络错误/429/5xx，3 次退避）、safetensors 头部 HTTP Range 读取（`remote_safetensors_header`）与 `inspect_remote`；CLI `mqde model inspect|estimate` 接受 `hf:org/name[@rev]`。modelspec 抽出 `parse_safetensors_header` 供本地与远程共用。
+- **校验结果**（实测）：
+  - `ctest` 98/98（新增 `hub_remote.*` 5 项：本地 httplib 桩，4 MiB payload 场景只传 8+header 字节；revision；重试 3 次后成功）；`pytest python/tests/trace` 4 passed。
+  - 在线：`mqde model inspect hf:Qwen/Qwen2.5-7B-Instruct` → 339 个张量、7.616 B 参数，仅取 37.95 KiB（config + 4 个分片头），经代理 60 s；`hf:meta-llama/Llama-3.1-8B` → `HTTP 401 (gated or private repo; set HF_TOKEN)`；`mqde estimate -m hf:Qwen/Qwen2.5-7B-Instruct -r w4a16,fp8` 可直接出预估。
+  - Qwen2.5-0.5B W4A16 RTN 按块敏感度（8 窗口 PPL，CPU 16 线程 204 s）：最敏感 block 23 / 16 / 17 / 8 / 0 / 2；建议 6 块升 8 bit（+44.7 MB）。按建议经 API 提交的新作业实测：8 窗口 PPL 24.036 → 22.014（预测 21.748，预测偏乐观：实际挽回 2.02 / 预测 2.29）；40 窗口 PPL 22.064 → **20.271**（优于整模型 GPTQ W4A16 的 20.550）。W4A8 RTN 最敏感 block 2 / 23 / 8。
+  - 后台 sweep 新增：GPTQ W4A8 22.098、GPTQ W2A16 2142.6（仍崩溃）、AWQ+GPTQ W4A16 20.475。
+- **未完成 / 下一步**：7B 单卡 < 1 h 的 T-0902 验收待 GPU；T-0904 的 Playwright 用例未写；Hub 离线模式（读 `~/.cache/huggingface/hub`）未做。
+
+
 ### 2026-09-29 · LLM 路径 + 真实导出（T-0508/0510/0604/0607/0608/0405/0701/0702/0705）
 - **状态**：见 TASKS.md（T-0508/0604/0607/0608/0702 DONE；T-0405/0510/0701/0705 PARTIAL）
 - **本次完成**：

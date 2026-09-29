@@ -6,6 +6,7 @@
 #include <fstream>
 #include <map>
 #include <regex>
+#include <thread>
 
 #include <httplib.h>
 
@@ -14,6 +15,31 @@ namespace mqde::hub {
 namespace fs = std::filesystem;
 
 namespace {
+
+// "org/name@rev" -> ("org/name", "rev"); callers have validated the string with parse_repo_ref where it matters.
+std::pair<std::string, std::string> split_rev(const std::string& repo) {
+  const auto at = repo.rfind('@');
+  if (at == std::string::npos) return {repo, "main"};
+  return {repo.substr(0, at), repo.substr(at + 1)};
+}
+
+std::string resolve_path(const std::string& repo, const std::string& file) {
+  const auto [r, rev] = split_rev(repo);
+  return "/" + r + "/resolve/" + url_encode(rev) + "/" + file;
+}
+
+bool retryable(const httplib::Result& r) { return !r || r->status == 429 || r->status >= 500; }
+
+// Retries idempotent requests: 3 attempts, 0.5 s then 1 s backoff.
+template <class F>
+httplib::Result with_retry(F&& f) {
+  httplib::Result r = f();
+  for (int i = 0; i < 2 && retryable(r); ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(500 << i));
+    r = f();
+  }
+  return r;
+}
 
 std::string token_of(const HfOptions& o) {
   if (!o.token.empty()) return o.token;
@@ -54,7 +80,7 @@ Error http_error(const httplib::Result& r, const std::string& what) {
 
 Result<Json> get_json(const HfOptions& o, const std::string& path, const std::string& what) {
   auto cli = make_client(o, o.endpoint);
-  auto r = cli->Get(path);
+  auto r = with_retry([&] { return cli->Get(path); });
   if (!r || r->status != 200) return std::unexpected(http_error(r, what));
   try {
     return Json::parse(r->body);
@@ -70,6 +96,31 @@ std::string lower(std::string s) {
 
 }  // namespace
 
+std::string default_endpoint() {
+  const char* e = std::getenv("HF_ENDPOINT");
+  std::string s = e && *e ? e : "https://huggingface.co";
+  while (s.ends_with('/')) s.pop_back();
+  return s;
+}
+
+Result<RepoRef> parse_repo_ref(std::string_view s) {
+  RepoRef r;
+  std::string str(s);
+  if (const auto at = str.rfind('@'); at != std::string::npos) {
+    r.revision = str.substr(at + 1);
+    str.resize(at);
+    if (r.revision.empty()) return make_error(Errc::kInvalidArgument, "empty revision in '{}'", s);
+  }
+  static const std::regex id_re(R"(^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?$)");
+  static const std::regex rev_re(R"(^[A-Za-z0-9._/-]+$)");
+  if (!std::regex_match(str, id_re) || str.find("..") != std::string::npos)
+    return make_error(Errc::kInvalidArgument, "'{}' is not a Hub repo id (expected org/name[@revision])", s);
+  if (!std::regex_match(r.revision, rev_re) || r.revision.find("..") != std::string::npos)
+    return make_error(Errc::kInvalidArgument, "bad revision '{}'", r.revision);
+  r.repo = std::move(str);
+  return r;
+}
+
 Result<Json> list_models(const HfOptions& o, const std::string& query) {
   return get_json(o, "/api/models?" + query, "list models");
 }
@@ -83,11 +134,12 @@ Result<Json> model_info(const HfOptions& o, const std::string& repo) {
 }
 
 Result<Json> fetch_json_file(const HfOptions& o, const std::string& repo, const std::string& file) {
-  return get_json(o, "/" + repo + "/resolve/main/" + file, repo + "/" + file);
+  return get_json(o, resolve_path(repo, file), repo + "/" + file);
 }
 
 Result<std::vector<RepoFile>> list_files(const HfOptions& o, const std::string& repo) {
-  MQDE_ASSIGN_OR_RETURN(Json j, get_json(o, "/api/models/" + repo + "/tree/main?recursive=1", "list files " + repo));
+  const auto [r, rev] = split_rev(repo);
+  MQDE_ASSIGN_OR_RETURN(Json j, get_json(o, "/api/models/" + r + "/tree/" + url_encode(rev) + "?recursive=1", "list files " + repo));
   std::vector<RepoFile> out;
   for (const auto& e : j) {
     if (e.value("type", "") != "file") continue;
@@ -113,7 +165,7 @@ Result<uint64_t> download_file(const HfOptions& o, const std::string& repo, cons
   uint64_t done = 0;
   bool aborted = false;
   auto r = cli->Get(
-      "/" + repo + "/resolve/main/" + file, httplib::Headers{},
+      resolve_path(repo, file), httplib::Headers{},
       [&](const char* data, size_t n) {
         out.write(data, static_cast<std::streamsize>(n));
         done += n;
@@ -129,6 +181,68 @@ Result<uint64_t> download_file(const HfOptions& o, const std::string& repo, cons
   fs::rename(part, dest, ec);
   if (ec) return make_error(Errc::kIo, "rename {} -> {}: {}", part.string(), dest.string(), ec.message());
   return done;
+}
+
+// ---- safetensors headers over HTTP Range ----
+
+namespace {
+
+Result<std::string> get_range(httplib::Client& cli, const std::string& path, uint64_t first, uint64_t last,
+                              const std::string& what, uint64_t* fetched) {
+  auto r = with_retry([&] { return cli.Get(path, httplib::Headers{httplib::make_range_header({{first, last}})}); });
+  if (!r || (r->status != 206 && r->status != 200)) return std::unexpected(http_error(r, what));
+  if (fetched) *fetched += r->body.size();
+  if (r->status == 206) return r->body;
+  // Server ignored Range: slice the full body (only acceptable for small files; still correct).
+  if (r->body.size() <= last) return make_error(Errc::kParse, "{}: short response", what);
+  return r->body.substr(first, last - first + 1);
+}
+
+// 8-byte little-endian length, then exactly that many header bytes: two Range requests per shard.
+Result<std::vector<modelspec::TensorInfo>> header_via(httplib::Client& cli, const std::string& repo, const std::string& file,
+                                                      uint64_t* fetched) {
+  const auto path = resolve_path(repo, file);
+  const auto what = repo + "/" + file;
+  MQDE_ASSIGN_OR_RETURN(std::string lb, get_range(cli, path, 0, 7, what, fetched));
+  if (lb.size() != 8) return make_error(Errc::kParse, "{}: expected 8 length bytes, got {}", what, lb.size());
+  uint64_t len = 0;
+  for (int i = 7; i >= 0; --i) len = (len << 8) | static_cast<unsigned char>(lb[static_cast<size_t>(i)]);
+  if (len == 0 || len > modelspec::kMaxSafetensorsHeader)
+    return make_error(Errc::kParse, "{}: invalid safetensors header length {}", what, len);
+  MQDE_ASSIGN_OR_RETURN(std::string header, get_range(cli, path, 8, 8 + len - 1, what, fetched));
+  return modelspec::parse_safetensors_header(header, fs::path(file).filename().string());
+}
+
+}  // namespace
+
+Result<std::vector<modelspec::TensorInfo>> remote_safetensors_header(const HfOptions& o, const std::string& repo,
+                                                                     const std::string& file) {
+  auto cli = make_client(o, o.endpoint);
+  return header_via(*cli, repo, file, nullptr);
+}
+
+Result<modelspec::ModelSpec> inspect_remote(const HfOptions& o, const std::string& repo, uint64_t* bytes_fetched) {
+  MQDE_ASSIGN_OR_RETURN(RepoRef ref, parse_repo_ref(repo));
+  const std::string rr = ref.repo + "@" + ref.revision;
+  MQDE_ASSIGN_OR_RETURN(Json cfg, fetch_json_file(o, rr, "config.json"));
+  MQDE_ASSIGN_OR_RETURN(std::vector<RepoFile> files, list_files(o, rr));
+  std::vector<std::string> shards;
+  for (const auto& f : files)
+    if (f.path.ends_with(".safetensors") && f.path.find('/') == std::string::npos) shards.push_back(f.path);
+  if (shards.empty()) return make_error(Errc::kNotFound, "{}: no top-level *.safetensors files", rr);
+  std::sort(shards.begin(), shards.end());
+  auto cli = make_client(o, o.endpoint);
+  uint64_t fetched = 0;
+  std::vector<modelspec::TensorInfo> all;
+  for (const auto& sh : shards) {
+    MQDE_ASSIGN_OR_RETURN(auto ts, header_via(*cli, rr, sh, &fetched));
+    all.insert(all.end(), std::make_move_iterator(ts.begin()), std::make_move_iterator(ts.end()));
+  }
+  if (bytes_fetched) *bytes_fetched = fetched;
+  MQDE_ASSIGN_OR_RETURN(auto fam, modelspec::find_model_family(get_or<std::string>(cfg, "model_type", "")));
+  auto spec = modelspec::build_model_spec(cfg, std::move(all), fam);
+  if (spec) spec->path = "hf://" + rr;
+  return spec;
 }
 
 // ---- file selection ----

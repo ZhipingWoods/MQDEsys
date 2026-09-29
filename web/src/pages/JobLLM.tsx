@@ -1,5 +1,6 @@
-import { useSearchParams } from "react-router-dom";
-import { fmt, fmtBytes, LLMJobReport, LLMRecipeReport } from "../api";
+import { useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { api, fmt, fmtBytes, LLMJobReport, LLMRecipeReport, Sensitivity } from "../api";
 import { baseOption, Chart, series, token } from "../charts";
 import { Tile } from "./Estimate";
 import { LayerAnalysis } from "./LayerAnalysis";
@@ -11,6 +12,7 @@ export const LLM_STAGES: [string, string][] = [
   ["eval_baseline", "原模型 PPL"],
   ["quantize", "逐块量化"],
   ["eval_fake_wo_kv", "PPL（W+A）"],
+  ["sensitivity", "敏感度分析"],
   ["eval_fake", "PPL（+KV）"],
   ["export", "导出"],
   ["real_check", "真实/伪量化一致性"],
@@ -27,7 +29,7 @@ function ordered(rep: LLMJobReport): LLMRecipeReport[] {
   return Object.values(rep.recipes ?? {}).sort((a, b) => order.indexOf(a.recipe.toLowerCase()) - order.indexOf(b.recipe.toLowerCase()));
 }
 
-export function LLMReportView({ rep }: { rep: LLMJobReport }) {
+export function LLMReportView({ rep, job }: { rep: LLMJobReport; job?: Record<string, unknown> }) {
   const rs = ordered(rep);
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") ?? "overview";
@@ -57,7 +59,7 @@ export function LLMReportView({ rep }: { rep: LLMJobReport }) {
         </div>
       )}
       {tab === "overview" && rs.length > 0 && <Overview rep={rep} rs={rs} />}
-      {cur && <RecipeView r={cur} base={b?.ppl} />}
+      {cur && <RecipeView r={cur} base={b?.ppl} job={job} />}
     </>
   );
 }
@@ -202,7 +204,7 @@ function ExportCard({ rs }: { rs: LLMRecipeReport[] }) {
   );
 }
 
-function RecipeView({ r, base }: { r: LLMRecipeReport; base?: number }) {
+function RecipeView({ r, base, job }: { r: LLMRecipeReport; base?: number; job?: Record<string, unknown> }) {
   return (
     <>
       <div className="tiles">
@@ -211,7 +213,76 @@ function RecipeView({ r, base }: { r: LLMRecipeReport; base?: number }) {
         <Tile label="相对原模型" value={pct(r.summary.ppl_delta_pct)} hint={`算法 ${r.algorithm}`} />
         <Tile label="量化层数" value={`${r.layers.length}`} hint={`${wdesc(r)} · 跳过 ${r.skipped.length}`} />
       </div>
+      {r.sensitivity && <SensitivityCard s={r.sensitivity} recipe={r.recipe} job={job} />}
       <LayerAnalysis layers={r.layers} strip="model." />
     </>
+  );
+}
+
+function SensitivityCard({ s, recipe, job }: { s: Sensitivity; recipe: string; job?: Record<string, unknown> }) {
+  const nav = useNavigate();
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const sug = s.suggestion;
+  const picked = new Set(sug.groups);
+  const clone = async () => {
+    if (!job) return;
+    setErr(null);
+    setBusy(true);
+    try {
+      const j = JSON.parse(JSON.stringify(job)) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+      delete j.output_dir;
+      delete j.apiVersion;
+      delete j.kind;
+      j.metadata = { ...(j.metadata ?? {}), name: `${j.metadata?.name ?? "job"}-mp` };
+      j.quant = { ...j.quant, recipe: [recipe], mixed_precision: { rules: sug.rules } };
+      const { job_id } = await api.submit(j);
+      nav(`/jobs/${job_id}`);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="card">
+      <h2>敏感度分析：单独把某{s.by === "block" ? "个块" : "类层"}恢复为 FP 能挽回多少 PPL（{s.metric}）</h2>
+      <Chart
+        height={300}
+        option={() => {
+          const o = baseOption();
+          return {
+            ...o,
+            tooltip: {
+              ...(o.tooltip as object),
+              trigger: "axis",
+              axisPointer: { type: "shadow" },
+              formatter: (ps: { dataIndex: number }[]) => {
+                const g = s.groups[ps[0].dataIndex];
+                return `${g.group}（${g.layers} 层）<br/>恢复 FP 后 PPL ${g.metric.toFixed(3)}<br/>挽回 ${g.recovered.toFixed(3)}`;
+              },
+            },
+            xAxis: { ...(o.xAxis as object), type: "category", data: s.groups.map((g) => g.group.replace("block:", "")), name: s.by === "block" ? "block" : "", nameLocation: "middle", nameGap: 24, nameTextStyle: { color: token("--text-muted") } },
+            yAxis: { ...(o.yAxis as object), type: "value", name: "挽回 PPL", nameTextStyle: { color: token("--text-muted") } },
+            series: [
+              {
+                type: "bar",
+                barMaxWidth: 24,
+                data: s.groups.map((g) => ({ value: g.recovered, itemStyle: { color: picked.has(g.group) ? series(1) : series(0), borderRadius: [3, 3, 0, 0] } })),
+              },
+            ],
+          };
+        }}
+      />
+      <p className="small">
+        全部量化 PPL <b>{fmt(s.metric_quantized, 3)}</b> · FP {fmt(s.metric_fp, 3)} · 退化 {fmt(sug.degradation, 3)}。建议把
+        <b> {sug.groups.join("、") || "—"} </b>提升到 {sug.bits} bit（高亮），预计 PPL ≈ {fmt(sug.predicted_metric, 3)}，权重增加 {fmtBytes(sug.extra_weight_bytes)}。
+      </p>
+      <p className="note">预计值是各组单独恢复 FP 时挽回量的简单相加（组间并不独立），实际效果以按建议重新运行的作业为准。</p>
+      {err && <div className="error-box">{err}</div>}
+      <button disabled={!job || busy || !sug.rules.length} onClick={clone}>
+        {busy ? "提交中…" : `按建议生成新作业（${recipe} + 混合精度）`}
+      </button>
+    </div>
   );
 }

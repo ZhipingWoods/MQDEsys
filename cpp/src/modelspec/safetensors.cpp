@@ -28,18 +28,21 @@ Result<std::vector<TensorInfo>> read_safetensors_header(const fs::path& file) {
     return make_error(Errc::kParse, "'{}' is too short to be a safetensors file", file.string());
   uint64_t len = 0;
   for (int i = 7; i >= 0; --i) len = (len << 8) | len_buf[static_cast<size_t>(i)];
-  constexpr uint64_t kMaxHeader = 100ull << 20;  // same limit as the reference implementation
-  if (len == 0 || len > kMaxHeader)
+  if (len == 0 || len > kMaxSafetensorsHeader)
     return make_error(Errc::kParse, "'{}': invalid header length {}", file.string(), len);
   std::string header(len, '\0');
   if (!in.read(header.data(), static_cast<std::streamsize>(len)))
     return make_error(Errc::kParse, "'{}': truncated header", file.string());
+  return parse_safetensors_header(header, file.filename().string());
+}
 
+Result<std::vector<TensorInfo>> parse_safetensors_header(const std::string& header, const std::string& file_name) {
+  const uint64_t len = header.size();
   Json j;
   try {
     j = Json::parse(header);
   } catch (const std::exception& e) {
-    return make_error(Errc::kParse, "'{}': header is not valid JSON: {}", file.string(), e.what());
+    return make_error(Errc::kParse, "'{}': header is not valid JSON: {}", file_name, e.what());
   }
   std::vector<TensorInfo> out;
   out.reserve(j.size());
@@ -47,17 +50,17 @@ Result<std::vector<TensorInfo>> read_safetensors_header(const fs::path& file) {
     if (it.key() == "__metadata__") continue;
     TensorInfo t;
     t.name = it.key();
-    t.file = file.filename().string();
+    t.file = file_name;
     try {
       t.dtype = it->at("dtype").get<std::string>();
       t.shape = it->at("shape").get<std::vector<int64_t>>();
       auto offs = it->at("data_offsets").get<std::vector<uint64_t>>();
       if (offs.size() != 2 || offs[1] < offs[0])
-        return make_error(Errc::kParse, "'{}': bad data_offsets for {}", file.string(), t.name);
+        return make_error(Errc::kParse, "'{}': bad data_offsets for {}", file_name, t.name);
       t.nbytes = offs[1] - offs[0];
       t.data_offset = 8 + len + offs[0];
     } catch (const std::exception& e) {
-      return make_error(Errc::kParse, "'{}': bad entry for {}: {}", file.string(), t.name, e.what());
+      return make_error(Errc::kParse, "'{}': bad entry for {}: {}", file_name, t.name, e.what());
     }
     t.numel = 1;
     for (auto d : t.shape) t.numel *= d;

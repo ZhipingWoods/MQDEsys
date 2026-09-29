@@ -188,6 +188,27 @@ export interface LLMRecipeReport {
   eval: { fake_quant_wo_kv: PplResult; fake_quant?: PplResult };
   summary: { ppl: number; ppl_delta_pct: number; kv_delta_pct: number | null; worst_layers: { name: string; out_sqnr_db: number }[] };
   export?: Record<string, LLMExport>;
+  sensitivity?: Sensitivity;
+}
+
+export interface Sensitivity {
+  by: "block" | "type";
+  metric: string;
+  metric_fp: number;
+  metric_quantized: number;
+  groups: { group: string; layers: number; params: number; metric: number; recovered: number; avg_bits: number }[];
+  ranking: string[];
+  seconds: number;
+  suggestion: {
+    rules: { match: string; bits?: number; skip?: boolean }[];
+    groups: string[];
+    predicted_recovered: number;
+    predicted_metric: number;
+    degradation: number;
+    extra_weight_bytes: number;
+    bits: number;
+    note: string;
+  };
 }
 
 export interface LLMExport {

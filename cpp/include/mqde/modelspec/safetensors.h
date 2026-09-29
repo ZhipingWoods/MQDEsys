@@ -31,6 +31,13 @@ double dtype_bytes(std::string_view dtype);
 
 Result<std::vector<TensorInfo>> read_safetensors_header(const std::filesystem::path& file);
 
+// Parses the JSON header (the `header_len` bytes after the 8-byte length) of shard `file_name`; shared by the
+// local reader and the Hub's HTTP Range reader.
+Result<std::vector<TensorInfo>> parse_safetensors_header(const std::string& header, const std::string& file_name);
+
+// Header length limit (same as the reference implementation).
+inline constexpr uint64_t kMaxSafetensorsHeader = 100ull << 20;
+
 // Reads every shard of a model directory: model.safetensors, or *.safetensors.index.json + shards,
 // or any *.safetensors files present.
 Result<std::vector<TensorInfo>> read_model_tensors(const std::filesystem::path& model_dir);

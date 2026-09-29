@@ -33,6 +33,7 @@ from mqde.pipeline.events import EventSink
 from mqde.quant import kv as kvq
 from mqde.quant.blockwise import BlockwiseQuantizer, MixedPrecisionPolicy
 from mqde.quant.engine import RecipeSpec
+from mqde.quant.modules import replace_module
 from mqde.quant.numerics import QuantSpec
 
 
@@ -53,6 +54,9 @@ class LLMJobSpec:
     kv_override: dict[str, Any] | None = None  # e.g. {format: int, bits: 8}
     mixed_precision: dict[str, Any] | None = None
     export: list[str] = field(default_factory=list)  # gptq | awq: real checkpoints + fake/real check (S09/S10)
+    sensitivity: str | None = None  # block | type: per-group FP fallback ranking + mixed-precision suggestion
+    sensitivity_windows: int = 8
+    suggest_target: float = 0.5  # share of the PPL degradation the suggested rules should win back
     seed: int = 0
     output_dir: str = "runs"
 
@@ -76,6 +80,8 @@ class LLMJobSpec:
             kv_override=q.get("kv") if isinstance(q.get("kv"), dict) and "format" in q.get("kv", {}) else None,
             mixed_precision=q.get("mixed_precision"),
             export=list(d.get("export", {}).get("formats", [])),
+            sensitivity=(d.get("analysis") or {}).get("sensitivity"),
+            sensitivity_windows=int((d.get("analysis") or {}).get("sensitivity_windows", 8)),
             output_dir=d.get("output_dir", "runs"),
         )
 
@@ -88,6 +94,7 @@ class LLMJob:
         self.out.mkdir(parents=True, exist_ok=True)
         self.ev = EventSink(self.job_id, self.out / "events.jsonl")
         self.report: dict[str, Any] = {"job_id": self.job_id, "kind": "llm", "spec": spec.__dict__, "stages": []}
+        self._fp_small: float | None = None
 
     def _save(self) -> None:
         (self.out / "report.json").write_text(json.dumps(self.report, indent=2, default=str))
@@ -130,6 +137,29 @@ class LLMJob:
                        progress=lambda i, n: self.ev.emit("progress", value=i / n, msg=label) if i % 10 == 0 else None)
         self.ev.emit("metric", name=f"{label}.ppl", value=round(r["ppl"], 4), msg=label)
         return r
+
+    def _sensitivity(self, ad: HFCausalLM, ids: torch.Tensor, q: BlockwiseQuantizer, recipe: str) -> dict[str, Any]:
+        from mqde.trace.sensitivity import fallback_sensitivity, suggest
+
+        s = self.spec
+        metric = lambda: perplexity(ad.logits, ids, s.eval_seq_len, s.sensitivity_windows)["ppl"]  # noqa: E731
+        if self._fp_small is None:  # the FP model on the same windows, measured once
+            fqs = {n: ad.model.get_submodule(n) for n in q.originals}
+            try:
+                for n, m in q.originals.items():
+                    replace_module(ad.model, n, m)
+                self._fp_small = metric()
+            finally:
+                for n, m in fqs.items():
+                    replace_module(ad.model, n, m)
+        sens = fallback_sensitivity(ad.model, q.originals, metric, by=s.sensitivity,
+                                    progress=lambda i, n, g: self.ev.emit("progress", value=i / n, msg=f"{recipe} FP {g}"))
+        sens["metric"] = f"ppl@{s.sensitivity_windows}x{s.eval_seq_len}"
+        sens["metric_fp"] = self._fp_small
+        sens["suggestion"] = suggest(sens, self._fp_small, target_share=s.suggest_target)
+        top = sens["ranking"][:3]
+        self.ev.log(f"{recipe}: most sensitive {s.sensitivity}s {top}; suggestion {sens['suggestion']['groups']}")
+        return sens
 
     def _export(self, ad: HFCausalLM, ids: torch.Tensor, recipe: str, fake_ppl: float) -> dict[str, Any]:
         from mqde.export import get_exporter
@@ -188,6 +218,8 @@ class LLMJob:
             rep["quantize_seconds"] = res.seconds
             wo = self._stage("eval_fake_wo_kv", lambda: self._ppl(ad, ids, f"{recipe.name}.fake_quant_wo_kv"), recipe.name)
             rep["eval"] = {"fake_quant_wo_kv": wo}
+            if s.sensitivity:
+                rep["sensitivity"] = self._stage("sensitivity", lambda: self._sensitivity(ad, ids, q, recipe.name), recipe.name)
             kv_spec = QuantSpec.from_dict(s.kv_override) if s.kv_override else QuantSpec()
             if not kv_spec.enabled:
                 kv_spec = _recipe_kv(recipe.name)
@@ -235,6 +267,8 @@ def main() -> None:
     ap.add_argument("--calib-samples", type=int)
     ap.add_argument("--mixed-precision", help="inline JSON or a YAML/JSON file: {rules: [{match, bits, skip}]}")
     ap.add_argument("--export", help="comma separated: gptq,awq")
+    ap.add_argument("--sensitivity", choices=["block", "type"])
+    ap.add_argument("--sensitivity-windows", type=int)
     ap.add_argument("--job-dir")
     ap.add_argument("--job-id", help="server-assigned id; output goes to <output_dir>/<job-id>")
     a = ap.parse_args()
@@ -249,6 +283,10 @@ def main() -> None:
         spec.kv_override = {"format": "fp8_e4m3", "bits": 8} if a.kv.startswith("fp8") else {"format": "int", "bits": int(a.kv[3:]), "symmetric": False}
     if a.export:
         spec.export = a.export.split(",")
+    if a.sensitivity:
+        spec.sensitivity = a.sensitivity
+    if a.sensitivity_windows:
+        spec.sensitivity_windows = a.sensitivity_windows
     if a.mixed_precision:
         mp = Path(a.mixed_precision)
         spec.mixed_precision = yaml.safe_load(mp.read_text() if mp.is_file() else a.mixed_precision)
