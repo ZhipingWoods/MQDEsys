@@ -10,11 +10,12 @@ import JobsPage from "./pages/Jobs";
 import JobPage from "./pages/Job";
 import HardwarePage from "./pages/Hardware";
 import ComparePage from "./pages/Compare";
+import CatalogPage from "./pages/Catalog";
 
 const NAV: { group: string; items: [string, string, string][] }[] = [
   { group: "评估前", items: [["/fit", "◎", "部署预评估"], ["/graph", "◇", "模型结构"], ["/estimate", "▦", "资源预估"]] },
   { group: "量化与评测", items: [["/new", "＋", "新建作业"], ["/jobs", "▶", "作业与执行"], ["/compare", "⇄", "配方对比"]] },
-  { group: "部署", items: [["/hardware", "▣", "硬件与后端"]] },
+  { group: "部署", items: [["/hardware", "▣", "硬件与后端"], ["/catalog", "◈", "模型目录"]] },
 ];
 
 function ThemeToggle() {
@@ -80,6 +81,7 @@ function App() {
           <Route path="/jobs/:id" element={<JobPage />} />
           <Route path="/compare" element={<ComparePage />} />
           <Route path="/hardware" element={<HardwarePage />} />
+          <Route path="/catalog" element={<CatalogPage />} />
         </Routes>
       </main>
     </div>

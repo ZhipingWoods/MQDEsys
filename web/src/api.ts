@@ -244,6 +244,7 @@ export interface ModelFit {
   estimate_confidence: string; score: number;
   runtime: string; installed: boolean; installed_providers: string[]; usable_context: number; disk_size_gb: number;
   supports_tp: number[]; verify_command: string; license: string; capability_ids: string[];
+  hf_downloads: number; hf_likes: number;
   fit_label: string; run_mode_label: string; estimate_confidence_label: string;
   estimate_basis: { method: string; gpu_bandwidth_gbps: number; ddr_bandwidth_gbps: number; efficiency: number; assumed_context: number; local_calibration: number; };
   formula_tps: number;
@@ -329,9 +330,9 @@ export const api = {
   plan: (model: string, q: Partial<FitQuery>) => req<FitPlan>("POST", "/fit:plan", { model, ...q }),
   claim: (model: string, hardware: string, min_tps: number) => req<ClaimBounds>("POST", "/fit:claim", { model, hardware, min_tps }),
   installed: () => req<InstalledIndex>("GET", "/installed"),
-  catalog: (search = "", provider = "", limit = 100, include_demoted = false) =>
+  catalog: (search = "", provider = "", capability = "", limit = 100, include_demoted = false) =>
     req<{ updated_at: string; total: number; demoted: number; models: CatalogModel[] }>(
-      "GET", `/catalog?search=${encodeURIComponent(search)}&provider=${encodeURIComponent(provider)}&limit=${limit}&include_demoted=${include_demoted ? 1 : 0}`),
+      "GET", `/catalog?search=${encodeURIComponent(search)}&provider=${encodeURIComponent(provider)}&capability=${encodeURIComponent(capability)}&limit=${limit}&include_demoted=${include_demoted ? 1 : 0}`),
   hfSearch: (q: string, limit = 20) => req<{ models: HfHit[] }>("GET", `/hf/search?q=${encodeURIComponent(q)}&limit=${limit}`),
   download: (model: string, opts: { quant?: string; budget?: string; list?: boolean } = {}) =>
     req<DownloadStatus & { groups?: { group: string; bytes: number; files: number; quality: number }[]; chosen?: string }>("POST", "/download", { model, ...opts }),
