@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api, fmt, fmtBytes, LLMJobReport, LLMRecipeReport, Sensitivity } from "../api";
+import { api, fmt, fmtBytes, LlamaCppDeploy, llamaSpeed, LLMJobReport, LLMRecipeReport, Sensitivity } from "../api";
 import { baseOption, Chart, series, token } from "../charts";
 import { Tile } from "./Estimate";
 import { LayerAnalysis } from "./LayerAnalysis";
@@ -17,6 +17,7 @@ export const LLM_STAGES: [string, string][] = [
   ["export", "导出"],
   ["real_check", "真实/伪量化一致性"],
   ["eval_real", "真实权重 PPL"],
+  ["deploy_llamacpp", "llama.cpp 部署"],
   ["report", "报告"],
 ];
 
@@ -154,7 +155,73 @@ function Overview({ rep, rs }: { rep: LLMJobReport; rs: LLMRecipeReport[] }) {
         </p>
       </div>
       {rs.some((r) => r.export) && <ExportCard rs={rs} />}
+      {rep.llamacpp && <LlamaCppCard d={rep.llamacpp} />}
     </>
+  );
+}
+
+function LlamaCppCard({ d }: { d: LlamaCppDeploy }) {
+  const rows = Object.values(d.results);
+  const f16 = d.results.f16;
+  return (
+    <div className="card">
+      <h2>llama.cpp 部署实测（CPU {d.threads} 线程，GGUF）</h2>
+      <div className="grid-2">
+        <Chart
+          height={260}
+          option={() => {
+            const o = baseOption();
+            return {
+              ...o,
+              legend: { ...(o.legend as object), data: ["解码 tok/s", "PPL"] },
+              grid: { ...(o.grid as object), top: 48 },
+              tooltip: { ...(o.tooltip as object), trigger: "axis", axisPointer: { type: "shadow" } },
+              xAxis: { ...(o.xAxis as object), type: "category", data: rows.map((r) => r.type.toUpperCase()) },
+              yAxis: [
+                { ...(o.yAxis as object), type: "value", name: "tok/s", nameTextStyle: { color: token("--text-muted") } },
+                { ...(o.yAxis as object), type: "value", name: "PPL", scale: true, splitLine: { show: false }, nameTextStyle: { color: token("--text-muted") } },
+              ],
+              series: [
+                { name: "解码 tok/s", type: "bar", barMaxWidth: 28, itemStyle: { color: series(0), borderRadius: [4, 4, 0, 0] }, data: rows.map((r) => llamaSpeed(r).tg ?? null) },
+                { name: "PPL", type: "line", yAxisIndex: 1, symbolSize: 8, lineStyle: { color: series(1), width: 2 }, itemStyle: { color: series(1) }, data: rows.map((r) => r.ppl) },
+              ],
+            };
+          }}
+        />
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>类型</th>
+                <th className="num">文件</th>
+                <th className="num">PPL</th>
+                <th className="num">相对 F16</th>
+                <th className="num">预填充</th>
+                <th className="num">解码</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.type}>
+                  <td>
+                    <b>{r.type.toUpperCase()}</b>
+                    {r.fallback && r.fallback.length > 0 && <span className="muted small"> · {r.fallback.length} 层回退</span>}
+                  </td>
+                  <td className="num">{fmtBytes(r.bytes)}</td>
+                  <td className="num">{fmt(r.ppl, 3)}</td>
+                  <td className="num">{f16 && r !== f16 ? pct(100 * (r.ppl / f16.ppl - 1)) : "–"}</td>
+                  <td className="num">{fmt(llamaSpeed(r).pp, 0)}</td>
+                  <td className="num">{fmt(llamaSpeed(r).tg, 1)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p className="note">
+        {d.protocol}（与上方 PPL 协议不同，只在本表内比较）。GGUF 用 llama.cpp 自己的块量化（与 ggml 参考实现逐字节一致）量化原始权重，与配方/算法无关；行长不是 256 的倍数的层回退到 Q4_0。
+      </p>
+    </div>
   );
 }
 
@@ -198,7 +265,7 @@ function ExportCard({ rs }: { rs: LLMRecipeReport[] }) {
         </tbody>
       </table>
       <p className="note">
-        检查方式：用参考解包器读回 checkpoint，逐层比较整数码与零点（必须完全一致），再用 fp16 scale 反量化出后端实际使用的权重重新测 PPL。GPTQ/AWQ 格式不含激活量化；AWQ/SmoothQuant 的激活缩放需先折叠进前一层才能导出。
+        检查方式：用参考解包器读回 checkpoint，逐层比较整数码与零点（必须完全一致），再用 fp16 scale 反量化出后端实际使用的权重重新测 PPL。GPTQ/AWQ 格式不含激活量化。AWQ/SmoothQuant 的平滑系数按输入分组共享，并折叠进前一层（norm 或 up_proj/v_proj），因此可以直接导出；GQA 模型的 o_proj 无法折叠，保持不做平滑。
       </p>
     </div>
   );

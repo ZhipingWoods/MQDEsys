@@ -152,12 +152,21 @@ Result<void> serve(const ServerOptions& o) {
   // "hf:<repo>" names a catalog entry (no local file access); anything else must be under an allowed root.
   auto model_allowed = [&](const std::string& m) { return m.starts_with("hf:") || path_allowed(o.allowed_roots, m); };
 
-  auto get_spec = [&](const std::string& path) -> Result<modelspec::ModelSpec> {
+  // need_tensors: the catalog only has config-level metadata; structure views need the real tensor list.
+  auto get_spec = [&](const std::string& path, bool need_tensors = false) -> Result<modelspec::ModelSpec> {
     if (path.starts_with("hf:")) {
       const auto c = catalog_snapshot();
-      const auto* e = hub::find(c, path);
-      if (!e) return make_error(Errc::kNotFound, "model {} is not in the catalog (run `mqde catalog update`)", path);
-      return hub::to_spec(*e);
+      if (const auto* e = hub::find(c, path); e && !need_tensors) return hub::to_spec(*e);
+      // Not in the catalog: read config.json + safetensors headers from the Hub (no weights), cached.
+      {
+        std::lock_guard lk(spec_mu);
+        if (auto it = spec_cache.find(path); it != spec_cache.end()) return it->second;
+      }
+      auto s = hub::inspect_remote(hub::HfOptions{}, path.substr(3));
+      if (!s) return std::unexpected(s.error().with_context("model " + path + " is not in the catalog; Hub lookup failed"));
+      std::lock_guard lk(spec_mu);
+      spec_cache[path] = *s;
+      return s;
     }
     std::lock_guard lk(spec_mu);
     if (auto it = spec_cache.find(path); it != spec_cache.end()) return it->second;
@@ -240,8 +249,8 @@ Result<void> serve(const ServerOptions& o) {
     auto body = parse_body(req, res);
     if (!body) return;
     const auto path = body->value("path", "");
-    if (!path_allowed(o.allowed_roots, path)) return send_error(res, 403, "forbidden", "path is outside allowed roots");
-    auto s = get_spec(path);
+    if (!model_allowed(path)) return send_error(res, 403, "forbidden", "path is outside allowed roots");
+    auto s = get_spec(path, true);
     if (!s) return send_error(res, s.error());
     send_json(res, modelspec::to_json(*s, body->value("tensors", false)));
   });
@@ -336,8 +345,8 @@ Result<void> serve(const ServerOptions& o) {
     auto body = parse_body(req, res);
     if (!body) return;
     const auto path = body->value("path", "");
-    if (!path_allowed(o.allowed_roots, path)) return send_error(res, 403, "forbidden", "path is outside allowed roots");
-    auto s = get_spec(path);
+    if (!model_allowed(path)) return send_error(res, 403, "forbidden", "path is outside allowed roots");
+    auto s = get_spec(path, true);
     if (!s) return send_error(res, s.error());
     send_json(res, modelspec::to_graph_json(*s, body->value("focus", ""), body->value("depth", 2)));
   });
@@ -857,6 +866,12 @@ Result<void> serve(const ServerOptions& o) {
       if (auto p = runner.get(id)) j["gpu"] = p->gpu;
       j["state"] = merged_state(j["state"].get<std::string>(), runner.get(id));
       const auto rep = read_json_file(e.path() / "report.json");
+      auto spec_yaml = load_structured_file(e.path() / "job.yaml");
+      const Json jy = spec_yaml ? *spec_yaml : Json::object();
+      // report.kind is written by llm_job; job.yaml carries model.type for server-submitted jobs; else VLA
+      j["kind"] = rep.is_object() && rep.value("kind", "") == "llm" ? std::string("llm")
+                                                                   : jy.value("/model/type"_json_pointer, std::string("vla"));
+      j["device"] = jy.value("/deploy/device"_json_pointer, rep.is_object() ? rep.value("/spec/device"_json_pointer, std::string()) : std::string());
       if (rep.is_object()) {
         j["name"] = rep.value("/spec/name"_json_pointer, id);
         j["recipes"] = rep.value("/spec/recipes"_json_pointer, Json::array());

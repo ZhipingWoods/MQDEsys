@@ -38,6 +38,10 @@ GROUPS = [
     ("mlp_out", re.compile(r"(down_proj|fc2|w2)$")),
 ]
 
+# Where a group's shared input scale s is folded (T-0603): the op producing that input is divided by s
+# (norm weight, or the output rows of a linear), the consumers' weights are multiplied by s. FP-exact.
+FOLD_PREV = {"attn_in": "input_layernorm", "attn_out": "v_proj", "mlp_in": "post_attention_layernorm", "mlp_out": "up_proj"}
+
 
 @dataclass
 class LayerPolicy:
@@ -102,6 +106,7 @@ class BlockwiseQuantizer:
         max_rows: int = 2048,
         act_static: str | None = None,  # None = dynamic per-token; minmax | ema | percentile = static per-tensor
         progress: Callable[[dict[str, Any]], None] | None = None,
+        fold_scales: bool = True,  # AWQ/SmoothQuant: one scale per input group, folded into the previous op
     ) -> None:
         self.ad = adapter
         self.recipe = recipe
@@ -112,22 +117,78 @@ class BlockwiseQuantizer:
         self.act_static = act_static
         self.progress = progress or (lambda e: None)
         self.originals: dict[str, nn.Linear] = {}
+        steps = algorithms.resolve(algorithm)
+        self.transform = next((t for t in steps if t in ("awq", "smoothquant")), None)
+        self.fold = fold_scales and self.transform is not None
+        # with folding the per-layer algorithm is just the quantizer step; the transform is applied per group
+        self.layer_algorithm = "+".join(t for t in steps if t != self.transform) if self.fold else algorithm
+        self._saved: list[tuple[torch.Tensor, torch.Tensor]] = []  # (tensor modified in place, original copy)
+        self._fold_info: dict[str, dict[str, Any]] = {}
 
     def _linears(self, block: nn.Module) -> dict[str, nn.Linear]:
         return {n: m for n, m in block.named_modules() if isinstance(m, nn.Linear)}
 
     def _groups(self, block: nn.Module) -> list[list[str]]:
+        return [g for _, g in self._keyed_groups(block)]
+
+    def _keyed_groups(self, block: nn.Module) -> list[tuple[str, list[str]]]:
         lin = self._linears(block)
         out, seen = [], set()
-        for _, pat in GROUPS:
+        for key, pat in GROUPS:
             g = [n for n in lin if pat.search(n) and n not in seen]
             seen.update(g)
             if g:
-                out.append(g)
+                out.append((key, g))
         rest = [n for n in lin if n not in seen]
         if rest:
-            out.append(rest)
+            out.append(("other", rest))
         return out
+
+    def _scale_(self, t: torch.Tensor, s: torch.Tensor, dim: int, divide: bool) -> None:
+        self._saved.append((t, t.detach().clone()))
+        shape = [1] * t.dim()
+        shape[dim] = -1
+        f = s.to(t.device, torch.float32).reshape(shape)
+        t.data.copy_((t.data.to(torch.float32) / f if divide else t.data.to(torch.float32) * f).to(t.dtype))
+
+    @torch.inference_mode()
+    def _fold_block(self, block: nn.Module, bi: int, prefix: str, hs: list[torch.Tensor], kws: list[dict[str, Any]]) -> None:
+        """Search one smoothing scale per input group on the FP block and fold it (llm-awq's apply_scale)."""
+        groups = [(k, g) for k, g in self._keyed_groups(block) if k in FOLD_PREV]
+        cache = self._capture(block, [g[0] for _, g in groups], hs, kws)
+        mods = dict(block.named_modules())
+        fn, params = algorithms.ALGO_REGISTRY[self.transform], algorithms.algorithm_params(self.transform)
+        for key, names in groups:
+            prev_name = next((n for n in mods if n.endswith(FOLD_PREV[key])), None)
+            prev = mods.get(prev_name) if prev_name else None
+            consumers = [mods[n] for n in names]
+            cin = consumers[0].in_features
+            if isinstance(prev, nn.Linear):
+                ok = prev.out_features == cin  # e.g. v_proj -> o_proj breaks under GQA (kv heads < heads)
+            else:
+                w = getattr(prev, "weight", None)
+                ok = prev is not None and w is not None and w.dim() == 1 and w.numel() == cin and "gemma" not in type(prev).__name__.lower()
+            x = cache.get(names[0])
+            note = {"transform": self.transform, "group": key}
+            if not ok or x is None:
+                note["folded"] = f"no ({prev_name or 'no producer'} not foldable)"
+            else:
+                ws = MixedPrecisionPolicy.apply_bits(self.recipe.weight, self.policy.lookup(f"{prefix}.{names[0]}", bi).bits)
+                w_cat = torch.cat([m.weight.detach().to(torch.float32) for m in consumers], dim=0)
+                r = fn(w_cat, x.to(w_cat.device), ws, self.recipe.act, params)
+                if r.in_scale is None:
+                    note["folded"] = "no (identity scale was best)"
+                else:
+                    sc = r.in_scale
+                    for m in consumers:
+                        self._scale_(m.weight, sc, dim=1, divide=False)
+                    self._scale_(prev.weight, sc, dim=0, divide=True)  # norm weight, or a linear's output rows
+                    if getattr(prev, "bias", None) is not None:
+                        self._scale_(prev.bias, sc, dim=0, divide=True)
+                    note.update({"folded": f"into {prev_name}", "s_min": float(sc.min()), "s_max": float(sc.max()), **(r.info or {})})
+            for n in names:
+                self._fold_info[f"{prefix}.{n}"] = note
+        del cache
 
     @torch.inference_mode()
     def _capture(self, block: nn.Module, names: list[str], hs: list[torch.Tensor], kws: list[dict[str, Any]]) -> ActivationCache:
@@ -155,7 +216,7 @@ class BlockwiseQuantizer:
         t0 = time.perf_counter()
         w = lin.weight.detach().to(torch.float32)
         xc = x.to(w.device) if x is not None else None
-        ar = algorithms.run(self.algorithm, w, xc, ws, as_)
+        ar = algorithms.run(self.layer_algorithm, w, xc, ws, as_)
         wq, w_scale, w_zero = algorithms.materialize(ar, ws)
         eff = wq / ar.in_scale if ar.in_scale is not None else wq
         wm = compare(w, eff)
@@ -166,6 +227,8 @@ class BlockwiseQuantizer:
             w_kurtosis=core.tensor_stats(w.cpu().numpy())["kurtosis"],
         )
         tr.algorithm, tr.algo_info = self.algorithm, {**(ar.info or {}), "bits": ws.bits}
+        if full in self._fold_info:
+            tr.algo_info["smooth"] = self._fold_info[full]
         act_p = None
         if xc is not None and as_.enabled and self.act_static:
             xs0 = xc / ar.in_scale if ar.in_scale is not None else xc
@@ -202,8 +265,10 @@ class BlockwiseQuantizer:
         self.policy.n_blocks = len(blocks)
         for bi, block in enumerate(blocks):
             prefix = self.ad.block_prefix(bi)
+            if self.fold:
+                self._fold_block(block, bi, prefix, hs, kws)
             for group in self._groups(block):
-                needs_x = self.algorithm != "rtn" or self.recipe.act.enabled
+                needs_x = self.layer_algorithm != "rtn" or self.recipe.act.enabled
                 cache = self._capture(block, group, hs, kws) if needs_x else None
                 for name in group:
                     tr = self._quantize_layer(block, bi, prefix, name, cache.get(name) if cache else None)
@@ -223,3 +288,7 @@ class BlockwiseQuantizer:
         for full, lin in self.originals.items():
             replace_module(root, full, lin)
         self.originals.clear()
+        for t, orig in reversed(self._saved):  # undo scale folding (norms / producer rows / consumer columns)
+            t.data.copy_(orig)
+        self._saved.clear()
+        self._fold_info.clear()

@@ -15,6 +15,7 @@ const fmtParams = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1
 export default function GraphPage() {
   const lib = useAsync(api.models, []);
   const [model, setModel] = useState("");
+  const [hfInput, setHfInput] = useState("");
   const [focus, setFocus] = useState("");
   const [picked, setPicked] = useState<GraphNode | null>(null);
   useEffect(() => {
@@ -41,13 +42,23 @@ export default function GraphPage() {
         </div>
         <div className="field" style={{ minWidth: 320 }}>
           <label>模型</label>
-          <select value={model} onChange={(e) => setModel(e.target.value)}>
+          <select value={model.startsWith("hf:") ? "" : model} onChange={(e) => setModel(e.target.value)}>
+            {model.startsWith("hf:") && <option value="">{model}</option>}
             {lib.data?.map((m) => (
               <option key={m.path} value={m.path}>
                 {m.name} {m.family ? `(${m.family})` : ""}
               </option>
             ))}
           </select>
+        </div>
+        <div className="field" style={{ minWidth: 280 }}>
+          <label>或 Hub 模型（不下载权重）</label>
+          <div className="form-row" style={{ margin: 0, flexWrap: "nowrap" }}>
+            <input placeholder="Qwen/Qwen2.5-7B-Instruct" value={hfInput} onChange={(e) => setHfInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && hfInput && setModel(`hf:${hfInput.replace(/^hf:/, "")}`)} />
+            <button className="secondary" disabled={!hfInput} onClick={() => setModel(`hf:${hfInput.replace(/^hf:/, "")}`)}>
+              查看
+            </button>
+          </div>
         </div>
       </div>
       {meta && (

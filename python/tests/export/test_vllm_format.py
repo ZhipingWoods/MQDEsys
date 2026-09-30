@@ -60,7 +60,7 @@ def test_mixed_precision_goes_into_dynamic(tmp_path: Path) -> None:
 
 def test_check_rejects_unexportable_layers(tmp_path: Path) -> None:
     ad = tiny()
-    BlockwiseQuantizer(ad, RecipeSpec.load("w4a16"), "awq").run(calib())  # AWQ keeps an activation divisor
+    BlockwiseQuantizer(ad, RecipeSpec.load("w4a16"), "awq", fold_scales=False).run(calib())  # per-layer divisors
     probs = get_exporter("gptq").check(ad.model)
     assert probs and all("fold" in r for _, r in probs)
     with pytest.raises(ValueError, match="cannot be exported"):

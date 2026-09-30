@@ -63,7 +63,7 @@ CUDA_VISIBLE_DEVICES=2 PYTHONPATH=python python -m mqde.pipeline.vla_job example
 - `real_check`：用参考解包器读回，逐层比对整数码与零点（必须 0 处不一致）；
 - `eval_real`：把 fp16 scale 反量化出的真实权重换进模型重测 PPL（Qwen2.5-0.5B W4A16：与伪量化相差 0.0005%）。
 
-AWQ / SmoothQuant 的激活缩放尚未折叠进前一层，这类层会被导出器拒绝并说明原因。
+AWQ / SmoothQuant 的平滑系数按输入分组（q/k/v、gate/up、down、o）共享一个，并折叠进产生该输入的算子（input_layernorm、post_attention_layernorm、up_proj 行、v_proj 行），FP 下等价、推理时无额外除法，因此可以直接导出；GQA 模型里 v_proj 行数与 o_proj 输入不同，o_proj 不做平滑。
 
 ## 5. llama.cpp（GGUF，纯 CPU 闭环）
 

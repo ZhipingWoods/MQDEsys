@@ -25,6 +25,7 @@ export default function NewJobPage() {
   const [downBits, setDownBits] = useState("");
   const [exportFmts, setExportFmts] = useState<string[]>(["gptq"]);
   const [sens, setSens] = useState("");
+  const [gguf, setGguf] = useState<string[]>([]);
   const [dataset, setDataset] = useState(DEFAULT_DATASET);
   const [nCalib, setNCalib] = useState(16);
   const [nEval, setNEval] = useState(24);
@@ -69,7 +70,7 @@ export default function NewJobPage() {
           },
           calibration: { dataset: "wikitext-2-raw-v1:train", n_samples: nCalib, seq_len: seqLen },
           evaluation: { dataset: "wikitext-2-raw-v1:test", seq_len: seqLen, max_windows: windows },
-          deploy: { hardware: hw, device },
+          deploy: { hardware: hw, device, ...(gguf.length ? { llamacpp: { types: gguf } } : {}) },
           ...(exportFmts.length ? { export: { formats: exportFmts } } : {}),
           ...(sens ? { analysis: { sensitivity: sens, sensitivity_windows: 8 } } : {}),
         };
@@ -273,6 +274,18 @@ export default function NewJobPage() {
               <div className="chips">
                 {["gptq", "awq"].map((f) => (
                   <span key={f} className={`chip ${exportFmts.includes(f) ? "on" : ""}`} onClick={() => setExportFmts(exportFmts.includes(f) ? exportFmts.filter((x) => x !== f) : [...exportFmts, f])}>
+                    {f.toUpperCase()}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {kind === "llm" && (
+            <div className="field">
+              <label>llama.cpp 部署实测（GGUF，CPU）</label>
+              <div className="chips">
+                {["q8_0", "q4_0", "q4_k", "q2_k"].map((f) => (
+                  <span key={f} className={`chip ${gguf.includes(f) ? "on" : ""}`} onClick={() => setGguf(gguf.includes(f) ? gguf.filter((x) => x !== f) : [...gguf, f])}>
                     {f.toUpperCase()}
                   </span>
                 ))}

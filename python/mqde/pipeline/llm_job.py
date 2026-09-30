@@ -54,6 +54,7 @@ class LLMJobSpec:
     kv_override: dict[str, Any] | None = None  # e.g. {format: int, bits: 8}
     mixed_precision: dict[str, Any] | None = None
     export: list[str] = field(default_factory=list)  # gptq | awq: real checkpoints + fake/real check (S09/S10)
+    llamacpp: list[str] = field(default_factory=list)  # GGUF types to deploy on llama.cpp (CPU): q8_0 q4_0 q4_k q2_k
     sensitivity: str | None = None  # block | type: per-group FP fallback ranking + mixed-precision suggestion
     sensitivity_windows: int = 8
     suggest_target: float = 0.5  # share of the PPL degradation the suggested rules should win back
@@ -80,6 +81,7 @@ class LLMJobSpec:
             kv_override=q.get("kv") if isinstance(q.get("kv"), dict) and "format" in q.get("kv", {}) else None,
             mixed_precision=q.get("mixed_precision"),
             export=list(d.get("export", {}).get("formats", [])),
+            llamacpp=list((dep.get("llamacpp") or {}).get("types", [])),
             sensitivity=(d.get("analysis") or {}).get("sensitivity"),
             sensitivity_windows=int((d.get("analysis") or {}).get("sensitivity_windows", 8)),
             output_dir=d.get("output_dir", "runs"),
@@ -160,6 +162,32 @@ class LLMJob:
         top = sens["ranking"][:3]
         self.ev.log(f"{recipe}: most sensitive {s.sensitivity}s {top}; suggestion {sens['suggestion']['groups']}")
         return sens
+
+    def _llamacpp(self) -> dict[str, Any]:
+        """Deploy the FP model as GGUF (F16 + requested block types) on llama.cpp and measure PPL and speed.
+        GGUF quantizes the original weights with llama.cpp's own numerics; it is independent of the recipes."""
+        from mqde.backend.llamacpp import bench, perplexity
+        from mqde.data.text import wikitext_text
+        from mqde.export.gguf import convert_f16, requantize
+
+        s = self.spec
+        d = self.out / "export" / "gguf"
+        d.mkdir(parents=True, exist_ok=True)
+        text = d / "wiki.test.txt"
+        text.write_text(wikitext_text("test"))
+        threads = torch.get_num_threads()
+        f16 = convert_f16(s.model_path, d / "model-f16.gguf")
+        out: dict[str, Any] = {"protocol": f"llama-perplexity ctx {s.eval_seq_len}, {s.eval_windows} chunks, scores the second half of each chunk",
+                               "threads": threads, "results": {}}
+        for ty in ["f16", *s.llamacpp]:
+            path = f16 if ty == "f16" else d / f"model-{ty}.gguf"
+            info = {"type": ty, "bytes": path.stat().st_size} if ty == "f16" else requantize(f16, path, ty)
+            self.ev.log(f"llama.cpp {ty}: perplexity + bench")
+            p = perplexity(path, text, ctx=s.eval_seq_len, chunks=s.eval_windows, threads=threads)
+            b = bench(path, pp=s.eval_seq_len, tg=64, threads=threads, reps=2)
+            out["results"][ty] = {**info, **p, **{k: v for k, v in b.items() if k.endswith("per_s")}, "path": str(path)}
+            self.ev.emit("metric", name=f"llamacpp.{ty}.ppl", value=p["ppl"], msg=f"llama.cpp {ty}")
+        return out
 
     def _export(self, ad: HFCausalLM, ids: torch.Tensor, recipe: str, fake_ppl: float) -> dict[str, Any]:
         from mqde.export import get_exporter
@@ -244,6 +272,9 @@ class LLMJob:
             q.restore()
             self.report["recipes"][recipe.name] = rep
             self._save()
+        if s.llamacpp:
+            self.report["llamacpp"] = self._stage("deploy_llamacpp", self._llamacpp, ",".join(s.llamacpp))
+            self._save()
         self._stage("report", self._save)
 
 
@@ -268,6 +299,7 @@ def main() -> None:
     ap.add_argument("--mixed-precision", help="inline JSON or a YAML/JSON file: {rules: [{match, bits, skip}]}")
     ap.add_argument("--export", help="comma separated: gptq,awq")
     ap.add_argument("--sensitivity", choices=["block", "type"])
+    ap.add_argument("--llamacpp", help="GGUF types to deploy on llama.cpp, e.g. q8_0,q4_k")
     ap.add_argument("--sensitivity-windows", type=int)
     ap.add_argument("--job-dir")
     ap.add_argument("--job-id", help="server-assigned id; output goes to <output_dir>/<job-id>")
@@ -285,6 +317,8 @@ def main() -> None:
         spec.export = a.export.split(",")
     if a.sensitivity:
         spec.sensitivity = a.sensitivity
+    if a.llamacpp:
+        spec.llamacpp = a.llamacpp.split(",")
     if a.sensitivity_windows:
         spec.sensitivity_windows = a.sensitivity_windows
     if a.mixed_precision:

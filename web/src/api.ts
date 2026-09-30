@@ -116,6 +116,8 @@ export interface JobListItem {
   recipes?: string[];
   model?: string;
   gpu?: number;
+  kind?: "vla" | "llm";
+  device?: string;
   started_ts?: number;
   last_ts?: number;
   n_events: number;
@@ -137,6 +139,8 @@ export interface LayerTrace {
   act_kurtosis: number | null;
   act_outlier_ratio: number | null;
   w_kurtosis: number | null;
+  algorithm?: string;
+  algo_info?: { bits?: number; act?: string } & Record<string, unknown>;
 }
 
 export interface Score {
@@ -236,6 +240,30 @@ export interface LLMJobReport {
   data?: { calib: { dataset: string; n: number; seq_len: number }; eval: { dataset: string; windows: number; seq_len: number } };
   baseline?: PplResult;
   recipes?: Record<string, LLMRecipeReport>;
+  env?: { torch: string; torch_threads: number; device: string };
+  llamacpp?: LlamaCppDeploy;
+}
+
+export interface LlamaCppRun {
+  type: string;
+  bytes: number;
+  ppl: number;
+  ppl_err: number;
+  tensor_types?: Record<string, number>;
+  fallback?: string[];
+  [k: string]: unknown; // pp<N>_tokens_per_s / tg<N>_tokens_per_s
+}
+
+export interface LlamaCppDeploy {
+  protocol: string;
+  threads: number;
+  results: Record<string, LlamaCppRun>;
+}
+
+/** tokens/s entries of a llama-bench result, e.g. {pp: 631, tg: 18.5}. */
+export function llamaSpeed(r: LlamaCppRun): { pp?: number; tg?: number } {
+  const pick = (k: string) => Object.entries(r).find(([n]) => n.startsWith(k) && n.endsWith("_tokens_per_s"))?.[1] as number | undefined;
+  return { pp: pick("pp"), tg: pick("tg") };
 }
 
 export interface JobReport {

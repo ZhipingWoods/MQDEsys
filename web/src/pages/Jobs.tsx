@@ -34,10 +34,11 @@ export default function JobsPage() {
             <tr>
               <th>作业</th>
               <th>名称</th>
+              <th>类型</th>
               <th>状态</th>
               <th>当前阶段</th>
               <th>配方</th>
-              <th className="num">GPU</th>
+              <th className="num">设备</th>
               <th className="num">耗时</th>
             </tr>
           </thead>
@@ -51,17 +52,20 @@ export default function JobsPage() {
                 </td>
                 <td>{j.name ?? "–"}</td>
                 <td>
+                  <span className="badge">{j.kind === "llm" ? "LLM" : "VLA"}</span>
+                </td>
+                <td>
                   <StateBadge state={j.state} />
                 </td>
                 <td>{j.stage ?? "–"}</td>
                 <td className="small">{(j.recipes ?? []).join(", ")}</td>
-                <td className="num">{j.gpu ?? "–"}</td>
+                <td className="num">{j.device === "cpu" ? "CPU" : j.gpu != null && j.gpu >= 0 ? `GPU ${j.gpu}` : "–"}</td>
                 <td className="num">{j.started_ts && j.last_ts ? `${Math.round(j.last_ts - j.started_ts)} s` : "–"}</td>
               </tr>
             ))}
             {jobs?.length === 0 && (
               <tr>
-                <td colSpan={7} className="muted">
+                <td colSpan={8} className="muted">
                   暂无作业
                 </td>
               </tr>

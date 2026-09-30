@@ -43,8 +43,8 @@ export default function EstimatePage() {
       <div className="card">
         <div className="form-row">
           <div className="field grow">
-            <label>模型路径（本地）</label>
-            <input value={model} onChange={(e) => setModel(e.target.value)} />
+            <label>模型：本地目录，或 hf:org/name（只读 config + safetensors 头，不下载权重）</label>
+            <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="hf:Qwen/Qwen2.5-7B-Instruct" />
           </div>
           <div className="field">
             <label>目标硬件</label>
