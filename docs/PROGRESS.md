@@ -184,7 +184,19 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
   - 门禁有效性：故意加入反向依赖 + 格式错误 + 无注解函数，分别被 check_deps（`cpp/src/quant/metrics.cpp:2: 'quant' must not depend on 'server'`）、clang-format（`metrics.cpp:84:33`）、mypy（`ppl.py:37 no-untyped-def`）指出并使门禁失败。
   - 为此次门禁做的实质修复：ruff 116 → 0（含 `zip(..., strict=True)` 7 处、percentile 下界 bug 之外的 `E741`/长行/未用 noqa）；mypy 51 → 0（`FakeQuantLinear` 的 buffer 类型声明、`materialize` 返回 Optional zero、GPTQ 组参数断言、进度回调改为返回 None 的具名函数等）；clang-format 一次性格式化 51 个文件（1354+/833-，纯格式，ctest 仍 98/98）；删除 `quant_spec.cpp` 里 `? 8 : 8` 的死分支。
   - 全功能 LLM 作业（API 提交，CPU）：W4A16/W4A8 GPTQ + KV int8 + 按层类型敏感度 + GPTQ/AWQ 导出 + llama.cpp(q8_0,q4_k) 一次跑通；W4A16 PPL 20.411（导出后真实权重 20.412），敏感度最差层类型 `mlp.down_proj`/`up_proj`/`gate_proj`，建议升 8 bit 的是 `self_attn.v_proj`+`mlp.down_proj`；llama.cpp：F16 13.890（27.9 tok/s 解码）、我们的 Q8_0 13.935（41.6）、Q4_K 15.741（54.2）。
-- **未完成 / 下一步**：clang-tidy 需要一致的 clang 工具链（装 conda `clangxx` 或系统 clang-19+）才能真正跑；T-0006 CI 可直接调用 `scripts/check_all.sh`；折叠后的 AWQ/SmoothQuant PPL 对照仍在后台跑（`/cache/wuzhiping/llm_fold`）。
+- **未完成 / 下一步**：clang-tidy 需要一致的 clang 工具链（装 conda `clangxx` 或系统 clang-19+）才能真正跑；T-0006 CI 可直接调用 `scripts/check_all.sh`。
+- **折叠后的 AWQ/SmoothQuant 实测结果**（Qwen2.5-0.5B W4A16，原模型 18.102，对照未折叠：AWQ 20.591、AWQ+GPTQ 20.475）：
+
+  | 配置 | PPL（W+A）| PPL（+KV KIVI）| 折叠层数 | 导出码一致 | 量化耗时 |
+  |---|---|---|---|---|---|
+  | AWQ W4A16 | 21.405 | 21.402 | 144/168 | ✓ | 1267 s |
+  | AWQ+GPTQ W4A16 | 20.764 | 20.761 | 143/168 | ✓ | 1608 s |
+  | SmoothQuant+GPTQ W4A16 | 21.296 | 21.308 | 144/168 | ✓ | 218 s |
+  | AWQ W4A8 | 23.442 | 23.403 | 136/168 | ✓ | 478 s |
+  | AWQ+GPTQ W4A8 | 21.894 | 21.894 | 136/168 | ✓ | 511 s |
+  | SmoothQuant+GPTQ W4A8 | 24.088 | 24.062 | 144/168 | ✓ | 218 s |
+
+  折叠后 PPL 略高于 per-layer 独立搜索（AWQ W4A16 +0.81 PPL）：Qwen2 的 key-channel 离群值使得各层的最优缩放系数相差较大，共享一个系数是近似，AWQ+GPTQ 差距缩小到 +0.29 PPL（GPTQ 的 H-inverse 误差补偿同时修正了缩放后的残差）。SmoothQuant W4A16 介于两者之间。所有情形下整数码与零点逐层 0 处不一致（real_check 通过），可以直接用于 GPTQ/AWQ 导出。
 
 
 ### 2026-09-29 · 敏感度分析 + 混合精度建议（T-0902/T-0904）+ Hub 远程检查（T-0204）
