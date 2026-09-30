@@ -173,6 +173,31 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-09-30（晚） · Claude · GGUF Q5_0 / IQ4_NL 与 llama-quantize 回退对齐（T-0405/T-0705）
+
+- **状态**：PARTIAL（T-0405 仍缺 Marlin；T-0705 仍缺 llama-server / Metal）
+- **本次完成**：
+  1. `cpp/src/quant/pack.cpp`：新增 Q5_0（`quantize_row_q5_0_ref` 移植）与 IQ4_NL（`quantize_iq4_nl`，7 步尺度搜索，即 llama-quantize 无 imatrix 时实际调用的路径，不是 `_ref` 的 ntry=-1）。
+  2. `export/gguf.py`：形状回退改为 llama-quant.cpp `tensor_type_fallback` 的一步表（Q4_K→Q5_0，Q2_K→Q4_0）；回退类型仍不整除时保留源 F16/F32。之前是 Q4_K→Q4_0，与 llama.cpp 不一致。
+  3. 新增类型写入 NewJob 页与 `--llamacpp` 帮助。
+  4. 测试：bit-exact 对拍改为调用 `ggml_quantize_chunk`（与 llama-quantize 同一入口），6 种类型全部逐字节一致；`test_gguf` 新增 ne0=200 的 F16 保留用例。
+- **校验结果**：
+  - `scripts/check_all.sh` 全绿（clang-tidy 仍因工具链 SKIP）；ctest 98/98，pytest 72 passed。
+  - Qwen2.5-0.5B：用 `llama-quantize --tensor-type "blk\..*=<t>" --token-embedding-type f16 --output-tensor-type f16` 生成参考，6 种类型 290 个张量**全部逐字节一致**（Q4_K/Q2_K 各 144 个回退张量）。
+  - 注意：本 fork 的 `--pure` 跳过回退，896 宽的行会触发 `GGML_ASSERT(start % blck_size == 0)`，不能用作参考。
+- **实测（Qwen2.5-0.5B，llama-perplexity ctx 512 × 40 chunks，CPU 48 线程；F16 13.89）**：
+
+| 类型 | PPL | 大小 | tg64 tok/s | pp512 tok/s |
+|------|----:|-----:|-----------:|------------:|
+| Q5_0 | 14.35 | 500 MiB | 50.0 | 796 |
+| Q4_K（回退 Q5_0） | 14.75 | 488 MiB | 52.4 | 769 |
+| IQ4_NL | 15.08 | 458 MiB | 57.2 | 1016 |
+| Q4_0 | 15.84 | 458 MiB | 57.0 | 973 |
+| Q2_K（回退 Q4_0） | 27.05 | 434 MiB | 49.0 | 879 |
+
+  Q4_K 从 15.74 降到 14.75，原因是回退张量由 Q4_0 改为 Q5_0。IQ4_NL 与 Q4_0 同尺寸，PPL 低 0.77。
+- **下一步**：llama-server 适配（T-0705）；Marlin 布局（T-0405）；vLLM 冒烟等 GPU 2/3 空出（当前两卡被其他进程占用约 21 GB）。
+
 ### 2026-09-30 · 前端 LLM 化 + AWQ/SmoothQuant 折叠 + 代码门禁（T-0005/0603/0705/0807）
 - **本次完成**：
   - 前端：配方对比页重写为 LLM / VLA 双页签（LLM 为 PPL × 量化层平均位宽散点 + 明细表 + llama.cpp 部署表）；LLM 作业页新增 llama.cpp 部署卡片（解码速度柱 + PPL 折线）与敏感度卡片；作业列表显示作业类型与 CPU/GPU 设备；资源预估、模型结构页支持 `hf:org/name`（服务端对目录外模型回退 `inspect_remote`）；新建作业页可勾选 GGUF 部署类型与敏感度分析。

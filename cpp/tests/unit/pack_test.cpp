@@ -126,8 +126,9 @@ TEST(QuantPack, GgufBlockSizesAndErrorBounds) {
     double max_rel;
   };
   // rel-L2 budgets: 8 bit << 4 bit < 2 bit
-  for (const auto& c : {Case{GgufType::kQ8_0, 34, 0.01}, Case{GgufType::kQ4_0, 18, 0.15},
-                        Case{GgufType::kQ4_K, 144, 0.12}, Case{GgufType::kQ2_K, 84, 0.6}}) {
+  for (const auto& c :
+       {Case{GgufType::kQ8_0, 34, 0.01}, Case{GgufType::kQ4_0, 18, 0.15}, Case{GgufType::kQ4_K, 144, 0.12},
+        Case{GgufType::kQ2_K, 84, 0.6}, Case{GgufType::kQ5_0, 22, 0.08}, Case{GgufType::kIQ4_NL, 18, 0.12}}) {
     const auto tr = gguf_traits(c.t);
     EXPECT_EQ(tr.block_bytes, c.bytes) << tr.name;
     auto q = gguf_quantize(c.t, x.data(), n);

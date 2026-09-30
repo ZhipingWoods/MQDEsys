@@ -257,8 +257,22 @@ struct BlockQ4_K {
   uint8_t scales[12];
   uint8_t qs[kQKK / 2];
 };
+struct BlockQ5_0 {
+  uint16_t d;
+  uint8_t qh[4];  // 5th bit of each quant
+  uint8_t qs[kQK / 2];
+};
+struct BlockIQ4_NL {
+  uint16_t d;
+  uint8_t qs[kQK / 2];
+};
 static_assert(sizeof(BlockQ4_0) == 18 && sizeof(BlockQ8_0) == 34 && sizeof(BlockQ2_K) == 84 &&
-              sizeof(BlockQ4_K) == 144);
+              sizeof(BlockQ4_K) == 144 && sizeof(BlockQ5_0) == 22 && sizeof(BlockIQ4_NL) == 18);
+
+// ggml-common.h kvalues_iq4nl: the non-linear 4-bit codebook.
+constexpr int8_t kIQ4NLValues[16] = {-127, -104, -83, -65, -49, -35, -22, -10,
+                                     1,    13,   25,  38,  53,  69,  89,  113};
+constexpr float kGroupMaxEps = 1e-15f;  // ggml-quants.c GROUP_MAX_EPS
 
 inline int nearest_int(float fval) {
   const float val = fval + 12582912.f;
@@ -381,6 +395,144 @@ void dequantize_q4_0(const BlockQ4_0* x, float* y, int64_t k) {
       const int x1 = (x[i].qs[j] >> 4) - 8;
       y[i * kQK + j + 0] = x0 * d;
       y[i * kQK + j + kQK / 2] = x1 * d;
+    }
+  }
+}
+
+// quantize_row_q5_0_ref
+void quantize_q5_0(const float* x, BlockQ5_0* y, int64_t k) {
+  const int64_t nb = k / kQK;
+  for (int64_t i = 0; i < nb; i++) {
+    float amax = 0.0f, max = 0.0f;
+    for (int j = 0; j < kQK; j++) {
+      const float v = x[i * kQK + j];
+      if (amax < std::fabs(v)) {
+        amax = std::fabs(v);
+        max = v;
+      }
+    }
+    const float d = max / -16;
+    const float id = d ? 1.0f / d : 0.0f;
+    y[i].d = fp32_to_fp16(d);
+    uint32_t qh = 0;
+    for (int j = 0; j < kQK / 2; ++j) {
+      const float x0 = x[i * kQK + 0 + j] * id;
+      const float x1 = x[i * kQK + kQK / 2 + j] * id;
+      const auto xi0 = static_cast<uint8_t>(std::min<int>(31, static_cast<int8_t>(x0 + 16.5f)));
+      const auto xi1 = static_cast<uint8_t>(std::min<int>(31, static_cast<int8_t>(x1 + 16.5f)));
+      y[i].qs[j] = static_cast<uint8_t>((xi0 & 0x0F) | ((xi1 & 0x0F) << 4));
+      qh |= ((xi0 & 0x10u) >> 4) << (j + 0);
+      qh |= ((xi1 & 0x10u) >> 4) << (j + kQK / 2);
+    }
+    std::memcpy(y[i].qh, &qh, sizeof(qh));
+  }
+}
+
+void dequantize_q5_0(const BlockQ5_0* x, float* y, int64_t k) {
+  const int64_t nb = k / kQK;
+  for (int64_t i = 0; i < nb; i++) {
+    const float d = fp16_to_fp32(x[i].d);
+    uint32_t qh;
+    std::memcpy(&qh, x[i].qh, sizeof(qh));
+    for (int j = 0; j < kQK / 2; ++j) {
+      const uint8_t xh_0 = ((qh >> (j + 0)) << 4) & 0x10;
+      const uint8_t xh_1 = ((qh >> (j + 12))) & 0x10;
+      const int32_t x0 = ((x[i].qs[j] & 0x0F) | xh_0) - 16;
+      const int32_t x1 = ((x[i].qs[j] >> 4) | xh_1) - 16;
+      y[i * kQK + j + 0] = static_cast<float>(x0) * d;
+      y[i * kQK + j + kQK / 2] = static_cast<float>(x1) * d;
+    }
+  }
+}
+
+inline int best_index_int8(int n, const int8_t* val, float x) {
+  if (x <= val[0]) return 0;
+  if (x >= val[n - 1]) return n - 1;
+  int ml = 0, mu = n - 1;
+  while (mu - ml > 1) {
+    const int mav = (ml + mu) / 2;
+    if (x < val[mav])
+      mu = mav;
+    else
+      ml = mav;
+  }
+  return x - val[mu - 1] < val[mu] - x ? mu - 1 : mu;
+}
+
+// quantize_row_iq4_nl_impl(QK4_NL, 32, ..., quant_weights = NULL, ntry) for one 32-element block. ntry = 7 is
+// what llama-quantize runs (quantize_iq4_nl via ggml_quantize_chunk); ntry = -1 is quantize_row_iq4_nl_ref.
+void quantize_iq4_nl_block(const float* x, BlockIQ4_NL* y, int ntry) {
+  const int8_t* values = kIQ4NLValues;
+  uint8_t L[kQK];
+  float weight[kQK];
+  std::memset(y->qs, 0, sizeof(y->qs));
+  y->d = fp32_to_fp16(0.f);
+  for (int j = 0; j < kQK; ++j) weight[j] = x[j] * x[j];
+  float amax = 0, max = 0;
+  for (int j = 0; j < kQK; ++j) {
+    const float ax = std::fabs(x[j]);
+    if (ax > amax) {
+      amax = ax;
+      max = x[j];
+    }
+  }
+  float scale = 0;
+  if (amax >= kGroupMaxEps) {
+    float d = ntry > 0 ? -max / values[0] : max / values[0];
+    float id = 1 / d;
+    float sumqx = 0, sumq2 = 0;
+    for (int j = 0; j < kQK; ++j) {
+      const float al = id * x[j];
+      const int l = best_index_int8(16, values, al);
+      L[j] = static_cast<uint8_t>(l);
+      const float q = values[l];
+      const float w = weight[j];
+      sumqx += w * q * x[j];
+      sumq2 += w * q * q;
+    }
+    d = sumq2 > 0 ? sumqx / sumq2 : 0.f;
+    float best = d * sumqx;
+    for (int itry = -ntry; itry <= ntry; ++itry) {
+      id = (static_cast<float>(itry) + values[0]) / max;
+      sumqx = sumq2 = 0;
+      for (int j = 0; j < kQK; ++j) {
+        const float al = id * x[j];
+        const int l = best_index_int8(16, values, al);
+        const float q = values[l];
+        const float w = weight[j];
+        sumqx += w * q * x[j];
+        sumq2 += w * q * q;
+      }
+      if (sumq2 > 0 && sumqx * sumqx > best * sumq2) {
+        d = sumqx / sumq2;
+        best = d * sumqx;
+      }
+    }
+    scale = d;
+  } else {
+    // ggml leaves L uninitialised for an all-zero block with ntry <= 0; the packed nibbles then come from
+    // stack garbage. With ntry > 0 they are recomputed below (all map to the code nearest 0). Initialise
+    // so both paths are deterministic.
+    for (int j = 0; j < kQK; ++j) L[j] = static_cast<uint8_t>(best_index_int8(16, values, 0.f));
+  }
+  y->d = fp32_to_fp16(scale);
+  if (ntry > 0) {
+    const float id = scale ? 1 / scale : 0;
+    for (int j = 0; j < kQK; ++j) L[j] = static_cast<uint8_t>(best_index_int8(16, values, id * x[j]));
+  }
+  for (int j = 0; j < 16; ++j) y->qs[j] = static_cast<uint8_t>(L[j] | (L[16 + j] << 4));
+}
+
+void quantize_iq4_nl(const float* x, BlockIQ4_NL* y, int64_t k, int ntry) {
+  for (int64_t i = 0; i < k / kQK; ++i) quantize_iq4_nl_block(x + i * kQK, y + i, ntry);
+}
+
+void dequantize_iq4_nl(const BlockIQ4_NL* x, float* y, int64_t k) {
+  for (int64_t i = 0; i < k / kQK; i++) {
+    const float d = fp16_to_fp32(x[i].d);
+    for (int j = 0; j < kQK / 2; ++j) {
+      y[i * kQK + j] = d * kIQ4NLValues[x[i].qs[j] & 0xf];
+      y[i * kQK + j + kQK / 2] = d * kIQ4NLValues[x[i].qs[j] >> 4];
     }
   }
 }
@@ -570,6 +722,10 @@ GgufTraits gguf_traits(GgufType t) {
       return {kQKK, sizeof(BlockQ2_K), "Q2_K"};
     case GgufType::kQ4_K:
       return {kQKK, sizeof(BlockQ4_K), "Q4_K"};
+    case GgufType::kQ5_0:
+      return {kQK, sizeof(BlockQ5_0), "Q5_0"};
+    case GgufType::kIQ4_NL:
+      return {kQK, sizeof(BlockIQ4_NL), "IQ4_NL"};
   }
   return {0, 0, "?"};
 }
@@ -581,7 +737,10 @@ Result<GgufType> gguf_type_from_name(std::string_view name) {
   if (s == "q8_0") return GgufType::kQ8_0;
   if (s == "q2_k") return GgufType::kQ2_K;
   if (s == "q4_k") return GgufType::kQ4_K;
-  return make_error(Errc::kInvalidArgument, "unsupported GGUF type '{}' (q4_0 | q8_0 | q2_k | q4_k)", name);
+  if (s == "q5_0") return GgufType::kQ5_0;
+  if (s == "iq4_nl") return GgufType::kIQ4_NL;
+  return make_error(Errc::kInvalidArgument,
+                    "unsupported GGUF type '{}' (q4_0 | q5_0 | q8_0 | iq4_nl | q2_k | q4_k)", name);
 }
 
 Result<std::vector<uint8_t>> gguf_quantize(GgufType t, const float* x, int64_t n) {
@@ -604,6 +763,12 @@ Result<std::vector<uint8_t>> gguf_quantize(GgufType t, const float* x, int64_t n
       break;
     case GgufType::kQ4_K:
       quantize_q4_K(x, reinterpret_cast<BlockQ4_K*>(out.data()), n);
+      break;
+    case GgufType::kQ5_0:
+      quantize_q5_0(x, reinterpret_cast<BlockQ5_0*>(out.data()), n);
+      break;
+    case GgufType::kIQ4_NL:
+      quantize_iq4_nl(x, reinterpret_cast<BlockIQ4_NL*>(out.data()), n, /*ntry=*/7);
       break;
   }
   return out;
@@ -628,6 +793,12 @@ Result<void> gguf_dequantize(GgufType t, const uint8_t* data, int64_t n, float* 
       break;
     case GgufType::kQ4_K:
       dequantize_q4_K(reinterpret_cast<const BlockQ4_K*>(data), out, n);
+      break;
+    case GgufType::kQ5_0:
+      dequantize_q5_0(reinterpret_cast<const BlockQ5_0*>(data), out, n);
+      break;
+    case GgufType::kIQ4_NL:
+      dequantize_iq4_nl(reinterpret_cast<const BlockIQ4_NL*>(data), out, n);
       break;
   }
   return {};

@@ -3,9 +3,10 @@
 1. ``convert_f16``: llama.cpp's own ``convert_hf_to_gguf.py`` writes an F16 GGUF with the architecture and
    tokenizer metadata (we do not re-implement that mapping).
 2. ``requantize``: every 2-D ``blk.*.weight`` tensor is re-encoded with ``_core.gguf_quantize``, which is
-   bit-identical to ggml's ``quantize_row_*_ref`` (what ``llama-quantize --pure`` does without an imatrix).
-   Tensors whose row length is not a multiple of the block size fall back to a 32-element format, like
-   llama-quantize does (its fallbacks are Q5_0 / IQ4_NL, which we do not implement, so we use Q4_0).
+   bit-identical to what ``llama-quantize --pure`` writes without an imatrix (``ggml_quantize_chunk``).
+   Tensors whose row length is not a multiple of the block size use llama-quantize's
+   ``tensor_type_fallback`` table (Q4_K -> Q5_0, Q2_K -> Q4_0); if the fallback does not divide the row
+   either, the tensor stays in its source F16/F32, as llama-quantize does.
 Embeddings, the output head and norms keep the converter's F16/F32.
 """
 
@@ -22,10 +23,12 @@ import numpy as np
 
 from mqde import core
 
-BLOCK = {"q4_0": 32, "q8_0": 32, "q4_k": 256, "q2_k": 256}
-FALLBACK = {"q4_k": "q4_0", "q2_k": "q4_0", "q4_0": "q8_0", "q8_0": None}
-GGML_ID = {"q4_0": 2, "q8_0": 8, "q2_k": 10, "q4_k": 12}
-FILE_TYPE = {"q4_0": 2, "q8_0": 7, "q2_k": 10, "q4_k": 14}  # llama_ftype: MOSTLY_Q4_0 / Q8_0 / Q2_K / Q4_K_S
+BLOCK = {"q4_0": 32, "q5_0": 32, "q8_0": 32, "iq4_nl": 32, "q4_k": 256, "q2_k": 256}
+# llama-quant.cpp tensor_type_fallback (one step only; 32-element types have none)
+FALLBACK: dict[str, str] = {"q4_k": "q5_0", "q2_k": "q4_0"}
+GGML_ID = {"q4_0": 2, "q5_0": 6, "q8_0": 8, "q2_k": 10, "q4_k": 12, "iq4_nl": 20}
+# llama_ftype: MOSTLY_Q4_0 / Q5_0 / Q8_0 / IQ4_NL / Q2_K / Q4_K_S
+FILE_TYPE = {"q4_0": 2, "q5_0": 8, "q8_0": 7, "iq4_nl": 25, "q2_k": 10, "q4_k": 14}
 LINEAR = re.compile(r"^blk\.\d+\..+\.weight$")
 
 
@@ -75,11 +78,11 @@ def requantize(src_gguf: str | Path, dst_gguf: str | Path, type_: str) -> dict[s
         src_fp = t.tensor_type in (gguf.GGMLQuantizationType.F16, gguf.GGMLQuantizationType.F32)
         if LINEAR.match(t.name) and len(t.shape) == 2 and src_fp:
             ty: str | None = type_
-            while ty is not None and ne0 % BLOCK[ty]:
-                ty = FALLBACK[ty]
+            if ne0 % BLOCK[type_]:
+                fb = FALLBACK.get(type_)
+                ty = fb if fb is not None and ne0 % BLOCK[fb] == 0 else None
+                fallback.append(t.name)
             if ty is not None:
-                if ty != type_:
-                    fallback.append(t.name)
                 rows = data.size // ne0
                 q = core.gguf_quantize(data.astype(np.float32).reshape(-1), ty).reshape(rows, -1)
                 w.add_tensor(t.name, q, raw_shape=q.shape, raw_dtype=gguf.GGMLQuantizationType(GGML_ID[ty]))

@@ -19,6 +19,7 @@ def _src(path: Path) -> dict[str, np.ndarray]:
         "token_embd.weight": rng.normal(0, 0.02, (64, 512)).astype(np.float16),
         "blk.0.attn_q.weight": rng.normal(0, 0.02, (512, 512)).astype(np.float16),  # ne0 512: K-quant ok
         "blk.0.ffn_up.weight": rng.normal(0, 0.02, (256, 896)).astype(np.float16),  # ne0 896: needs fallback
+        "blk.0.ffn_down.weight": rng.normal(0, 0.02, (64, 200)).astype(np.float16),  # ne0 200: no 32-block type
         "blk.0.attn_norm.weight": np.ones(512, np.float32),
     }
     w = gguf.GGUFWriter(str(path), "llama")
@@ -35,7 +36,7 @@ def _src(path: Path) -> dict[str, np.ndarray]:
     return t
 
 
-@pytest.mark.parametrize("ty", ["q8_0", "q4_0", "q4_k", "q2_k"])
+@pytest.mark.parametrize("ty", ["q8_0", "q5_0", "q4_0", "iq4_nl", "q4_k", "q2_k"])
 def test_requantize(ty: str, tmp_path: Path) -> None:
     src, dst = tmp_path / "f16.gguf", tmp_path / f"{ty}.gguf"
     t = _src(src)
@@ -46,9 +47,12 @@ def test_requantize(ty: str, tmp_path: Path) -> None:
     types = {x.name: x.tensor_type.name.lower() for x in r.tensors}
     assert types["token_embd.weight"] == "f16" and types["blk.0.attn_norm.weight"] == "f32"
     assert types["blk.0.attn_q.weight"] == ty
-    expect_up = ty if ty in ("q8_0", "q4_0") else "q4_0"  # 896 % 256 != 0
+    # llama-quantize tensor_type_fallback: 896 % 256 != 0 -> Q4_K uses Q5_0, Q2_K uses Q4_0
+    expect_up = {"q4_k": "q5_0", "q2_k": "q4_0"}.get(ty, ty)
     assert types["blk.0.ffn_up.weight"] == expect_up
-    assert info["fallback"] == ([] if ty in ("q8_0", "q4_0") else ["blk.0.ffn_up.weight"])
+    assert types["blk.0.ffn_down.weight"] == "f16"  # 200 % 32 != 0: stays in the source type
+    big = ty in ("q4_k", "q2_k")
+    assert info["fallback"] == (["blk.0.ffn_up.weight"] if big else []) + ["blk.0.ffn_down.weight"]
     deq = dequantize_linear_weights(dst)
     for name in ("blk.0.attn_q.weight", "blk.0.ffn_up.weight"):
         x = t[name].astype(np.float32)

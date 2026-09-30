@@ -21,9 +21,10 @@ import pytest
 
 from mqde import core
 
-GGML_TYPES = {"q4_0": 2, "q8_0": 8, "q2_k": 10, "q4_k": 12}
-GGML_SYM = {"q4_0": "q4_0", "q8_0": "q8_0", "q2_k": "q2_K", "q4_k": "q4_K"}
-BLOCK = {"q4_0": (32, 18), "q8_0": (32, 34), "q2_k": (256, 84), "q4_k": (256, 144)}
+GGML_TYPES = {"q4_0": 2, "q5_0": 6, "q8_0": 8, "q2_k": 10, "q4_k": 12, "iq4_nl": 20}
+GGML_SYM = {"q4_0": "q4_0", "q5_0": "q5_0", "q8_0": "q8_0", "q2_k": "q2_K", "q4_k": "q4_K", "iq4_nl": "iq4_nl"}
+BLOCK = {"q4_0": (32, 18), "q5_0": (32, 22), "q8_0": (32, 34), "q2_k": (256, 84), "q4_k": (256, 144),
+         "iq4_nl": (32, 18)}
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -53,9 +54,15 @@ def test_gguf_bit_exact_vs_ggml(t: str) -> None:
     x = _data(256 * 64, 1)
     be, bb = BLOCK[t]
     ref = np.zeros(x.size // be * bb, dtype=np.uint8)
-    getattr(lib, f"quantize_row_{GGML_SYM[t]}_ref")(
-        x.ctypes.data_as(ctypes.c_void_p), ref.ctypes.data_as(ctypes.c_void_p), ctypes.c_int64(x.size)
+    # ggml_quantize_chunk without an imatrix is exactly what llama-quantize runs per tensor (for IQ4_NL it is
+    # quantize_iq4_nl's 7-step scale search, not quantize_row_iq4_nl_ref).
+    lib.ggml_quantize_chunk.restype = ctypes.c_size_t
+    rows, ncols = 64, 256
+    n = lib.ggml_quantize_chunk(
+        ctypes.c_int(GGML_TYPES[t]), x.ctypes.data_as(ctypes.c_void_p), ref.ctypes.data_as(ctypes.c_void_p),
+        ctypes.c_int64(0), ctypes.c_int64(rows), ctypes.c_int64(ncols), ctypes.c_void_p(None),
     )
+    assert n == ref.size
     ours = core.gguf_quantize(x, t)
     assert ours.shape == ref.shape
     assert np.array_equal(ours, ref), f"{t}: {(ours != ref).sum()} bytes differ"

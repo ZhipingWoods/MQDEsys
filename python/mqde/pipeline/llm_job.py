@@ -55,7 +55,7 @@ class LLMJobSpec:
     kv_override: dict[str, Any] | None = None  # e.g. {format: int, bits: 8}
     mixed_precision: dict[str, Any] | None = None
     export: list[str] = field(default_factory=list)  # gptq | awq: real checkpoints + fake/real check (S09/S10)
-    llamacpp: list[str] = field(default_factory=list)  # GGUF types to deploy on llama.cpp (CPU): q8_0 q4_0 q4_k q2_k
+    llamacpp: list[str] = field(default_factory=list)  # GGUF types to deploy on llama.cpp (CPU): q8_0 q5_0 q4_0 iq4_nl q4_k q2_k
     sensitivity: str | None = None  # block | type: per-group FP fallback ranking + mixed-precision suggestion
     sensitivity_windows: int = 8
     suggest_target: float = 0.5  # share of the PPL degradation the suggested rules should win back

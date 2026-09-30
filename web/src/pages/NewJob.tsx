@@ -284,7 +284,7 @@ export default function NewJobPage() {
             <div className="field">
               <label>llama.cpp 部署实测（GGUF，CPU）</label>
               <div className="chips">
-                {["q8_0", "q4_0", "q4_k", "q2_k"].map((f) => (
+                {["q8_0", "q5_0", "q4_0", "iq4_nl", "q4_k", "q2_k"].map((f) => (
                   <span key={f} className={`chip ${gguf.includes(f) ? "on" : ""}`} onClick={() => setGguf(gguf.includes(f) ? gguf.filter((x) => x !== f) : [...gguf, f])}>
                     {f.toUpperCase()}
                   </span>

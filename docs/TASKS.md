@@ -96,7 +96,7 @@
 | T-0402 | quant 核心：标定算法 MinMax/MSE/百分位/MovingAvg | P4 | T-0401 | L1 | DONE (2026-09-24, MinMax/MSE) |
 | T-0403 | quant 核心：INT/FP8 量化、反量化、假量化 + golden | P4 | T-0402 | L2 | DONE (2026-09-24, INT2-8/FP8 bit-exact) |
 | T-0404 | quant 核心：误差度量 | P4 | T-0401 | L1 | DONE (2026-09-24) |
-| T-0405 | quant 核心：位打包（GPTQ/AWQ/Marlin/GGUF） | P4 | T-0403 | L1 | PARTIAL (2026-09-29, GPTQ v1/v2 2/3/4/8, AWQ GEMM, GGUF Q8_0/Q4_0/Q4_K/Q2_K byte-exact vs ggml; Marlin pending) |
+| T-0405 | quant 核心：位打包（GPTQ/AWQ/Marlin/GGUF） | P4 | T-0403 | L1 | PARTIAL (2026-09-30, GPTQ v1/v2 2/3/4/8, AWQ GEMM, GGUF Q8_0/Q5_0/Q4_0/IQ4_NL/Q4_K/Q2_K byte-exact vs ggml; Marlin pending) |
 | T-0406 | quant 核心：SIMD/CUDA 加速 | P4 | T-0403 | L1 | TODO |
 | T-0407 | pybind11 绑定 `mqde._core`（DLPack） | P4 | T-0403,T-0404,T-0003 | L2 | DONE (2026-09-24, buffer protocol (DLPack later)) |
 | T-0408 | Python Torch 快速路径与双端 golden 对拍 | P4 | T-0407 | L1 | DONE (2026-09-24) |
@@ -129,7 +129,7 @@
 | T-0702 | Fake/Real 一致性检查（S10） | P7 | T-0701 | L1 | DONE (2026-09-29, 0 code mismatches; real PPL +0.0005% vs fake) |
 | T-0703 | 部署后端接口 + vLLM 适配器（S11） | P7 | T-0701,T-0504 | L2 | TODO |
 | T-0704 | SGLang 导出与适配 | P7 | T-0703 | L1 | TODO |
-| T-0705 | llama.cpp（GGUF）导出与适配 | P7 | T-0703,T-0405 | L1 | PARTIAL (2026-09-30, deploy_llamacpp stage in llm_job + UI; llama-server + Metal pending) |
+| T-0705 | llama.cpp（GGUF）导出与适配 | P7 | T-0703,T-0405 | L1 | PARTIAL (2026-09-30, deploy_llamacpp stage in llm_job + UI; llama-quantize shape fallbacks (Q5_0/F16) byte-identical; llama-server + Metal pending) |
 | T-0706 | TensorRT-LLM 导出与适配（扩展） | P7 | T-0703 | L1 | TODO |
 | T-0801 | 精度评测：lm-eval-harness / evalscope / 自定义 | P8 | T-0510 | L3 | TODO |
 | T-0802 | 部署后精度评测（S12） | P8 | T-0801,T-0703 | L1 | TODO |

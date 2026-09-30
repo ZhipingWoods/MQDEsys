@@ -11,9 +11,10 @@
 //   AWQ GEMM (llm-awq)       qweight [in, out*bits/32] packs along the output dim; qzeros [groups,
 //   out*bits/32];
 //                            4-bit words hold outputs in the order [0,2,4,6,1,3,5,7]
-//   GGUF blocks              Q8_0 / Q4_0 / Q4_K / Q2_K; quantizers are bit-identical ports of ggml's
-//                            quantize_row_*_ref (llama.cpp ggml-quants.c), dequantizers match
-//                            dequantize_row_*.
+//   GGUF blocks              Q8_0 / Q4_0 / Q5_0 / IQ4_NL / Q4_K / Q2_K; quantizers are bit-identical
+//                            ports of what llama-quantize runs without an imatrix (ggml_quantize_chunk:
+//                            quantize_row_*_ref, and quantize_iq4_nl with its 7-step scale search for
+//                            IQ4_NL), dequantizers match dequantize_row_*.
 //
 // Integer codes are unsigned in [0, 2^bits - 1] with dequant w = scale * (code - zero). Symmetric specs
 // (codes in [-2^(b-1), 2^(b-1)-1], zero 0) are exported by adding 2^(b-1) to both codes and zero.
@@ -52,7 +53,7 @@ Result<void> unpack_awq(const IntPacked& p, int64_t out, int64_t in, int64_t gro
                         uint8_t* codes, uint8_t* zeros);
 
 // ggml_type ids, so tensors can be written into GGUF files unchanged.
-enum class GgufType : uint32_t { kQ4_0 = 2, kQ8_0 = 8, kQ2_K = 10, kQ4_K = 12 };
+enum class GgufType : uint32_t { kQ4_0 = 2, kQ5_0 = 6, kQ8_0 = 8, kQ2_K = 10, kQ4_K = 12, kIQ4_NL = 20 };
 
 struct GgufTraits {
   int64_t block_elems;
@@ -60,7 +61,8 @@ struct GgufTraits {
   std::string_view name;
 };
 
-Result<GgufType> gguf_type_from_name(std::string_view name);  // "q4_0" | "q8_0" | "q2_k" | "q4_k" (any case)
+// "q4_0" | "q5_0" | "q8_0" | "iq4_nl" | "q2_k" | "q4_k" (any case)
+Result<GgufType> gguf_type_from_name(std::string_view name);
 GgufTraits gguf_traits(GgufType t);
 Result<std::vector<uint8_t>> gguf_quantize(GgufType t, const float* x, int64_t n);  // n % block_elems == 0
 Result<void> gguf_dequantize(GgufType t, const uint8_t* data, int64_t n, float* out);
