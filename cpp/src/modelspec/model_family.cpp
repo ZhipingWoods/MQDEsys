@@ -45,7 +45,8 @@ Result<ModelFamily> load_model_family(const fs::path& file) {
 
 Result<ModelFamily> find_model_family(std::string_view model_type) {
   const auto dir = data_dir() / "model_families";
-  if (!fs::is_directory(dir)) return make_error(Errc::kNotFound, "model family directory '{}' missing", dir.string());
+  if (!fs::is_directory(dir))
+    return make_error(Errc::kNotFound, "model family directory '{}' missing", dir.string());
   std::vector<fs::path> files;
   for (const auto& e : fs::directory_iterator(dir))
     if (e.path().extension() == ".yaml") files.push_back(e.path());

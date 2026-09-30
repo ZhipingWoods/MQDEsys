@@ -34,9 +34,9 @@ struct UseCase {
 // MoE two-tier decode model (docs/REFERENCES.md A.5).
 struct MoeConfig {
   double tier1_fixed_bpp = 3.2;
-  std::map<std::string, double> tier1_fixed_bpp_by_arch;            // model_type prefix -> bpp
-  std::map<std::string, std::pair<double, double>> tier2_by_arch;   // prefix -> (efficiency, overhead)
-  std::vector<std::pair<double, double>> tier2_overhead_by_experts; // (max experts, overhead)
+  std::map<std::string, double> tier1_fixed_bpp_by_arch;             // model_type prefix -> bpp
+  std::map<std::string, std::pair<double, double>> tier2_by_arch;    // prefix -> (efficiency, overhead)
+  std::vector<std::pair<double, double>> tier2_overhead_by_experts;  // (max experts, overhead)
   double tier2_overhead_many = 0.40, tier2_overhead_unknown = 0.60;
   double vram_pressure_threshold = 0.60, vram_pressure_floor = 0.30, default_expert_ratio = 0.50;
 };
@@ -55,7 +55,8 @@ double moe_tier2_overhead(int64_t n_experts, const MoeConfig& mc);
 double moe_vram_pressure(double util, int64_t n_experts, int64_t experts_per_tok, const MoeConfig& mc);
 
 struct FitConfig {
-  std::map<std::string, double> memory_bpp, speed_bpp, quality_penalty, speed_k, quant_speed_mult, run_mode_factor;
+  std::map<std::string, double> memory_bpp, speed_bpp, quality_penalty, speed_k, quant_speed_mult,
+      run_mode_factor;
   std::vector<std::string> quant_hierarchy;
   double overhead_gb = 0.5;
   int64_t default_context = 8192;
@@ -66,7 +67,7 @@ struct FitConfig {
   // Quality adjustments (see docs/REFERENCES.md A.1).
   std::map<std::string, double> family_bonus;            // family substring -> bonus
   std::vector<std::pair<double, double>> recency_bonus;  // (age months upper bound, bonus)
-  std::map<std::string, double> task_bonus;              // coding_name_match | reasoning_large | vision_multimodal
+  std::map<std::string, double> task_bonus;  // coding_name_match | reasoning_large | vision_multimodal
   double reasoning_large_min_b = 13;
   // K-constant speed path bonus for many-core hosts (A.4).
   int64_t many_cores_threshold = 8;
@@ -81,12 +82,12 @@ struct System {
   std::string name;
   std::string backend = "cuda";  // cuda|rocm|metal|vulkan|ascend|cpu_x86|cpu_arm
   int gpu_count = 1;
-  double vram_gb = 0;            // per GPU
-  double vram_free_gb = 0;       // per GPU, 0 = unknown (use total)
+  double vram_gb = 0;       // per GPU
+  double vram_free_gb = 0;  // per GPU, 0 = unknown (use total)
   double ram_gb = 0;
-  double mem_bw_gbps = 0;        // per GPU, 0 = unknown
+  double mem_bw_gbps = 0;  // per GPU, 0 = unknown
   double peak_tflops_bf16 = 0;
-  int cpu_cores = 0;             // 0 = unknown (no many-core bonus)
+  int cpu_cores = 0;  // 0 = unknown (no many-core bonus)
   bool unified_memory = false;
   std::vector<std::string> native_formats;
 };
@@ -95,10 +96,10 @@ System system_from_profile(const estimator::HardwareProfile& hw, double ram_gb =
 
 struct Request {
   std::string use_case = "general";
-  int64_t context = 0;           // 0 = use-case default for LLMs / derived for VLA
+  int64_t context = 0;  // 0 = use-case default for LLMs / derived for VLA
   int64_t concurrency = 1;
-  std::string force_quant;       // empty = choose the best that fits
-  std::string force_run_mode;    // empty = auto
+  std::string force_quant;     // empty = choose the best that fits
+  std::string force_run_mode;  // empty = auto
   // Measured baselines for THIS machine (nullptr = none / evaluating other hardware). Looked up by
   // model path + chosen quant; a hit replaces the estimate (docs/REFERENCES.md A.8).
   const BenchmarkIndex* bench = nullptr;
@@ -108,7 +109,7 @@ struct Request {
 // How estimated_tps was derived: the method and the numerical inputs.
 // Populated by analyze(); updated by apply_local_calibration().
 struct EstimateBasis {
-  std::string method;         // "formula", "calibrated", "measured_local", "measured_community"
+  std::string method;  // "formula", "calibrated", "measured_local", "measured_community"
   double gpu_bandwidth_gbps = 0;
   double ddr_bandwidth_gbps = 0;
   double efficiency = 0;
@@ -130,8 +131,9 @@ struct ModelFit {
   RunMode run_mode = RunMode::kGpu;
   FitLevel fit_level = FitLevel::kTooTight;
   double memory_required_gb = 0, memory_available_gb = 0, utilization_pct = 0;
-  double estimated_tps = 0;   // decode tok/s (LLM) or decision steps/s (VLA); the measured value when one exists
-  double formula_tps = 0;     // the formula estimate, always kept (T-R19 calibrates against it)
+  double estimated_tps =
+      0;                   // decode tok/s (LLM) or decision steps/s (VLA); the measured value when one exists
+  double formula_tps = 0;  // the formula estimate, always kept (T-R19 calibrates against it)
   std::optional<MeasuredTps> measured_tps;
   // Null when the hardware profile has no compute figure, or on CPU-only: llmfit reports no TTFT
   // rather than a fabricated one (docs/REFERENCES.md A.6).
@@ -155,14 +157,14 @@ struct ModelFit {
   double moe_offloaded_gb = 0;     // expert weights placed in system RAM (MoE offload mode)
   // T-R26: A.15 supplementary fields.
   InferenceRuntime runtime = InferenceRuntime::kHfTransformers;
-  bool installed = false;              // a local runtime can serve this model right now (filled by T-R24)
+  bool installed = false;  // a local runtime can serve this model right now (filled by T-R24)
   std::vector<std::string> installed_providers;  // runtimes/caches that hold this model (T-R24)
-  bool forced_mode_rejected = false;  // Request::force_run_mode was impossible here and was ignored
-  int64_t usable_context = 0;         // largest context that fits with current concurrency
-  double disk_size_gb = 0;            // estimated on-disk size (weight bytes, unquantized BF16)
-  std::vector<int64_t> supports_tp;   // legal tensor-parallel sizes (divisors of n_kv_heads, ≥1)
-  std::string verify_command;         // a ready-to-run verification command for this runtime/mode
-  std::string license;                // from model family or catalog; empty if unknown
+  bool forced_mode_rejected = false;        // Request::force_run_mode was impossible here and was ignored
+  int64_t usable_context = 0;               // largest context that fits with current concurrency
+  double disk_size_gb = 0;                  // estimated on-disk size (weight bytes, unquantized BF16)
+  std::vector<int64_t> supports_tp;         // legal tensor-parallel sizes (divisors of n_kv_heads, ≥1)
+  std::string verify_command;               // a ready-to-run verification command for this runtime/mode
+  std::string license;                      // from model family or catalog; empty if unknown
   std::vector<std::string> capability_ids;  // e.g. {"text", "vision", "vla"}
   // Convenience label fields (duplicates of to_string, but pre-rendered for the API consumer).
   std::string fit_label;

@@ -40,7 +40,8 @@ double quality_base(double params_b, const FitConfig& c) {
 }
 
 std::string lower(std::string s) {
-  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char ch) { return static_cast<char>(::tolower(ch)); });
+  std::transform(s.begin(), s.end(), s.begin(),
+                 [](unsigned char ch) { return static_cast<char>(::tolower(ch)); });
   return s;
 }
 
@@ -67,7 +68,8 @@ double recency_bonus_for(const modelspec::ModelSpec& spec, const FitConfig& c) {
   }
   if (newest == std::filesystem::file_time_type::min()) return 0;
   const auto age = std::filesystem::file_time_type::clock::now() - newest;
-  const double months = std::chrono::duration<double, std::ratio<2629746>>(age).count();  // mean Gregorian month
+  const double months =
+      std::chrono::duration<double, std::ratio<2629746>>(age).count();  // mean Gregorian month
   if (months < 0) return 0;
   for (const auto& [ub, bonus] : c.recency_bonus)
     if (months < ub) return bonus;
@@ -121,41 +123,60 @@ double moe_vram_pressure(double util, int64_t n_experts, int64_t experts_per_tok
 
 std::string_view to_string(FitLevel f) {
   switch (f) {
-    case FitLevel::kPerfect: return "perfect";
-    case FitLevel::kGood: return "good";
-    case FitLevel::kMarginal: return "marginal";
-    case FitLevel::kTooTight: return "too_tight";
+    case FitLevel::kPerfect:
+      return "perfect";
+    case FitLevel::kGood:
+      return "good";
+    case FitLevel::kMarginal:
+      return "marginal";
+    case FitLevel::kTooTight:
+      return "too_tight";
   }
   return "unknown";
 }
 std::string_view to_string(RunMode m) {
   switch (m) {
-    case RunMode::kGpu: return "gpu";
-    case RunMode::kTensorParallel: return "tensor_parallel";
-    case RunMode::kMoeOffload: return "moe_offload";
-    case RunMode::kCpuOffload: return "cpu_offload";
-    case RunMode::kCpuOnly: return "cpu_only";
+    case RunMode::kGpu:
+      return "gpu";
+    case RunMode::kTensorParallel:
+      return "tensor_parallel";
+    case RunMode::kMoeOffload:
+      return "moe_offload";
+    case RunMode::kCpuOffload:
+      return "cpu_offload";
+    case RunMode::kCpuOnly:
+      return "cpu_only";
   }
   return "unknown";
 }
 std::string_view to_string(InferenceRuntime r) {
   switch (r) {
-    case InferenceRuntime::kVllm:          return "vllm";
-    case InferenceRuntime::kHfTransformers: return "hf_transformers";
-    case InferenceRuntime::kLlamaCpp:      return "llama_cpp";
-    case InferenceRuntime::kTrtEdgeLlm:    return "trt_edge_llm";
-    case InferenceRuntime::kUnsupported:   return "unsupported";
+    case InferenceRuntime::kVllm:
+      return "vllm";
+    case InferenceRuntime::kHfTransformers:
+      return "hf_transformers";
+    case InferenceRuntime::kLlamaCpp:
+      return "llama_cpp";
+    case InferenceRuntime::kTrtEdgeLlm:
+      return "trt_edge_llm";
+    case InferenceRuntime::kUnsupported:
+      return "unsupported";
   }
   return "unknown";
 }
 
 std::string_view to_string(Confidence c) {
   switch (c) {
-    case Confidence::kMeasuredLocal: return "measured_local";
-    case Confidence::kMeasuredCommunity: return "measured_community";
-    case Confidence::kCalibrated: return "calibrated";
-    case Confidence::kEstimated: return "estimated";
-    case Confidence::kUnsupported: return "unsupported";
+    case Confidence::kMeasuredLocal:
+      return "measured_local";
+    case Confidence::kMeasuredCommunity:
+      return "measured_community";
+    case Confidence::kCalibrated:
+      return "calibrated";
+    case Confidence::kEstimated:
+      return "estimated";
+    case Confidence::kUnsupported:
+      return "unsupported";
   }
   return "unknown";
 }
@@ -170,7 +191,8 @@ Result<FitConfig> load_fit_config() {
   c.speed_k = read_map(j, "backend_speed_k");
   c.quant_speed_mult = read_map(j, "quant_speed_multiplier");
   c.run_mode_factor = read_map(j, "run_mode_factor");
-  c.quant_hierarchy = get_or<std::vector<std::string>>(j, "quant_hierarchy", {"bf16", "fp8", "w8a16", "w4a16"});
+  c.quant_hierarchy =
+      get_or<std::vector<std::string>>(j, "quant_hierarchy", {"bf16", "fp8", "w8a16", "w4a16"});
   c.overhead_gb = get_or<double>(j, "overhead_gb", c.overhead_gb);
   c.default_context = get_or<int64_t>(j, "default_context", c.default_context);
   if (auto t = j.find("fit_thresholds"); t != j.end()) {
@@ -186,18 +208,21 @@ Result<FitConfig> load_fit_config() {
       UseCase uc;
       uc.name = e.key();
       auto w = get_or<std::vector<double>>(*e, "weights", {0.45, 0.30, 0.15, 0.10});
-      if (w.size() != 4) return make_error(Errc::kParse, "fit.yaml: use_cases.{}.weights must have 4 entries", e.key());
+      if (w.size() != 4)
+        return make_error(Errc::kParse, "fit.yaml: use_cases.{}.weights must have 4 entries", e.key());
       uc.w_quality = w[0], uc.w_speed = w[1], uc.w_fit = w[2], uc.w_context = w[3];
       uc.speed_target = get_or<double>(*e, "speed_target", 40);
       uc.context_target = get_or<int64_t>(*e, "context_target", 4096);
       c.use_cases[uc.name] = uc;
     }
   for (const auto& row : j.value("quality_tiers", Json::array()))
-    if (row.is_array() && row.size() == 2) c.quality_tiers.emplace_back(row[0].get<double>(), row[1].get<double>());
+    if (row.is_array() && row.size() == 2)
+      c.quality_tiers.emplace_back(row[0].get<double>(), row[1].get<double>());
   c.family_bonus = read_map(j, "family_quality_bonus");
   c.task_bonus = read_map(j, "task_quality_bonus");
   for (const auto& row : j.value("recency_quality_bonus", Json::array()))
-    if (row.is_array() && row.size() == 2) c.recency_bonus.emplace_back(row[0].get<double>(), row[1].get<double>());
+    if (row.is_array() && row.size() == 2)
+      c.recency_bonus.emplace_back(row[0].get<double>(), row[1].get<double>());
   c.reasoning_large_min_b = get_or<double>(j, "reasoning_large_min_b", c.reasoning_large_min_b);
   c.many_cores_threshold = get_or<int64_t>(j, "many_cores_threshold", c.many_cores_threshold);
   c.many_cores_speed_bonus = get_or<double>(j, "many_cores_speed_bonus", c.many_cores_speed_bonus);
@@ -207,9 +232,11 @@ Result<FitConfig> load_fit_config() {
     mc.tier1_fixed_bpp_by_arch = read_map(*m, "tier1_fixed_bpp_by_arch");
     if (auto t = m->find("tier2_by_arch"); t != m->end() && t->is_object())
       for (auto e = t->begin(); e != t->end(); ++e)
-        if (e->is_array() && e->size() == 2) mc.tier2_by_arch[e.key()] = {(*e)[0].get<double>(), (*e)[1].get<double>()};
+        if (e->is_array() && e->size() == 2)
+          mc.tier2_by_arch[e.key()] = {(*e)[0].get<double>(), (*e)[1].get<double>()};
     for (const auto& row : m->value("tier2_overhead_by_experts", Json::array()))
-      if (row.is_array() && row.size() == 2) mc.tier2_overhead_by_experts.emplace_back(row[0].get<double>(), row[1].get<double>());
+      if (row.is_array() && row.size() == 2)
+        mc.tier2_overhead_by_experts.emplace_back(row[0].get<double>(), row[1].get<double>());
     mc.tier2_overhead_many = get_or<double>(*m, "tier2_overhead_many", mc.tier2_overhead_many);
     mc.tier2_overhead_unknown = get_or<double>(*m, "tier2_overhead_unknown", mc.tier2_overhead_unknown);
     mc.vram_pressure_threshold = get_or<double>(*m, "vram_pressure_threshold", mc.vram_pressure_threshold);
@@ -221,15 +248,16 @@ Result<FitConfig> load_fit_config() {
 
 std::optional<MoeDecomposition> moe_decomposition(const modelspec::ModelSpec& spec) {
   const auto& t = spec.text;
-  if (t.n_experts <= 0 || t.hidden <= 0 || t.n_layers <= 0 || t.experts_per_tok <= 0 || t.moe_intermediate <= 0 ||
-      t.vocab <= 0)
+  if (t.n_experts <= 0 || t.hidden <= 0 || t.n_layers <= 0 || t.experts_per_tok <= 0 ||
+      t.moe_intermediate <= 0 || t.vocab <= 0)
     return std::nullopt;
   const double hidden = static_cast<double>(t.hidden), layers = static_cast<double>(t.n_layers);
   const double n_heads = static_cast<double>(t.n_heads > 0 ? t.n_heads : 1);
   const double n_kv = static_cast<double>(t.n_kv_heads > 0 ? t.n_kv_heads : (t.n_heads > 0 ? t.n_heads : 1));
   const double hd = t.head_dim > 0 ? static_cast<double>(t.head_dim) : hidden / n_heads;
   // SwiGLU: gate + up + down per expert.
-  const double active_ffn = layers * static_cast<double>(t.experts_per_tok) * 3.0 * hidden * static_cast<double>(t.moe_intermediate);
+  const double active_ffn = layers * static_cast<double>(t.experts_per_tok) * 3.0 * hidden *
+                            static_cast<double>(t.moe_intermediate);
   const double attn = layers * (2.0 * n_heads * hd * hidden + 2.0 * n_kv * hd * hidden);  // Q + O, K + V
   const double shared = layers * 3.0 * hidden * static_cast<double>(t.shared_expert_intermediate);
   const double router = layers * static_cast<double>(t.n_experts) * hidden;
@@ -240,8 +268,12 @@ std::optional<MoeDecomposition> moe_decomposition(const modelspec::ModelSpec& sp
 System system_from_profile(const estimator::HardwareProfile& hw, double ram_gb) {
   System s;
   s.name = hw.name;
-  s.backend = hw.vendor == "nvidia" ? "cuda" : hw.vendor == "amd" ? "rocm" : hw.vendor == "apple" ? "metal"
-              : hw.vendor == "ascend" ? "ascend" : hw.vendor == "cpu" ? "cpu_x86" : hw.vendor;
+  s.backend = hw.vendor == "nvidia"   ? "cuda"
+              : hw.vendor == "amd"    ? "rocm"
+              : hw.vendor == "apple"  ? "metal"
+              : hw.vendor == "ascend" ? "ascend"
+              : hw.vendor == "cpu"    ? "cpu_x86"
+                                      : hw.vendor;
   s.vram_gb = static_cast<double>(hw.mem_bytes) / kGiB;
   s.mem_bw_gbps = hw.mem_bw_gbps;
   s.peak_tflops_bf16 = hw.peak_tflops.contains("bf16") ? hw.peak_tflops.at("bf16") : 0.0;
@@ -266,16 +298,22 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
   std::string uc_name = req.use_case;
   if (uc_name == "auto" || uc_name.empty()) uc_name = vla ? "vla" : spec.vision ? "multimodal" : "general";
   auto uc_it = cfg.use_cases.find(uc_name);
-  if (uc_it == cfg.use_cases.end()) return make_error(Errc::kInvalidArgument, "unknown use case '{}'", uc_name);
+  if (uc_it == cfg.use_cases.end())
+    return make_error(Errc::kInvalidArgument, "unknown use case '{}'", uc_name);
   const UseCase& uc = uc_it->second;
 
   estimator::RuntimeParams rt;
   rt.concurrency = std::max<int64_t>(1, req.concurrency);
-  if (!vla) rt.context_tokens = req.context > 0 ? req.context : std::min(cfg.default_context, std::max<int64_t>(uc.context_target, 1));
-  else if (req.context > 0) rt.context_tokens = req.context;
+  if (!vla)
+    rt.context_tokens = req.context > 0
+                            ? req.context
+                            : std::min(cfg.default_context, std::max<int64_t>(uc.context_target, 1));
+  else if (req.context > 0)
+    rt.context_tokens = req.context;
 
   const double vram_total = sys.vram_gb * std::max(1, sys.gpu_count);
-  const double vram_avail = (sys.vram_free_gb > 0 ? sys.vram_free_gb : sys.vram_gb) * std::max(1, sys.gpu_count);
+  const double vram_avail =
+      (sys.vram_free_gb > 0 ? sys.vram_free_gb : sys.vram_gb) * std::max(1, sys.gpu_count);
   const bool has_gpu = sys.vram_gb > 0;
   estimator::HardwareProfile hw;
   hw.id = sys.name;
@@ -317,16 +355,27 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
   const double req_gb = static_cast<double>(e.peak_bytes) / kGiB + cfg.overhead_gb;
   f.memory_required_gb = req_gb;
   double pool = has_gpu ? vram_avail : sys.ram_gb;
-  if (!has_gpu) f.run_mode = RunMode::kCpuOnly;
-  else if (chosen) f.run_mode = sys.gpu_count > 1 ? RunMode::kTensorParallel : RunMode::kGpu;
+  if (!has_gpu)
+    f.run_mode = RunMode::kCpuOnly;
+  else if (chosen)
+    f.run_mode = sys.gpu_count > 1 ? RunMode::kTensorParallel : RunMode::kGpu;
   else if (f.is_moe && sys.ram_gb > 0) {
-    const double expert_gb = static_cast<double>(spec.expert_params) * lookup(cfg.memory_bpp, [&] {
-      std::string k = f.best_quant; std::transform(k.begin(), k.end(), k.begin(), ::tolower); return k; }(), 2.0) / kGiB;
+    const double expert_gb = static_cast<double>(spec.expert_params) *
+                             lookup(
+                                 cfg.memory_bpp,
+                                 [&] {
+                                   std::string k = f.best_quant;
+                                   std::transform(k.begin(), k.end(), k.begin(), ::tolower);
+                                   return k;
+                                 }(),
+                                 2.0) /
+                             kGiB;
     if (req_gb - expert_gb <= vram_avail * cfg.th_marginal && expert_gb <= sys.ram_gb * cfg.th_marginal) {
       f.run_mode = RunMode::kMoeOffload;
       f.moe_offloaded_gb = expert_gb;
       pool = vram_avail + sys.ram_gb;
-    } else f.run_mode = RunMode::kCpuOffload, pool = vram_avail + sys.ram_gb;
+    } else
+      f.run_mode = RunMode::kCpuOffload, pool = vram_avail + sys.ram_gb;
   } else if (sys.ram_gb > 0 && !sys.unified_memory) {
     f.run_mode = RunMode::kCpuOffload;
     pool = vram_avail + sys.ram_gb;
@@ -336,25 +385,40 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
   if (!req.force_run_mode.empty()) {
     const auto& m = req.force_run_mode;
     bool ok = true;
-    if (m == "gpu" && has_gpu) f.run_mode = RunMode::kGpu, pool = vram_avail;
-    else if (m == "tensor_parallel" && has_gpu && sys.gpu_count > 1) f.run_mode = RunMode::kTensorParallel, pool = vram_avail;
+    if (m == "gpu" && has_gpu)
+      f.run_mode = RunMode::kGpu, pool = vram_avail;
+    else if (m == "tensor_parallel" && has_gpu && sys.gpu_count > 1)
+      f.run_mode = RunMode::kTensorParallel, pool = vram_avail;
     else if (m == "moe_offload" && has_gpu && f.is_moe && sys.ram_gb > 0) {
       f.run_mode = RunMode::kMoeOffload;
-      f.moe_offloaded_gb = static_cast<double>(spec.expert_params) * lookup(cfg.memory_bpp, [&] {
-        std::string k = f.best_quant; std::transform(k.begin(), k.end(), k.begin(), ::tolower); return k; }(), 2.0) / kGiB;
+      f.moe_offloaded_gb = static_cast<double>(spec.expert_params) *
+                           lookup(
+                               cfg.memory_bpp,
+                               [&] {
+                                 std::string k = f.best_quant;
+                                 std::transform(k.begin(), k.end(), k.begin(), ::tolower);
+                                 return k;
+                               }(),
+                               2.0) /
+                           kGiB;
       pool = vram_avail + sys.ram_gb;
-    } else if (m == "cpu_offload" && has_gpu && sys.ram_gb > 0) f.run_mode = RunMode::kCpuOffload, pool = vram_avail + sys.ram_gb;
-    else if (m == "cpu_only" && sys.ram_gb > 0) f.run_mode = RunMode::kCpuOnly, pool = sys.ram_gb;
-    else ok = false;
-    f.notes.push_back(ok ? "run mode forced: " + m : "run mode '" + m + "' is not possible on this system; kept " +
-                                                         std::string(to_string(f.run_mode)));
+    } else if (m == "cpu_offload" && has_gpu && sys.ram_gb > 0)
+      f.run_mode = RunMode::kCpuOffload, pool = vram_avail + sys.ram_gb;
+    else if (m == "cpu_only" && sys.ram_gb > 0)
+      f.run_mode = RunMode::kCpuOnly, pool = sys.ram_gb;
+    else
+      ok = false;
+    f.notes.push_back(ok ? "run mode forced: " + m
+                         : "run mode '" + m + "' is not possible on this system; kept " +
+                               std::string(to_string(f.run_mode)));
     f.forced_mode_rejected = !ok;
   }
   f.memory_available_gb = pool;
   const double ratio = req_gb / std::max(1e-9, pool);
   f.utilization_pct = ratio * 100.0;
   f.fit_level = level_for(ratio, cfg);
-  if ((f.run_mode == RunMode::kCpuOnly || f.run_mode == RunMode::kCpuOffload) && f.fit_level == FitLevel::kPerfect)
+  if ((f.run_mode == RunMode::kCpuOnly || f.run_mode == RunMode::kCpuOffload) &&
+      f.fit_level == FitLevel::kPerfect)
     f.fit_level = FitLevel::kGood;  // llmfit cap_for_run_mode
   if (!chosen && has_gpu && f.run_mode == RunMode::kGpu) f.fit_level = FitLevel::kTooTight;
 
@@ -366,19 +430,26 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
   const double bpp = lookup(cfg.speed_bpp, qkey, 2.0);
   if (vla) {
     f.speed_unit = "steps/s";
-    const double t_mem = sys.mem_bw_gbps > 0 ? e.bytes_per_step / (sys.mem_bw_gbps * 1e9 * cfg.bw_efficiency) : 0;
-    const double t_cmp = sys.peak_tflops_bf16 > 0 ? e.flops_per_step / (sys.peak_tflops_bf16 * 1e12 * cfg.prefill_util) : 0;
+    const double t_mem =
+        sys.mem_bw_gbps > 0 ? e.bytes_per_step / (sys.mem_bw_gbps * 1e9 * cfg.bw_efficiency) : 0;
+    const double t_cmp =
+        sys.peak_tflops_bf16 > 0 ? e.flops_per_step / (sys.peak_tflops_bf16 * 1e12 * cfg.prefill_util) : 0;
     const double t = std::max(t_mem, t_cmp);
     f.formula_tps = t > 0 ? mode_factor / t : 0;
     f.estimated_tps = f.formula_tps;
-    f.estimate_basis = {"formula", sys.mem_bw_gbps, cfg.ddr_bw_gbps, cfg.bw_efficiency,
-                        e.context_tokens > 0 ? e.context_tokens : cfg.default_context, 1.0};
+    f.estimate_basis = {"formula",
+                        sys.mem_bw_gbps,
+                        cfg.ddr_bw_gbps,
+                        cfg.bw_efficiency,
+                        e.context_tokens > 0 ? e.context_tokens : cfg.default_context,
+                        1.0};
     // The roofline assumes the GPU is never idle. A VLA step is thousands of small kernels (vision
     // tower + LM prefill + N flow-matching denoise passes), so in eager mode launch overhead, not
     // bandwidth, sets the step time. Report the number as a ceiling until a measurement lands.
     f.speed_is_upper_bound = f.formula_tps > 0;
     // A VLA step latency is only meaningful when both bandwidth and compute are known.
-    if (t_mem > 0 && t_cmp > 0 && f.run_mode != RunMode::kCpuOnly) f.ttft_ms = t * 1e3 / std::max(mode_factor, 1e-9);
+    if (t_mem > 0 && t_cmp > 0 && f.run_mode != RunMode::kCpuOnly)
+      f.ttft_ms = t * 1e3 / std::max(mode_factor, 1e-9);
   } else {
     if (sys.mem_bw_gbps > 0) {
       const double bw = sys.mem_bw_gbps;
@@ -393,10 +464,11 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
         const auto& mc = cfg.moe;
         const double vram = sys.vram_gb * std::max(1, sys.gpu_count);
         if (vram > 0)
-          f.moe_vram_pressure =
-              moe_vram_pressure(f.params_b * mem_bpp / vram, spec.text.n_experts, spec.text.experts_per_tok, mc);
+          f.moe_vram_pressure = moe_vram_pressure(f.params_b * mem_bpp / vram, spec.text.n_experts,
+                                                  spec.text.experts_per_tok, mc);
         if (auto d = moe_decomposition(spec)) {
-          // Tier 1: scalable expert bytes + fixed bytes at a bandwidth-equivalent width (no efficiency factor).
+          // Tier 1: scalable expert bytes + fixed bytes at a bandwidth-equivalent width (no efficiency
+          // factor).
           const double* fb = arch_lookup(mc.tier1_fixed_bpp_by_arch, spec.model_type);
           const double per_tok = d->active_ffn_b * mem_bpp + d->fixed_b * (fb ? *fb : mc.tier1_fixed_bpp);
           f.estimated_tps = std::max(0.1, bw / std::max(1e-9, per_tok) * mode_factor * f.moe_vram_pressure);
@@ -405,8 +477,8 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
           // Tier 2: active params x memory bpp, corrected by per-architecture or expert-count calibration.
           double eff = cfg.bw_efficiency, ov = moe_tier2_overhead(spec.text.n_experts, mc);
           if (const auto* a = arch_lookup(mc.tier2_by_arch, spec.model_type)) eff = a->first, ov = a->second;
-          f.estimated_tps = std::max(
-              0.1, bw / std::max(1e-9, f.active_params_b * mem_bpp) * eff * ov * mode_factor * f.moe_vram_pressure);
+          f.estimated_tps = std::max(0.1, bw / std::max(1e-9, f.active_params_b * mem_bpp) * eff * ov *
+                                              mode_factor * f.moe_vram_pressure);
           f.moe_tier = 2;
         }
       } else {
@@ -421,7 +493,8 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
       }
     } else {
       const double k = lookup(cfg.speed_k, sys.backend, 70);
-      f.estimated_tps = k / std::max(1e-9, f.active_params_b) * lookup(cfg.quant_speed_mult, qkey, 1.0) * mode_factor;
+      f.estimated_tps =
+          k / std::max(1e-9, f.active_params_b) * lookup(cfg.quant_speed_mult, qkey, 1.0) * mode_factor;
       if (sys.cpu_cores >= cfg.many_cores_threshold) f.estimated_tps *= cfg.many_cores_speed_bonus;
     }
     const int64_t ctx = e.context_tokens > 0 ? e.context_tokens : cfg.default_context;
@@ -441,16 +514,18 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
   // BF16 measurement never stands in for a W4A16 fit.
   f.formula_tps = f.estimated_tps;
   std::optional<MeasuredTps> m = req.measured;
-  if (!m && req.bench && !f.best_quant.empty()) m = req.bench->lookup(spec.path.empty() ? spec.model_type : spec.path, f.best_quant);
+  if (!m && req.bench && !f.best_quant.empty())
+    m = req.bench->lookup(spec.path.empty() ? spec.model_type : spec.path, f.best_quant);
   if (m && plausible_tps(m->tok_s)) {
     f.measured_tps = m;
     f.estimated_tps = m->tok_s;
-    f.confidence = m->source == MeasuredSource::kLocal ? Confidence::kMeasuredLocal : Confidence::kMeasuredCommunity;
+    f.confidence =
+        m->source == MeasuredSource::kLocal ? Confidence::kMeasuredLocal : Confidence::kMeasuredCommunity;
     f.estimate_basis.method = m->source == MeasuredSource::kLocal ? "measured_local" : "measured_community";
     f.speed_is_upper_bound = false;
     if (m->ttft_ms) f.ttft_ms = m->ttft_ms;
-    f.notes.push_back(fmt::format("speed measured on {}: {:.2f} {} (median of {} runs; formula {:.2f})", m->hardware_label,
-                                  m->tok_s, f.speed_unit, m->sample_count, f.formula_tps));
+    f.notes.push_back(fmt::format("speed measured on {}: {:.2f} {} (median of {} runs; formula {:.2f})",
+                                  m->hardware_label, m->tok_s, f.speed_unit, m->sample_count, f.formula_tps));
   }
   f.context = e.context_tokens;
 
@@ -458,41 +533,52 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
   f.components.speed = std::min(100.0, f.estimated_tps / uc.speed_target * 100.0);
   const double z = std::max(0.0, (ratio - 0.70) / 0.20);
   f.components.fit = f.fit_level == FitLevel::kTooTight ? 0.0 : 100.0 * std::exp(-0.5 * z * z);
-  const int64_t ctx_have = vla ? uc.context_target : std::max<int64_t>(spec.text.max_position_embeddings, e.context_tokens);
+  const int64_t ctx_have =
+      vla ? uc.context_target : std::max<int64_t>(spec.text.max_position_embeddings, e.context_tokens);
   f.components.context = ctx_have >= uc.context_target ? 100 : ctx_have >= uc.context_target / 2 ? 70 : 30;
-  f.components.quality = std::clamp(quality_base(f.active_params_b, cfg) + lookup(cfg.quality_penalty, qkey, 0) +
-                                        family_bonus_for(spec, cfg) + recency_bonus_for(spec, cfg) +
-                                        task_bonus_for(spec, uc_name, f.active_params_b, cfg),
-                                    0.0, 100.0);
+  f.components.quality =
+      std::clamp(quality_base(f.active_params_b, cfg) + lookup(cfg.quality_penalty, qkey, 0) +
+                     family_bonus_for(spec, cfg) + recency_bonus_for(spec, cfg) +
+                     task_bonus_for(spec, uc_name, f.active_params_b, cfg),
+                 0.0, 100.0);
   f.score = std::round((uc.w_quality * f.components.quality + uc.w_speed * f.components.speed +
-                        uc.w_fit * f.components.fit + uc.w_context * f.components.context) * 10.0) / 10.0;
+                        uc.w_fit * f.components.fit + uc.w_context * f.components.context) *
+                       10.0) /
+            10.0;
 
   // Notes (llmfit "notes").
-  if (!chosen) f.notes.push_back(fmt::format("no quant in the hierarchy fits in {:.1f} GiB VRAM", vram_avail));
+  if (!chosen)
+    f.notes.push_back(fmt::format("no quant in the hierarchy fits in {:.1f} GiB VRAM", vram_avail));
   if (f.fitting_quants.size() > 1)
-    f.notes.push_back(fmt::format("also fits: {}", fmt::join(f.fitting_quants.begin() + 1, f.fitting_quants.end(), ", ")));
+    f.notes.push_back(
+        fmt::format("also fits: {}", fmt::join(f.fitting_quants.begin() + 1, f.fitting_quants.end(), ", ")));
   if (spec.checkpoint_quant)
-    f.notes.push_back(fmt::format("checkpoint is already quantized ({} {}); estimates re-quantize from logical params",
-                                  spec.checkpoint_quant->method, spec.checkpoint_quant->algo));
+    f.notes.push_back(
+        fmt::format("checkpoint is already quantized ({} {}); estimates re-quantize from logical params",
+                    spec.checkpoint_quant->method, spec.checkpoint_quant->algo));
   if (f.speed_is_upper_bound)
-    f.notes.push_back(fmt::format(
-        "{:.1f} {} is a roofline ceiling, not a prediction: per-kernel launch overhead is not modeled and dominates a "
-        "VLA step in eager mode (measured 4.41 vs formula 46.9 steps/s on RTX 4090). Run `mqde bench` for a real number.",
-        f.formula_tps, f.speed_unit));
+    f.notes.push_back(
+        fmt::format("{:.1f} {} is a roofline ceiling, not a prediction: per-kernel launch overhead is not "
+                    "modeled and dominates a "
+                    "VLA step in eager mode (measured 4.41 vs formula 46.9 steps/s on RTX 4090). Run `mqde "
+                    "bench` for a real number.",
+                    f.formula_tps, f.speed_unit));
   if (f.is_moe)
-    f.notes.push_back(fmt::format("MoE: {} experts, {} active; speed uses {:.2f}B active params{}", spec.text.n_experts,
-                                  spec.text.experts_per_tok, f.active_params_b,
-                                  f.moe_tier == 1   ? fmt::format(" (Tier-1, VRAM pressure x{:.2f})", f.moe_vram_pressure)
-                                  : f.moe_tier == 2 ? fmt::format(" (Tier-2 fallback, VRAM pressure x{:.2f})", f.moe_vram_pressure)
-                                                    : ""));
+    f.notes.push_back(fmt::format(
+        "MoE: {} experts, {} active; speed uses {:.2f}B active params{}", spec.text.n_experts,
+        spec.text.experts_per_tok, f.active_params_b,
+        f.moe_tier == 1   ? fmt::format(" (Tier-1, VRAM pressure x{:.2f})", f.moe_vram_pressure)
+        : f.moe_tier == 2 ? fmt::format(" (Tier-2 fallback, VRAM pressure x{:.2f})", f.moe_vram_pressure)
+                          : ""));
   for (const auto& r : e.reasons)
-    if (r.find("native kernel") != std::string::npos || r.find("natively") != std::string::npos) f.notes.push_back(r);
+    if (r.find("native kernel") != std::string::npos || r.find("natively") != std::string::npos)
+      f.notes.push_back(r);
   // T-R26: Populate supplementary ModelFit fields (llmfit A.15 / A.16).
   // --- Runtime selection (A.16, adapted for our backends) ---
   {
     const bool is_quantized = spec.checkpoint_quant.has_value();
-    const bool is_edge = sys.backend.find("trt") != std::string::npos ||
-                         sys.backend.find("jetson") != std::string::npos;
+    const bool is_edge =
+        sys.backend.find("trt") != std::string::npos || sys.backend.find("jetson") != std::string::npos;
     if (f.run_mode == RunMode::kCpuOnly) {
       f.runtime = InferenceRuntime::kLlamaCpp;
     } else if (is_edge) {
@@ -509,29 +595,29 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
     const std::string model_arg = spec.path.empty() ? "MODEL_PATH" : spec.path;
     switch (f.runtime) {
       case InferenceRuntime::kLlamaCpp:
-        f.verify_command = fmt::format(
-            "llama-bench -m {}.gguf -ngl {} -t 1", model_arg,
-            f.run_mode == RunMode::kCpuOnly ? "0" : "all");
+        f.verify_command = fmt::format("llama-bench -m {}.gguf -ngl {} -t 1", model_arg,
+                                       f.run_mode == RunMode::kCpuOnly ? "0" : "all");
         break;
       case InferenceRuntime::kVllm:
-        f.verify_command = fmt::format(
-            "python -m vllm.entrypoints.openai.api_server --model {} --dtype auto", model_arg);
+        f.verify_command =
+            fmt::format("python -m vllm.entrypoints.openai.api_server --model {} --dtype auto", model_arg);
         break;
       case InferenceRuntime::kTrtEdgeLlm:
         f.verify_command = fmt::format("trtllm-bench --model {}", model_arg);
         break;
       default:
         f.verify_command = fmt::format(
-            "python -c 'from transformers import pipeline; p=pipeline(text-generation,{0}); print(p(hello)[0][generated_text])'",
+            "python -c 'from transformers import pipeline; p=pipeline(text-generation,{0}); "
+            "print(p(hello)[0][generated_text])'",
             model_arg);
         break;
     }
   }
 
   // --- usable_context ---
-  f.usable_context = e.context_tokens > 0 ? e.context_tokens
+  f.usable_context = e.context_tokens > 0                    ? e.context_tokens
                      : spec.text.max_position_embeddings > 0 ? spec.text.max_position_embeddings
-                     : 0;
+                                                             : 0;
 
   // --- disk_size_gb: the checkpoint's actual safetensors bytes (already-quantized files are smaller) ---
   f.disk_size_gb = static_cast<double>(spec.total_bytes) / (1ull << 30);
@@ -548,20 +634,24 @@ Result<ModelFit> analyze(const modelspec::ModelSpec& spec, const System& sys, co
   // --- capability_ids ---
   {
     f.capability_ids.push_back("text");
-    const bool has_vision = spec.vision.has_value() ||
-        std::any_of(spec.components.begin(), spec.components.end(), [](const auto& c) { return c.modality == "vision"; });
-    const bool has_audio =
-        std::any_of(spec.components.begin(), spec.components.end(), [](const auto& c) { return c.modality == "audio"; });
+    const bool has_vision =
+        spec.vision.has_value() || std::any_of(spec.components.begin(), spec.components.end(),
+                                               [](const auto& c) { return c.modality == "vision"; });
+    const bool has_audio = std::any_of(spec.components.begin(), spec.components.end(),
+                                       [](const auto& c) { return c.modality == "audio"; });
     if (has_vision || spec.modality == "vla" || spec.modality == "vlm") f.capability_ids.push_back("vision");
     if (has_audio) f.capability_ids.push_back("audio");
-    if (std::any_of(spec.components.begin(), spec.components.end(), [](const auto& c) { return c.modality == "tts"; }))
+    if (std::any_of(spec.components.begin(), spec.components.end(),
+                    [](const auto& c) { return c.modality == "tts"; }))
       f.capability_ids.push_back("speech_out");
-    if (std::any_of(spec.components.begin(), spec.components.end(), [](const auto& c) { return c.modality == "mtp"; }))
+    if (std::any_of(spec.components.begin(), spec.components.end(),
+                    [](const auto& c) { return c.modality == "mtp"; }))
       f.capability_ids.push_back("mtp");
     if (spec.modality == "vla") f.capability_ids.push_back("vla");
     if (f.is_moe) f.capability_ids.push_back("moe");
     if (!spec.text.layer_types.empty() &&
-        std::find(spec.text.layer_types.begin(), spec.text.layer_types.end(), "linear_attention") != spec.text.layer_types.end())
+        std::find(spec.text.layer_types.begin(), spec.text.layer_types.end(), "linear_attention") !=
+            spec.text.layer_types.end())
       f.capability_ids.push_back("linear_attention");
   }
 
@@ -656,15 +746,20 @@ Json to_json(const ModelFit& f) {
           {"context", f.context},
           {"estimate_confidence", to_string(f.confidence)},
           {"formula_tps", f.formula_tps},
-          {"measured_tps", f.measured_tps ? Json{{"tok_s", f.measured_tps->tok_s},
-                                                 {"ttft_ms", f.measured_tps->ttft_ms ? Json(*f.measured_tps->ttft_ms) : Json(nullptr)},
-                                                 {"sample_count", f.measured_tps->sample_count},
-                                                 {"hardware_label", f.measured_tps->hardware_label},
-                                                 {"source", f.measured_tps->source == MeasuredSource::kLocal ? "local" : "community"}}
-                                          : Json(nullptr)},
+          {"measured_tps",
+           f.measured_tps
+               ? Json{{"tok_s", f.measured_tps->tok_s},
+                      {"ttft_ms", f.measured_tps->ttft_ms ? Json(*f.measured_tps->ttft_ms) : Json(nullptr)},
+                      {"sample_count", f.measured_tps->sample_count},
+                      {"hardware_label", f.measured_tps->hardware_label},
+                      {"source", f.measured_tps->source == MeasuredSource::kLocal ? "local" : "community"}}
+               : Json(nullptr)},
           {"score", f.score},
           {"score_components",
-           {{"quality", f.components.quality}, {"speed", f.components.speed}, {"fit", f.components.fit}, {"context", f.components.context}}},
+           {{"quality", f.components.quality},
+            {"speed", f.components.speed},
+            {"fit", f.components.fit},
+            {"context", f.components.context}}},
           {"runtime", to_string(f.runtime)},
           {"installed", f.installed},
           {"installed_providers", f.installed_providers},
@@ -678,20 +773,27 @@ Json to_json(const ModelFit& f) {
           {"run_mode_label", f.run_mode_label},
           {"estimate_confidence_label", f.estimate_confidence_label},
           {"notes", f.notes},
-          {"estimate_basis", {{"method", f.estimate_basis.method},
-                              {"gpu_bandwidth_gbps", f.estimate_basis.gpu_bandwidth_gbps},
-                              {"ddr_bandwidth_gbps", f.estimate_basis.ddr_bandwidth_gbps},
-                              {"efficiency", f.estimate_basis.efficiency},
-                              {"assumed_context", f.estimate_basis.assumed_context},
-                              {"local_calibration", f.estimate_basis.local_calibration}}},
+          {"estimate_basis",
+           {{"method", f.estimate_basis.method},
+            {"gpu_bandwidth_gbps", f.estimate_basis.gpu_bandwidth_gbps},
+            {"ddr_bandwidth_gbps", f.estimate_basis.ddr_bandwidth_gbps},
+            {"efficiency", f.estimate_basis.efficiency},
+            {"assumed_context", f.estimate_basis.assumed_context},
+            {"local_calibration", f.estimate_basis.local_calibration}}},
           {"detail", estimator::to_json(f.detail)}};
 }
 
 Json to_json(const System& s) {
-  return {{"name", s.name},         {"backend", s.backend},       {"gpu_count", s.gpu_count},
-          {"vram_gb", s.vram_gb},   {"vram_free_gb", s.vram_free_gb}, {"ram_gb", s.ram_gb},
-          {"mem_bw_gbps", s.mem_bw_gbps}, {"peak_tflops_bf16", s.peak_tflops_bf16},
-          {"unified_memory", s.unified_memory}, {"native_formats", s.native_formats}};
+  return {{"name", s.name},
+          {"backend", s.backend},
+          {"gpu_count", s.gpu_count},
+          {"vram_gb", s.vram_gb},
+          {"vram_free_gb", s.vram_free_gb},
+          {"ram_gb", s.ram_gb},
+          {"mem_bw_gbps", s.mem_bw_gbps},
+          {"peak_tflops_bf16", s.peak_tflops_bf16},
+          {"unified_memory", s.unified_memory},
+          {"native_formats", s.native_formats}};
 }
 
 }  // namespace mqde::fit

@@ -23,7 +23,8 @@ std::string safetensors_blob(size_t payload_bytes, std::string* header_out = nul
       R"("model.layers.0.mlp.down_proj.weight":{{"dtype":"F32","shape":[{},4],"data_offsets":[64,{}]}}}})",
       big / 4, 64 + big * 4);
   std::string out(8, '\0');
-  for (int i = 0; i < 8; ++i) out[static_cast<size_t>(i)] = static_cast<char>((header.size() >> (8 * i)) & 0xFF);
+  for (int i = 0; i < 8; ++i)
+    out[static_cast<size_t>(i)] = static_cast<char>((header.size() >> (8 * i)) & 0xFF);
   out += header;
   out.append(64 + big * 4, '\0');
   if (header_out) *header_out = header;
@@ -47,17 +48,22 @@ struct Stub {
       svr.Get("/api/models/org/tiny/tree/" + rev, [this](const httplib::Request&, httplib::Response& res) {
         res.set_content(fmt::format(R"([{{"type":"file","path":"config.json","size":10}},
           {{"type":"file","path":"model.safetensors","size":{0},"lfs":{{"size":{0}}}}},
-          {{"type":"directory","path":"sub"}}])", blob.size()), "application/json");
+          {{"type":"directory","path":"sub"}}])",
+                                    blob.size()),
+                        "application/json");
       });
       svr.Get("/org/tiny/resolve/" + rev + "/config.json",
-              [cfg](const httplib::Request&, httplib::Response& res) { res.set_content(cfg, "application/json"); });
-      svr.Get("/org/tiny/resolve/" + rev + "/model.safetensors", [this](const httplib::Request& req, httplib::Response& res) {
-        // httplib slices the body to the requested Range (206); count what the client asked for
-        ASSERT_TRUE(req.has_header("Range"));
-        const auto& r = req.ranges.at(0);
-        served += static_cast<uint64_t>(r.second - r.first + 1);
-        res.set_content(blob, "application/octet-stream");
-      });
+              [cfg](const httplib::Request&, httplib::Response& res) {
+                res.set_content(cfg, "application/json");
+              });
+      svr.Get("/org/tiny/resolve/" + rev + "/model.safetensors",
+              [this](const httplib::Request& req, httplib::Response& res) {
+                // httplib slices the body to the requested Range (206); count what the client asked for
+                ASSERT_TRUE(req.has_header("Range"));
+                const auto& r = req.ranges.at(0);
+                served += static_cast<uint64_t>(r.second - r.first + 1);
+                res.set_content(blob, "application/octet-stream");
+              });
     }
     svr.Get("/api/models/org/flaky/tree/main", [this](const httplib::Request&, httplib::Response& res) {
       if (flaky++ < 2) {

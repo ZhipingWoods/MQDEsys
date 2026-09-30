@@ -10,13 +10,13 @@ from torch import nn
 
 transformers = pytest.importorskip("transformers")
 
-from mqde.eval.ppl import perplexity  # noqa: E402
-from mqde.models.hf_llm import HFCausalLM  # noqa: E402
-from mqde.quant import kv as kvq  # noqa: E402
-from mqde.quant.blockwise import BlockwiseQuantizer, MixedPrecisionPolicy  # noqa: E402
-from mqde.quant.engine import RecipeSpec  # noqa: E402
-from mqde.quant.modules import FakeQuantLinear, static_act_params  # noqa: E402
-from mqde.quant.numerics import QuantSpec, fake_quant, params_from_range  # noqa: E402
+from mqde.eval.ppl import perplexity
+from mqde.models.hf_llm import HFCausalLM
+from mqde.quant import kv as kvq
+from mqde.quant.blockwise import BlockwiseQuantizer, MixedPrecisionPolicy
+from mqde.quant.engine import RecipeSpec
+from mqde.quant.modules import FakeQuantLinear, static_act_params
+from mqde.quant.numerics import QuantSpec, fake_quant, params_from_range
 
 
 def _tiny() -> HFCausalLM:

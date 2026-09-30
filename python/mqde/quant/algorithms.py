@@ -111,7 +111,7 @@ def run(name: str, w: torch.Tensor, x: torch.Tensor | None, ws: QuantSpec, as_: 
     return AlgoResult(w=w, in_scale=in_scale, info=info, final=final, scale=scale, zero=zero)
 
 
-def materialize(ar: AlgoResult, ws: QuantSpec) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def materialize(ar: AlgoResult, ws: QuantSpec) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
     """(quantize-dequantized weight, scale, zero) of an algorithm result. The qparams are exactly the
     ones that produced the weight, so exporters can recover integer codes without re-deriving them."""
     if ar.final and ar.scale is not None:
@@ -193,7 +193,7 @@ def gptq(w: torch.Tensor, x: torch.Tensor | None, ws: QuantSpec, as_: QuantSpec,
     x = _subsample(x.to(w.device, torch.float32), int(p.get("max_rows", 2048)))
     if as_.enabled:  # the layer will see quantized activations at inference
         x = fake_quant_act(x, as_)
-    rows, cols = w.shape
+    cols = w.shape[1]
     W = w.clone()
     H = (2.0 / x.shape[0]) * (x.T @ x)
     dead = torch.diag(H) == 0
@@ -228,6 +228,7 @@ def gptq(w: torch.Tensor, x: torch.Tensor | None, ws: QuantSpec, as_: QuantSpec,
                 scale, zero = compute_qparams(W[:, c : c + gs].contiguous() if ws.granularity == "per_group" else W, col_spec)
                 params.append((scale, zero))
             wcol = W1[:, i : i + 1]
+            assert scale is not None and zero is not None  # set on the first column of every group
             q = qdq(wcol, scale, zero, ws)
             Q1[:, i : i + 1] = q
             e = (wcol - q) / Hinv1[i, i]

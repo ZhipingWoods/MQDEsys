@@ -74,7 +74,7 @@ def requantize(src_gguf: str | Path, dst_gguf: str | Path, type_: str) -> dict[s
         ne0 = int(t.shape[0])
         src_fp = t.tensor_type in (gguf.GGMLQuantizationType.F16, gguf.GGMLQuantizationType.F32)
         if LINEAR.match(t.name) and len(t.shape) == 2 and src_fp:
-            ty = type_
+            ty: str | None = type_
             while ty is not None and ne0 % BLOCK[ty]:
                 ty = FALLBACK[ty]
             if ty is not None:

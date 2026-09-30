@@ -78,7 +78,8 @@ def main() -> None:
         print(json.dumps({"error": "CUDA is not available"}))
         sys.exit(2)
     try:
-        cfg = json.load(open(f"{a.model}/config.json"))
+        with open(f"{a.model}/config.json") as f:
+            cfg = json.load(f)
     except OSError as e:
         print(json.dumps({"error": f"cannot read config.json: {e}"}))
         sys.exit(2)

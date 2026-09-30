@@ -60,7 +60,7 @@ def load_lerobot(root: str | Path, n: int, seed: int = 0, offset: int = 0) -> li
     # actions), episodes are interleaved, and the list is deterministic for a given seed so that
     # [0, offset) (calibration) and [offset, offset + n) (evaluation) never share a frame.
     rng = np.random.default_rng(seed)
-    cols = image_keys + ["observation.state", "action", "episode_index", "frame_index", "task_index"]
+    cols = [*image_keys, "observation.state", "action", "episode_index", "frame_index", "task_index"]
     per_episode: list[list[VLASample]] = []
     total = 0
     for f in files:
@@ -118,7 +118,8 @@ def synthetic(n: int, seed: int = 0, views: int = 2) -> list[VLASample]:
             d.ellipse([90 + v * 20, 20, 160 + v * 20, 90], fill=(60, 60, 60))  # gripper
             imgs.append(np.asarray(img))
         verb = VERBS[int(rng.integers(len(VERBS)))].format(c=names[0])
-        out.append(VLASample(images=imgs, text=verb, state=rng.standard_normal(8).astype(np.float32) * 0.1, meta={"source": "synthetic", "id": i}))
+        state = rng.standard_normal(8).astype(np.float32) * 0.1
+        out.append(VLASample(images=imgs, text=verb, state=state, meta={"source": "synthetic", "id": i}))
     return out
 
 

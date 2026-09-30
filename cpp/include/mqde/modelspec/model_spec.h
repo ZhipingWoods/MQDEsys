@@ -148,7 +148,8 @@ struct ModelSpec {
 Result<ModelSpec> inspect_local(const std::filesystem::path& model_dir);
 
 // Builds a spec from already-parsed inputs (used by tests and remote inspection).
-Result<ModelSpec> build_model_spec(const Json& config, std::vector<TensorInfo> tensors, const ModelFamily& family);
+Result<ModelSpec> build_model_spec(const Json& config, std::vector<TensorInfo> tensors,
+                                   const ModelFamily& family);
 
 Json to_json(const ModelSpec& spec, bool include_tensors = false);
 

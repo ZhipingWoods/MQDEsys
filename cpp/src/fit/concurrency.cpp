@@ -11,11 +11,9 @@ namespace mqde::fit {
 // kv_per_user = (kv_bytes_per_token * context + state_bytes_per_seq).
 // We derive these from a single estimate() call at concurrency=1 to avoid
 // re-implementing the KV formula.
-static ConcurrencyEstimate compute(const modelspec::ModelSpec& spec,
-                                   const estimator::Recipe& recipe,
+static ConcurrencyEstimate compute(const modelspec::ModelSpec& spec, const estimator::Recipe& recipe,
                                    const estimator::HardwareProfile& hw,
-                                   const estimator::BackendProfile& backend,
-                                   int64_t users,
+                                   const estimator::BackendProfile& backend, int64_t users,
                                    int64_t context_tokens) {
   const int64_t ctx = context_tokens > 0 ? context_tokens : 4096;
 
@@ -30,11 +28,9 @@ static ConcurrencyEstimate compute(const modelspec::ModelSpec& spec,
   // Dividing by concurrency (=1) gives per-user cost.
   const double kv_per_user_gb = static_cast<double>(e1.kv_bytes) / (1ull << 30);
   // overhead = activations + runtime (constant, not per-user).
-  const double overhead_gb =
-      static_cast<double>(e1.activation_bytes + e1.runtime_bytes) / (1ull << 30);
+  const double overhead_gb = static_cast<double>(e1.activation_bytes + e1.runtime_bytes) / (1ull << 30);
 
-  const double capacity_gb =
-      static_cast<double>(hw.mem_bytes) / (1ull << 30) * rt1.gpu_memory_utilization;
+  const double capacity_gb = static_cast<double>(hw.mem_bytes) / (1ull << 30) * rt1.gpu_memory_utilization;
   const int64_t n_gpus = std::max<int64_t>(1, 1);  // single GPU for now
   const double cap = capacity_gb * n_gpus;
 
@@ -90,12 +86,10 @@ static ConcurrencyEstimate compute(const modelspec::ModelSpec& spec,
   return out;
 }
 
-ConcurrencyEstimate estimate_concurrency(const modelspec::ModelSpec& spec,
-                                          std::string_view recipe_name,
-                                          const estimator::HardwareProfile& hw,
-                                          const estimator::BackendProfile& backend,
-                                          int64_t users,
-                                          int64_t context_tokens) {
+ConcurrencyEstimate estimate_concurrency(const modelspec::ModelSpec& spec, std::string_view recipe_name,
+                                         const estimator::HardwareProfile& hw,
+                                         const estimator::BackendProfile& backend, int64_t users,
+                                         int64_t context_tokens) {
   auto recipe = estimator::load_recipe(recipe_name);
   if (!recipe) {
     ConcurrencyEstimate err;

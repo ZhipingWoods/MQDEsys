@@ -19,7 +19,7 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch import nn
@@ -28,7 +28,7 @@ from mqde import core
 from mqde.quant import algorithms
 from mqde.quant.engine import ActivationCache, LayerTrace, RecipeSpec, compare
 from mqde.quant.modules import FakeQuantLinear, replace_module, static_act_params
-from mqde.quant.numerics import QuantSpec, fake_quant, fake_quant_act, qdq
+from mqde.quant.numerics import QuantSpec, fake_quant_act, qdq
 
 # Order in which linears inside a decoder block depend on each other.
 GROUPS = [
@@ -116,7 +116,7 @@ class BlockwiseQuantizer:
         self.max_rows = max_rows
         self.act_static = act_static
         self.progress = progress or (lambda e: None)
-        self.originals: dict[str, nn.Linear] = {}
+        self.originals: dict[str, nn.Module] = {}
         steps = algorithms.resolve(algorithm)
         self.transform = next((t for t in steps if t in ("awq", "smoothquant")), None)
         self.fold = fold_scales and self.transform is not None
@@ -157,6 +157,7 @@ class BlockwiseQuantizer:
         groups = [(k, g) for k, g in self._keyed_groups(block) if k in FOLD_PREV]
         cache = self._capture(block, [g[0] for _, g in groups], hs, kws)
         mods = dict(block.named_modules())
+        assert self.transform is not None  # only reached when a transform step was resolved
         fn, params = algorithms.ALGO_REGISTRY[self.transform], algorithms.algorithm_params(self.transform)
         for key, names in groups:
             prev_name = next((n for n in mods if n.endswith(FOLD_PREV[key])), None)
@@ -169,8 +170,8 @@ class BlockwiseQuantizer:
                 w = getattr(prev, "weight", None)
                 ok = prev is not None and w is not None and w.dim() == 1 and w.numel() == cin and "gemma" not in type(prev).__name__.lower()
             x = cache.get(names[0])
-            note = {"transform": self.transform, "group": key}
-            if not ok or x is None:
+            note: dict[str, Any] = {"transform": self.transform, "group": key}
+            if not ok or x is None or prev is None:
                 note["folded"] = f"no ({prev_name or 'no producer'} not foldable)"
             else:
                 ws = MixedPrecisionPolicy.apply_bits(self.recipe.weight, self.policy.lookup(f"{prefix}.{names[0]}", bi).bits)
@@ -195,7 +196,7 @@ class BlockwiseQuantizer:
         cache = ActivationCache(max_rows=self.max_rows)
         handles = [block.get_submodule(n).register_forward_hook(lambda m, i, o, n=n: cache.add(n, i[0])) for n in names]
         try:
-            for h, kw in zip(hs, kws):
+            for h, kw in zip(hs, kws, strict=True):
                 self.ad.run_block(block, h, kw)
         finally:
             for hd in handles:
@@ -205,7 +206,7 @@ class BlockwiseQuantizer:
     @torch.inference_mode()
     def _quantize_layer(self, block: nn.Module, bi: int, prefix: str, name: str, x: torch.Tensor | None) -> LayerTrace | None:
         full = f"{prefix}.{name}"
-        lin = block.get_submodule(name)
+        lin = cast(nn.Linear, block.get_submodule(name))
         pol = self.policy.lookup(full, bi)
         if pol.skip:
             return None
@@ -279,7 +280,7 @@ class BlockwiseQuantizer:
                         self.progress({"kind": "layer", "index": len(traces) - 1, "total": n_lin, "trace": tr.to_dict()})
                 del cache
             # inputs for the next block come from this (now quantized) block
-            hs = [self.ad.run_block(block, h, kw) for h, kw in zip(hs, kws)]
+            hs = [self.ad.run_block(block, h, kw) for h, kw in zip(hs, kws, strict=True)]
             self.progress({"kind": "block", "index": bi, "total": len(blocks)})
         return BlockwiseResult(traces=traces, seconds=time.perf_counter() - t0, skipped=skipped)
 

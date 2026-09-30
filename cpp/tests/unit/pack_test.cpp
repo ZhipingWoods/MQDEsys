@@ -29,9 +29,9 @@ TEST(QuantPack, Fp16KnownValuesAndRoundTrip) {
   EXPECT_EQ(fp32_to_fp16(1.0f), 0x3C00);
   EXPECT_EQ(fp32_to_fp16(-2.0f), 0xC000);
   EXPECT_EQ(fp32_to_fp16(65504.0f), 0x7BFF);
-  EXPECT_EQ(fp32_to_fp16(1e6f), 0x7C00);          // overflow -> inf
-  EXPECT_EQ(fp32_to_fp16(0.1f), 0x2E66);          // RNE
-  EXPECT_EQ(fp32_to_fp16(5.9604645e-08f), 0x0001);  // smallest subnormal
+  EXPECT_EQ(fp32_to_fp16(1e6f), 0x7C00);                // overflow -> inf
+  EXPECT_EQ(fp32_to_fp16(0.1f), 0x2E66);                // RNE
+  EXPECT_EQ(fp32_to_fp16(5.9604645e-08f), 0x0001);      // smallest subnormal
   EXPECT_EQ(fp32_to_fp16(1.0f + 1.0f / 2048), 0x3C00);  // tie -> even
   for (uint32_t h = 0; h < 0x10000; ++h) {
     if ((h & 0x7C00) == 0x7C00 && (h & 0x3FF)) continue;  // NaN payloads
@@ -126,8 +126,8 @@ TEST(QuantPack, GgufBlockSizesAndErrorBounds) {
     double max_rel;
   };
   // rel-L2 budgets: 8 bit << 4 bit < 2 bit
-  for (const auto& c : {Case{GgufType::kQ8_0, 34, 0.01}, Case{GgufType::kQ4_0, 18, 0.15}, Case{GgufType::kQ4_K, 144, 0.12},
-                        Case{GgufType::kQ2_K, 84, 0.6}}) {
+  for (const auto& c : {Case{GgufType::kQ8_0, 34, 0.01}, Case{GgufType::kQ4_0, 18, 0.15},
+                        Case{GgufType::kQ4_K, 144, 0.12}, Case{GgufType::kQ2_K, 84, 0.6}}) {
     const auto tr = gguf_traits(c.t);
     EXPECT_EQ(tr.block_bytes, c.bytes) << tr.name;
     auto q = gguf_quantize(c.t, x.data(), n);

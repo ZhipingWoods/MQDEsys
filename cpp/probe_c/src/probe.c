@@ -72,7 +72,8 @@ static void probe_cpu(mqde_device_info* d) {
     }
     fclose(f);
   }
-  copy_str(d->vendor, sizeof d->vendor, strstr(d->name, "AMD") ? "amd" : (strstr(d->name, "Intel") ? "intel" : "cpu"));
+  copy_str(d->vendor, sizeof d->vendor,
+           strstr(d->name, "AMD") ? "amd" : (strstr(d->name, "Intel") ? "intel" : "cpu"));
 #elif defined(__APPLE__)
   size_t len = sizeof d->name;
   sysctlbyname("machdep.cpu.brand_string", d->name, &len, NULL, 0);

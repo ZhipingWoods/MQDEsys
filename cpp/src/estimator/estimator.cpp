@@ -27,14 +27,16 @@ double qmeta_bytes(const QuantSpec& s, int64_t rows, int64_t cols) {
   double groups = 1;
   if (s.gran == quant::Granularity::kPerChannel) groups = static_cast<double>(rows);
   if (s.gran == quant::Granularity::kPerGroup)
-    groups = static_cast<double>(rows) * std::ceil(static_cast<double>(cols) / static_cast<double>(s.group_size));
+    groups =
+        static_cast<double>(rows) * std::ceil(static_cast<double>(cols) / static_cast<double>(s.group_size));
   const double scale_b = s.fmt == NumFormat::kInt ? 2.0 : 4.0;  // fp16 scales for INT, fp32 for FP8
   const double zero_b = (s.fmt == NumFormat::kInt && !s.symmetric) ? static_cast<double>(s.bits) / 8.0 : 0.0;
   return groups * (scale_b + zero_b);
 }
 
 bool is_embedding(const std::string& name) {
-  return name.find("embed_tokens") != std::string::npos || name.find("position_embedding") != std::string::npos ||
+  return name.find("embed_tokens") != std::string::npos ||
+         name.find("position_embedding") != std::string::npos ||
          name.find("future_tokens") != std::string::npos || name.find("patch_embedding") != std::string::npos;
 }
 
@@ -73,8 +75,8 @@ double component_tokens(const std::string& comp, const Shape& sh) {
 
 }  // namespace
 
-Estimate estimate(const ModelSpec& spec, const Recipe& recipe, const HardwareProfile& hw, const BackendProfile& be,
-                  const RuntimeParams& rt) {
+Estimate estimate(const ModelSpec& spec, const Recipe& recipe, const HardwareProfile& hw,
+                  const BackendProfile& be, const RuntimeParams& rt) {
   Estimate e;
   e.model = spec.path.empty() ? spec.model_type : spec.path;
   e.recipe = recipe.name;
@@ -124,11 +126,14 @@ Estimate estimate(const ModelSpec& spec, const Recipe& recipe, const HardwarePro
     // Matmul work: 2-D weights (embeddings are lookups); category-specific 3-D weights use one slice.
     const double tokens = component_tokens(u.component, sh);
     // MoE routed experts: only experts_per_tok / n_experts of them are touched per token.
-    const double moe_frac = (t.name.find(".experts.") != std::string::npos && spec.text.n_experts > 0 && spec.text.experts_per_tok > 0)
-                                ? static_cast<double>(spec.text.experts_per_tok) / static_cast<double>(spec.text.n_experts)
-                                : 1.0;
+    const double moe_frac =
+        (t.name.find(".experts.") != std::string::npos && spec.text.n_experts > 0 &&
+         spec.text.experts_per_tok > 0)
+            ? static_cast<double>(spec.text.experts_per_tok) / static_cast<double>(spec.text.n_experts)
+            : 1.0;
     if (t.name.ends_with(".weight") && !is_embedding(t.name) && shape.size() >= 2) {
-      const double eff_params = shape.size() == 3 ? static_cast<double>(numel / shape[0]) : static_cast<double>(numel);
+      const double eff_params =
+          shape.size() == 3 ? static_cast<double>(numel / shape[0]) : static_cast<double>(numel);
       flops += 2.0 * eff_params * tokens * moe_frac;
     }
     if (tokens > 0) {
@@ -148,8 +153,10 @@ Estimate estimate(const ModelSpec& spec, const Recipe& recipe, const HardwarePro
   // ---- KV cache + linear-attention state (per sequence) ----
   const auto& tx = spec.text;
   const double kv_b = elem_bytes(recipe.kv, 2.0);
-  const double kv_tok_full = static_cast<double>(tx.n_full_attention) * 2.0 * tx.n_kv_heads * tx.head_dim * kv_b;
-  const double kv_tok_slide = static_cast<double>(tx.n_sliding_attention) * 2.0 * tx.n_kv_heads * tx.head_dim * kv_b;
+  const double kv_tok_full =
+      static_cast<double>(tx.n_full_attention) * 2.0 * tx.n_kv_heads * tx.head_dim * kv_b;
+  const double kv_tok_slide =
+      static_cast<double>(tx.n_sliding_attention) * 2.0 * tx.n_kv_heads * tx.head_dim * kv_b;
   const int64_t slide_ctx = tx.sliding_window > 0 ? std::min(sh.ctx, tx.sliding_window) : sh.ctx;
   e.kv_bytes_per_token = static_cast<uint64_t>(kv_tok_full + kv_tok_slide);
   if (tx.n_linear_attention > 0) {
@@ -157,11 +164,13 @@ Estimate estimate(const ModelSpec& spec, const Recipe& recipe, const HardwarePro
     const double conv_dim = 2.0 * tx.linear_num_key_heads * tx.linear_key_head_dim +
                             static_cast<double>(tx.linear_num_value_heads) * tx.linear_value_head_dim;
     const double per_layer =
-        static_cast<double>(tx.linear_num_value_heads) * tx.linear_key_head_dim * tx.linear_value_head_dim * state_b +
+        static_cast<double>(tx.linear_num_value_heads) * tx.linear_key_head_dim * tx.linear_value_head_dim *
+            state_b +
         conv_dim * static_cast<double>(std::max<int64_t>(tx.linear_conv_kernel - 1, 0)) * 2.0;
     e.state_bytes_per_seq = static_cast<uint64_t>(per_layer * static_cast<double>(tx.n_linear_attention));
   }
-  const double kv_seq = kv_tok_full * static_cast<double>(sh.ctx) + kv_tok_slide * static_cast<double>(slide_ctx) +
+  const double kv_seq = kv_tok_full * static_cast<double>(sh.ctx) +
+                        kv_tok_slide * static_cast<double>(slide_ctx) +
                         static_cast<double>(e.state_bytes_per_seq);
   e.kv_bytes = static_cast<uint64_t>(kv_seq * static_cast<double>(rt.concurrency));
   bytes_read += kv_tok_full * static_cast<double>(sh.ctx) * static_cast<double>(rt.concurrency);
@@ -170,23 +179,29 @@ Estimate estimate(const ModelSpec& spec, const Recipe& recipe, const HardwarePro
   const double act_b = 2.0;
   double act_vision = 0, act_lang = 0, act_action = 0;
   if (spec.vision)
-    act_vision = static_cast<double>(sh.vis_tokens) * (spec.vision->intermediate + 4.0 * spec.vision->hidden) * act_b;
-  act_lang = static_cast<double>(sh.ctx) *
-                 (2.0 * tx.intermediate + 6.0 * tx.hidden + static_cast<double>(tx.n_layers + 1) * tx.hidden) * act_b +
-             static_cast<double>(tx.vocab) * 4.0;  // hidden-state outputs retained + last-token logits (fp32)
+    act_vision =
+        static_cast<double>(sh.vis_tokens) * (spec.vision->intermediate + 4.0 * spec.vision->hidden) * act_b;
+  act_lang =
+      static_cast<double>(sh.ctx) *
+          (2.0 * tx.intermediate + 6.0 * tx.hidden + static_cast<double>(tx.n_layers + 1) * tx.hidden) *
+          act_b +
+      static_cast<double>(tx.vocab) * 4.0;  // hidden-state outputs retained + last-token logits (fp32)
   if (spec.action) {
     const double width = 768.0;  // DiT inner dim of the MiniCPM action head; refined by trace data later
     act_action = (static_cast<double>(sh.action_tokens) * (4.0 * width + 4.0 * width) +
-                  static_cast<double>(sh.ctx) * 2.0 * width) * 4.0;
+                  static_cast<double>(sh.ctx) * 2.0 * width) *
+                 4.0;
   }
-  e.activation_bytes =
-      static_cast<uint64_t>(std::max({act_vision, act_lang, act_action}) * static_cast<double>(rt.concurrency));
+  e.activation_bytes = static_cast<uint64_t>(std::max({act_vision, act_lang, act_action}) *
+                                             static_cast<double>(rt.concurrency));
   e.runtime_bytes = be.runtime_overhead_bytes;
 
   const double f = be.allocator_factor;
-  e.peak_bytes = static_cast<uint64_t>(
-      (static_cast<double>(e.weights_bytes) + static_cast<double>(e.kv_bytes) + static_cast<double>(e.activation_bytes)) * f +
-      static_cast<double>(e.runtime_bytes));
+  e.peak_bytes =
+      static_cast<uint64_t>((static_cast<double>(e.weights_bytes) + static_cast<double>(e.kv_bytes) +
+                             static_cast<double>(e.activation_bytes)) *
+                                f +
+                            static_cast<double>(e.runtime_bytes));
   e.capacity_bytes = static_cast<uint64_t>(static_cast<double>(hw.mem_bytes) * rt.gpu_memory_utilization);
   e.feasible = e.peak_bytes <= e.capacity_bytes;
 
@@ -199,7 +214,8 @@ Estimate estimate(const ModelSpec& spec, const Recipe& recipe, const HardwarePro
   e.compute_format = recipe.act.enabled() ? format_name(recipe.act) : "bf16";
   const std::string peak_key = e.compute_format.starts_with("fp8") ? "fp8" : e.compute_format;
   const double peak = hw.peak_tflops.contains(peak_key) ? hw.peak_tflops.at(peak_key)
-                      : hw.peak_tflops.contains("bf16") ? hw.peak_tflops.at("bf16") : 0.0;
+                      : hw.peak_tflops.contains("bf16") ? hw.peak_tflops.at("bf16")
+                                                        : 0.0;
   e.flops_per_step = flops * static_cast<double>(rt.concurrency);
   e.bytes_per_step = bytes_read;
   const double t_compute = peak > 0 ? e.flops_per_step / (peak * 1e12 * be.mfu) : 0.0;
@@ -208,34 +224,41 @@ Estimate estimate(const ModelSpec& spec, const Recipe& recipe, const HardwarePro
 
   // ---- verdict ----
   if (!e.feasible)
-    e.reasons.push_back(fmt::format("peak {} exceeds usable capacity {} ({}% of {})", format_bytes(double(e.peak_bytes)),
-                                    format_bytes(double(e.capacity_bytes)),
-                                    static_cast<int>(rt.gpu_memory_utilization * 100), format_bytes(double(hw.mem_bytes))));
+    e.reasons.push_back(
+        fmt::format("peak {} exceeds usable capacity {} ({}% of {})", format_bytes(double(e.peak_bytes)),
+                    format_bytes(double(e.capacity_bytes)), static_cast<int>(rt.gpu_memory_utilization * 100),
+                    format_bytes(double(hw.mem_bytes))));
   const auto wfmt = format_name(recipe.weight);
   if (recipe.weight.enabled() &&
       std::find(hw.native_formats.begin(), hw.native_formats.end(), wfmt) == hw.native_formats.end())
-    e.reasons.push_back(fmt::format("{} weights have no native kernel on {} ({}); memory savings need a custom kernel, "
-                                    "accuracy can still be evaluated with fake quantization",
-                                    wfmt, hw.name, hw.arch));
+    e.reasons.push_back(
+        fmt::format("{} weights have no native kernel on {} ({}); memory savings need a custom kernel, "
+                    "accuracy can still be evaluated with fake quantization",
+                    wfmt, hw.name, hw.arch));
   if (recipe.act.enabled()) {
     const auto afmt = format_name(recipe.act);
     if (std::find(hw.native_formats.begin(), hw.native_formats.end(), afmt) == hw.native_formats.end())
-      e.reasons.push_back(fmt::format("{} activations are not natively supported on {} ({})", afmt, hw.name, hw.arch));
+      e.reasons.push_back(
+          fmt::format("{} activations are not natively supported on {} ({})", afmt, hw.name, hw.arch));
   }
-  if (recipe.maturity == "experimental") e.reasons.push_back(fmt::format("{} is an experimental recipe", recipe.name));
+  if (recipe.maturity == "experimental")
+    e.reasons.push_back(fmt::format("{} is an experimental recipe", recipe.name));
   for (const auto& c : e.components)
-    if (!c.quantized && c.modality != "other" && recipe.weight.enabled() && !quant_modalities.contains(c.modality) &&
-        c.params > 0)
+    if (!c.quantized && c.modality != "other" && recipe.weight.enabled() &&
+        !quant_modalities.contains(c.modality) && c.params > 0)
       e.reasons.push_back(fmt::format("component '{}' ({}) kept in original precision", c.name, c.modality));
 
   e.assumptions = {
-      fmt::format("context = {} tokens ({} image(s) x {} tokens + {} text tokens)", sh.ctx, rt.images_per_step,
-                  spec.vision ? spec.vision->tokens_per_image : 0, rt.text_tokens),
-      "KV cache counts full-attention layers only; linear-attention layers hold a constant recurrent + conv state",
-      "activation peak = largest of vision / language / action stages (they run sequentially); SDPA/flash attention assumed",
-      fmt::format("runtime overhead {} and allocator factor {:.2f} from backend '{}'", format_bytes(double(be.runtime_overhead_bytes)),
-                  be.allocator_factor, be.id),
-      fmt::format("latency floor = max(FLOPs / ({} peak x MFU {:.2f}), bytes / (BW x eta {:.2f})); kernel-launch overhead not modeled",
+      fmt::format("context = {} tokens ({} image(s) x {} tokens + {} text tokens)", sh.ctx,
+                  rt.images_per_step, spec.vision ? spec.vision->tokens_per_image : 0, rt.text_tokens),
+      "KV cache counts full-attention layers only; linear-attention layers hold a constant recurrent + conv "
+      "state",
+      "activation peak = largest of vision / language / action stages (they run sequentially); SDPA/flash "
+      "attention assumed",
+      fmt::format("runtime overhead {} and allocator factor {:.2f} from backend '{}'",
+                  format_bytes(double(be.runtime_overhead_bytes)), be.allocator_factor, be.id),
+      fmt::format("latency floor = max(FLOPs / ({} peak x MFU {:.2f}), bytes / (BW x eta {:.2f})); "
+                  "kernel-launch overhead not modeled",
                   e.compute_format, be.mfu, be.eta_bw),
   };
   e.confidence = "low";  // becomes medium/high once measured feedback (S15) exists for (hw, backend, recipe)
@@ -243,7 +266,8 @@ Estimate estimate(const ModelSpec& spec, const Recipe& recipe, const HardwarePro
 }
 
 std::vector<CurvePoint> memory_vs_concurrency(const ModelSpec& s, const Recipe& r, const HardwareProfile& h,
-                                              const BackendProfile& b, RuntimeParams rt, const std::vector<int64_t>& xs) {
+                                              const BackendProfile& b, RuntimeParams rt,
+                                              const std::vector<int64_t>& xs) {
   std::vector<CurvePoint> out;
   for (auto x : xs) {
     rt.concurrency = x;
@@ -254,7 +278,8 @@ std::vector<CurvePoint> memory_vs_concurrency(const ModelSpec& s, const Recipe& 
 }
 
 std::vector<CurvePoint> memory_vs_images(const ModelSpec& s, const Recipe& r, const HardwareProfile& h,
-                                         const BackendProfile& b, RuntimeParams rt, const std::vector<int64_t>& xs) {
+                                         const BackendProfile& b, RuntimeParams rt,
+                                         const std::vector<int64_t>& xs) {
   std::vector<CurvePoint> out;
   for (auto x : xs) {
     rt.images_per_step = x;
@@ -316,7 +341,8 @@ Json to_json(const Estimate& e) {
 Json to_json(const std::vector<CurvePoint>& c) {
   Json arr = Json::array();
   for (const auto& p : c)
-    arr.push_back({{"x", p.x}, {"peak_bytes", p.peak_bytes}, {"kv_bytes", p.kv_bytes}, {"feasible", p.feasible}});
+    arr.push_back(
+        {{"x", p.x}, {"peak_bytes", p.peak_bytes}, {"kv_bytes", p.kv_bytes}, {"feasible", p.feasible}});
   return arr;
 }
 

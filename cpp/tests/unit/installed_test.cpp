@@ -8,7 +8,8 @@ using mqde::fit::normalize_installed_name;
 
 TEST(installed, normalize_ollama_tag_and_quant) {
   // T-R24 acceptance: the ollama name must match the catalog directory name.
-  EXPECT_EQ(normalize_installed_name("qwen2.5:7b-instruct-q4_K_M"), normalize_installed_name("Qwen2.5-7B-Instruct"));
+  EXPECT_EQ(normalize_installed_name("qwen2.5:7b-instruct-q4_K_M"),
+            normalize_installed_name("Qwen2.5-7B-Instruct"));
 }
 
 TEST(installed, normalize_strips_provider_and_quant_suffix) {
@@ -19,7 +20,8 @@ TEST(installed, normalize_strips_provider_and_quant_suffix) {
 
 TEST(installed, is_installed_and_providers) {
   InstalledIndex idx;
-  for (auto [n, src] : {std::pair{"qwen2.5:7b-instruct-q4_K_M", "ollama"}, {"Qwen2.5-7B-Instruct", "hf_cache"}})
+  for (auto [n, src] :
+       {std::pair{"qwen2.5:7b-instruct-q4_K_M", "ollama"}, {"Qwen2.5-7B-Instruct", "hf_cache"}})
     idx.models.push_back(InstalledModel{n, normalize_installed_name(n), src});
   EXPECT_TRUE(idx.is_installed("Qwen/Qwen2.5-7B-Instruct"));
   EXPECT_FALSE(idx.is_installed("Qwen/Qwen2.5-14B-Instruct"));

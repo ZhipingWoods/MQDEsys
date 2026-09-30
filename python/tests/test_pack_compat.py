@@ -28,7 +28,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def _ggml() -> ctypes.CDLL | None:
-    cands = [os.environ.get("MQDE_GGML_LIB", "")] + sorted(glob.glob("/cache/wuzhiping/llama.cpp*/build*/bin/libggml-base.so"))
+    cands = [os.environ.get("MQDE_GGML_LIB", ""), *sorted(glob.glob("/cache/wuzhiping/llama.cpp*/build*/bin/libggml-base.so"))]
     for c in cands:
         if c and Path(c).is_file():
             return ctypes.CDLL(c)

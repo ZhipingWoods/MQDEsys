@@ -14,13 +14,13 @@ typedef enum { MQDE_DEV_CPU = 0, MQDE_DEV_GPU = 1, MQDE_DEV_NPU = 2, MQDE_DEV_OT
 
 typedef struct {
   mqde_dev_kind kind;
-  int index;                 /* vendor index (e.g. NVML index), -1 for CPU */
+  int index; /* vendor index (e.g. NVML index), -1 for CPU */
   char vendor[32];
   char name[128];
-  char arch[32];             /* "sm_89", "x86_64", "arm64" */
+  char arch[32]; /* "sm_89", "x86_64", "arm64" */
   uint64_t mem_total_bytes;
   uint64_t mem_free_bytes;
-  uint32_t compute_units;    /* logical CPUs / SMs when known */
+  uint32_t compute_units; /* logical CPUs / SMs when known */
   char driver_version[64];
 } mqde_device_info;
 

@@ -62,7 +62,8 @@ TEST(modelspec_safetensors, header_roundtrip) {
   auto t = read_model_tensors(dir);
   ASSERT_TRUE(t) << t.error().to_string();
   ASSERT_EQ(t->size(), 9u);
-  for (const auto& ti : *t) EXPECT_EQ(ti.nbytes, static_cast<uint64_t>(ti.numel * dtype_bytes(ti.dtype))) << ti.name;
+  for (const auto& ti : *t)
+    EXPECT_EQ(ti.nbytes, static_cast<uint64_t>(ti.numel * dtype_bytes(ti.dtype))) << ti.name;
 }
 
 TEST(modelspec_safetensors, rejects_garbage) {

@@ -1,12 +1,12 @@
 #include "mqde/server/server.h"
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
-#include <mutex>
 #include <fstream>
+#include <mutex>
 #include <regex>
 #include <thread>
-#include <atomic>
 
 #include <fmt/ranges.h>
 #include <httplib.h>
@@ -15,9 +15,9 @@
 #include "mqde/common/log.h"
 #include "mqde/estimator/estimator.h"
 #include "mqde/fit/claim.h"
-#include "mqde/fit/installed.h"
 #include "mqde/fit/concurrency.h"
 #include "mqde/fit/fit.h"
+#include "mqde/fit/installed.h"
 #include "mqde/hub/catalog.h"
 #include "mqde/hub/hf.h"
 #include "mqde/quant/metrics.h"
@@ -38,7 +38,9 @@ void send_error(httplib::Response& res, int status, std::string_view code, const
 }
 
 void send_error(httplib::Response& res, const Error& e) {
-  const int status = e.code == Errc::kNotFound ? 404 : e.code == Errc::kInvalidArgument || e.code == Errc::kParse ? 400 : 500;
+  const int status = e.code == Errc::kNotFound                                    ? 404
+                     : e.code == Errc::kInvalidArgument || e.code == Errc::kParse ? 400
+                                                                                  : 500;
   send_error(res, status, errc_name(e.code), e.message);
 }
 
@@ -144,13 +146,17 @@ Result<void> serve(const ServerOptions& o) {
     std::error_code ec;
     const auto mt = std::filesystem::last_write_time(p, ec);
     if (!ec && mt != catalog_mtime) {
-      if (auto c = hub::load_catalog(p)) catalog = std::move(*c), catalog_mtime = mt;
-      else MQDE_LOG_WARN("catalog: {}", c.error().to_string());
+      if (auto c = hub::load_catalog(p))
+        catalog = std::move(*c), catalog_mtime = mt;
+      else
+        MQDE_LOG_WARN("catalog: {}", c.error().to_string());
     }
     return catalog;
   };
   // "hf:<repo>" names a catalog entry (no local file access); anything else must be under an allowed root.
-  auto model_allowed = [&](const std::string& m) { return m.starts_with("hf:") || path_allowed(o.allowed_roots, m); };
+  auto model_allowed = [&](const std::string& m) {
+    return m.starts_with("hf:") || path_allowed(o.allowed_roots, m);
+  };
 
   // need_tensors: the catalog only has config-level metadata; structure views need the real tensor list.
   auto get_spec = [&](const std::string& path, bool need_tensors = false) -> Result<modelspec::ModelSpec> {
@@ -163,7 +169,9 @@ Result<void> serve(const ServerOptions& o) {
         if (auto it = spec_cache.find(path); it != spec_cache.end()) return it->second;
       }
       auto s = hub::inspect_remote(hub::HfOptions{}, path.substr(3));
-      if (!s) return std::unexpected(s.error().with_context("model " + path + " is not in the catalog; Hub lookup failed"));
+      if (!s)
+        return std::unexpected(
+            s.error().with_context("model " + path + " is not in the catalog; Hub lookup failed"));
       std::lock_guard lk(spec_mu);
       spec_cache[path] = *s;
       return s;
@@ -200,10 +208,14 @@ Result<void> serve(const ServerOptions& o) {
     Json arr = Json::array();
     if (mqde_probe_all(devs, 32, &n) == 0)
       for (int i = 0; i < n; ++i) {
-        Json d = {{"kind", devs[i].kind == MQDE_DEV_CPU ? "cpu" : "gpu"}, {"index", devs[i].index},
-                  {"name", devs[i].name},  {"arch", devs[i].arch},
-                  {"mem_total_bytes", devs[i].mem_total_bytes}, {"mem_free_bytes", devs[i].mem_free_bytes},
-                  {"compute_units", devs[i].compute_units}, {"driver_version", devs[i].driver_version}};
+        Json d = {{"kind", devs[i].kind == MQDE_DEV_CPU ? "cpu" : "gpu"},
+                  {"index", devs[i].index},
+                  {"name", devs[i].name},
+                  {"arch", devs[i].arch},
+                  {"mem_total_bytes", devs[i].mem_total_bytes},
+                  {"mem_free_bytes", devs[i].mem_free_bytes},
+                  {"compute_units", devs[i].compute_units},
+                  {"driver_version", devs[i].driver_version}};
         if (devs[i].kind == MQDE_DEV_GPU)
           if (auto hw = estimator::match_hardware(devs[i].name)) d["profile"] = hw->id;
         arr.push_back(d);
@@ -241,7 +253,9 @@ Result<void> serve(const ServerOptions& o) {
     send_json(res, *a);
   });
   svr.Get("/api/v1/config", [&](const httplib::Request&, httplib::Response& res) {
-    send_json(res, {{"allowed_roots", o.allowed_roots}, {"gpus", o.gpus}, {"runs_dir", fs::absolute(o.runs_dir).string()}});
+    send_json(res, {{"allowed_roots", o.allowed_roots},
+                    {"gpus", o.gpus},
+                    {"runs_dir", fs::absolute(o.runs_dir).string()}});
   });
 
   // ---------------- models & estimation ----------------
@@ -278,8 +292,10 @@ Result<void> serve(const ServerOptions& o) {
       Json j = estimator::to_json(e);
       j["recipe_id"] = name;
       j["recipe_detail"] = estimator::to_json(*r);
-      j["curves"] = {{"concurrency", estimator::to_json(estimator::memory_vs_concurrency(*spec, *r, *hw, *be, rt, conc_xs))},
-                     {"images", estimator::to_json(estimator::memory_vs_images(*spec, *r, *hw, *be, rt, img_xs))}};
+      j["curves"] = {
+          {"concurrency",
+           estimator::to_json(estimator::memory_vs_concurrency(*spec, *r, *hw, *be, rt, conc_xs))},
+          {"images", estimator::to_json(estimator::memory_vs_images(*spec, *r, *hw, *be, rt, img_xs))}};
       out.push_back(j);
     }
     send_json(res, {{"hardware", estimator::to_json(*hw)}, {"estimates", out}});
@@ -307,9 +323,14 @@ Result<void> serve(const ServerOptions& o) {
         auto r = estimator::load_recipe(rid);
         if (!r) continue;
         auto e = estimator::estimate(*spec, *r, *hw, *be, rt);
-        cells.push_back({{"hardware", hw->id}, {"hardware_name", hw->name}, {"recipe", r->name}, {"feasible", e.feasible},
-                         {"peak_bytes", e.peak_bytes}, {"capacity_bytes", e.capacity_bytes},
-                         {"max_concurrency", e.max_concurrency}, {"latency_floor_ms", e.latency_floor_ms},
+        cells.push_back({{"hardware", hw->id},
+                         {"hardware_name", hw->name},
+                         {"recipe", r->name},
+                         {"feasible", e.feasible},
+                         {"peak_bytes", e.peak_bytes},
+                         {"capacity_bytes", e.capacity_bytes},
+                         {"max_concurrency", e.max_concurrency},
+                         {"latency_floor_ms", e.latency_floor_ms},
                          {"n_notes", e.reasons.size()}});
       }
     }
@@ -356,11 +377,13 @@ Result<void> serve(const ServerOptions& o) {
     auto body = parse_body(req, res);
     if (!body) return;
     const auto path = body->value("path", "");
-    if (!path_allowed(o.allowed_roots, path)) return send_error(res, 403, "forbidden", "path is outside allowed roots");
+    if (!path_allowed(o.allowed_roots, path))
+      return send_error(res, 403, "forbidden", "path is outside allowed roots");
     auto s = get_spec(path);
     if (!s) return send_error(res, s.error());
     const auto name = body->value("tensor", "");
-    auto it = std::find_if(s->tensors.begin(), s->tensors.end(), [&](const auto& t) { return t.name == name; });
+    auto it =
+        std::find_if(s->tensors.begin(), s->tensors.end(), [&](const auto& t) { return t.name == name; });
     if (it == s->tensors.end()) return send_error(res, 404, "not_found", "no such tensor");
     auto vals = modelspec::read_tensor_f32(path, *it);
     Json out = {{"name", it->name}, {"dtype", it->dtype}, {"shape", it->shape}, {"numel", it->numel}};
@@ -372,7 +395,8 @@ Result<void> serve(const ServerOptions& o) {
     out["stats"] = quant::to_json(quant::tensor_stats(vals->data(), static_cast<int64_t>(vals->size())));
     // 64-bin histogram over [min, max] (log-count friendly for heavy tails).
     const int bins = 64;
-    float mn = *std::min_element(vals->begin(), vals->end()), mx = *std::max_element(vals->begin(), vals->end());
+    float mn = *std::min_element(vals->begin(), vals->end()),
+          mx = *std::max_element(vals->begin(), vals->end());
     if (!(mx > mn)) mx = mn + 1e-6f;
     std::vector<int64_t> h(bins, 0);
     for (float v : *vals) h[std::clamp(static_cast<int>((v - mn) / (mx - mn) * bins), 0, bins - 1)]++;
@@ -385,7 +409,8 @@ Result<void> serve(const ServerOptions& o) {
         std::vector<float> q(vals->size());
         if (quant::fake_quant(vals->data(), it->shape[0], it->shape[1], r->weight, q.data()))
           out["quant_preview"] = {{"recipe", r->name},
-                                  {"metrics", quant::to_json(quant::measure(vals->data(), q.data(), static_cast<int64_t>(q.size())))}};
+                                  {"metrics", quant::to_json(quant::measure(
+                                                  vals->data(), q.data(), static_cast<int64_t>(q.size())))}};
       }
     }
     send_json(res, out);
@@ -397,7 +422,8 @@ Result<void> serve(const ServerOptions& o) {
   auto host_ram_gb = [] {
     mqde_device_info devs[32];
     int n = 0;
-    if (mqde_probe_all(devs, 32, &n) == 0 && n > 0) return static_cast<double>(devs[0].mem_total_bytes) / (1024.0 * 1024.0 * 1024.0);
+    if (mqde_probe_all(devs, 32, &n) == 0 && n > 0)
+      return static_cast<double>(devs[0].mem_total_bytes) / (1024.0 * 1024.0 * 1024.0);
     return 0.0;
   };
   auto host_cores = [] {
@@ -424,8 +450,10 @@ Result<void> serve(const ServerOptions& o) {
     int n = 0;
     if (mqde_probe_all(devs, 32, &n) == 0)
       for (int i = 0; i < n; ++i) {
-        if (devs[i].kind == MQDE_DEV_CPU) id.cpu_name = devs[i].name;
-        else if (devs[i].kind == MQDE_DEV_GPU && id.gpu_name.empty()) id.gpu_name = devs[i].name;
+        if (devs[i].kind == MQDE_DEV_CPU)
+          id.cpu_name = devs[i].name;
+        else if (devs[i].kind == MQDE_DEV_GPU && id.gpu_name.empty())
+          id.gpu_name = devs[i].name;
       }
     return id;
   }();
@@ -476,8 +504,8 @@ Result<void> serve(const ServerOptions& o) {
     const std::string source = body->value("source", "local");
     if (models.empty() && source == "catalog") {
       const auto c = catalog_snapshot();
-      for (const auto* e : hub::search(c, body->value("search", ""), body->value("provider", ""), body->value("capability", ""),
-                                       body->value("limit", size_t{50})))
+      for (const auto* e : hub::search(c, body->value("search", ""), body->value("provider", ""),
+                                       body->value("capability", ""), body->value("limit", size_t{50})))
         models.push_back("hf:" + e->name);
     } else if (models.empty())
       for (const auto& p : scan_library()) models.push_back(p.string());
@@ -509,8 +537,15 @@ Result<void> serve(const ServerOptions& o) {
     fit::rank(fits, body->value("sort", "score"));
     Json arr = Json::array();
     for (const auto& f : fits) arr.push_back(fit::to_json(f));
-    send_json(res, {{"system", fit::to_json(*sys)}, {"models", arr}, {"errors", errors},
-                    {"use_cases", [&] { Json u = Json::array(); for (const auto& [k, _] : fit_cfg->use_cases) u.push_back(k); return u; }()}});
+    send_json(
+        res,
+        {{"system", fit::to_json(*sys)}, {"models", arr}, {"errors", errors}, {"use_cases", [&] {
+                                                                                 Json u = Json::array();
+                                                                                 for (const auto& [k, _] :
+                                                                                      fit_cfg->use_cases)
+                                                                                   u.push_back(k);
+                                                                                 return u;
+                                                                               }()}});
   });
   // One model across every hardware profile (llmfit "plan": which device should I buy / deploy to?).
   svr.Post("/api/v1/fit:plan", [&](const httplib::Request& req, httplib::Response& res) {
@@ -547,10 +582,12 @@ Result<void> serve(const ServerOptions& o) {
       rows.push_back(j);
 
       // Minimum hardware: first row that isn't TooTight.
-      if (!min_hw && f->fit_level != fit::FitLevel::kTooTight)
-        min_hw = j;
+      if (!min_hw && f->fit_level != fit::FitLevel::kTooTight) min_hw = j;
       // Recommended hardware: highest score.
-      if (f->score > best_score) { best_score = f->score; rec_hw = j; }
+      if (f->score > best_score) {
+        best_score = f->score;
+        rec_hw = j;
+      }
     }
 
     // Run paths for the requested hardware: try all run modes for the chosen quant.
@@ -559,7 +596,8 @@ Result<void> serve(const ServerOptions& o) {
       Json b = *body;
       auto sys = system_from(b);
       if (sys) {
-        const std::vector<std::string> modes = {"gpu", "tensor_parallel", "moe_offload", "cpu_offload", "cpu_only"};
+        const std::vector<std::string> modes = {"gpu", "tensor_parallel", "moe_offload", "cpu_offload",
+                                                "cpu_only"};
         for (const auto& mode : modes) {
           fit::Request rr = r;
           rr.force_run_mode = mode;
@@ -616,19 +654,22 @@ Result<void> serve(const ServerOptions& o) {
           estimator::RuntimeParams rt1;
           rt1.concurrency = r.concurrency;
           rt1.context_tokens = r.context > 0 ? r.context : 4096;
-          auto e = estimator::estimate(*s, *kv_recipe, *(estimator::load_hardware(body->value("hardware","nvidia/rtx4090"))), *be, rt1);
+          auto e = estimator::estimate(*s, *kv_recipe,
+                                       *(estimator::load_hardware(body->value("hardware", "nvidia/rtx4090"))),
+                                       *be, rt1);
           Json alt;
           alt["kv_quant"] = kv_fmt;
           alt["kv_bytes_per_token"] = static_cast<int64_t>(e.kv_bytes_per_token);
-          alt["memory_delta_gb"] = base_f
-              ? static_cast<double>(e.kv_bytes) / (1ull<<30) - static_cast<double>(base_f->detail.kv_bytes) / (1ull<<30)
-              : 0.0;
+          alt["memory_delta_gb"] = base_f ? static_cast<double>(e.kv_bytes) / (1ull << 30) -
+                                                static_cast<double>(base_f->detail.kv_bytes) / (1ull << 30)
+                                          : 0.0;
           kv_alts.push_back(alt);
         }
       }
     }
 
-    send_json(res, {{"model", path}, {"rows", rows},
+    send_json(res, {{"model", path},
+                    {"rows", rows},
                     {"run_paths", run_paths},
                     {"minimum_hardware", min_hw ? *min_hw : Json(nullptr)},
                     {"recommended_hardware", rec_hw ? *rec_hw : Json(nullptr)},
@@ -680,7 +721,7 @@ Result<void> serve(const ServerOptions& o) {
     auto be = estimator::load_backend(body->value("backend", "hf_transformers"));
     if (!be) return send_error(res, be.error());
     const std::string recipe = body->value("recipe", "bf16");
-    const int64_t users   = body->value("users", 1);
+    const int64_t users = body->value("users", 1);
     const int64_t context = body->value("context", 4096);
     auto c = fit::estimate_concurrency(*s, recipe, *hw, *be, users, context);
     Json out = fit::to_json(c);
@@ -693,9 +734,13 @@ Result<void> serve(const ServerOptions& o) {
       Json by_users = Json::array();
       for (int64_t u : xs) {
         auto e = fit::estimate_concurrency(*s, recipe, *hw, *be, u, context);
-        by_users.push_back({{"users", u}, {"total_gb", e.total_gb}, {"weights_gb", e.weights_gb},
-                            {"kv_gb", e.kv_per_user_gb * static_cast<double>(u)}, {"overhead_gb", e.overhead_gb},
-                            {"utilization_pct", e.utilization_pct}, {"fits", e.fits},
+        by_users.push_back({{"users", u},
+                            {"total_gb", e.total_gb},
+                            {"weights_gb", e.weights_gb},
+                            {"kv_gb", e.kv_per_user_gb * static_cast<double>(u)},
+                            {"overhead_gb", e.overhead_gb},
+                            {"utilization_pct", e.utilization_pct},
+                            {"fits", e.fits},
                             {"max_context", e.max_context_for_users}});
       }
       out["curve"] = by_users;
@@ -707,14 +752,16 @@ Result<void> serve(const ServerOptions& o) {
   svr.Get("/api/v1/catalog", [&](const httplib::Request& req, httplib::Response& res) {
     const auto c = catalog_snapshot();
     const size_t limit = req.has_param("limit") ? std::stoul(req.get_param_value("limit")) : 100;
-    const auto hits = hub::search(c, req.get_param_value("search"), req.get_param_value("provider"),
-                                  req.get_param_value("capability"), limit,
-                                  req.get_param_value("include_demoted") == "1");
+    const auto hits =
+        hub::search(c, req.get_param_value("search"), req.get_param_value("provider"),
+                    req.get_param_value("capability"), limit, req.get_param_value("include_demoted") == "1");
     Json arr = Json::array();
     for (const auto* e : hits) arr.push_back(hub::to_json(*e));
     size_t demoted = 0;
     for (const auto& e : c.entries) demoted += e.demoted;
-    send_json(res, {{"updated_at", c.updated_at}, {"total", c.entries.size()}, {"demoted", demoted}, {"models", arr}});
+    send_json(
+        res,
+        {{"updated_at", c.updated_at}, {"total", c.entries.size()}, {"demoted", demoted}, {"models", arr}});
   });
 
   // Live Hub search (llmfit hf-search). Needs network; the token (if any) comes from HF_TOKEN.
@@ -722,16 +769,21 @@ Result<void> serve(const ServerOptions& o) {
     const std::string q = req.get_param_value("q");
     if (q.empty()) return send_error(res, 400, "invalid_argument", "q is required");
     const std::string limit = req.has_param("limit") ? req.get_param_value("limit") : "20";
-    auto l = hub::list_models({}, "search=" + hub::url_encode(q) + "&limit=" + std::to_string(std::stoi(limit)) +
-                                      "&sort=downloads&direction=-1&expand[]=safetensors&expand[]=downloads"
-                                      "&expand[]=likes&expand[]=pipeline_tag&expand[]=author");
+    auto l =
+        hub::list_models({}, "search=" + hub::url_encode(q) + "&limit=" + std::to_string(std::stoi(limit)) +
+                                 "&sort=downloads&direction=-1&expand[]=safetensors&expand[]=downloads"
+                                 "&expand[]=likes&expand[]=pipeline_tag&expand[]=author");
     if (!l) return send_error(res, l.error());
     Json arr = Json::array();
     for (const auto& m : *l)
-      arr.push_back(Json{{"name", m.value("id", "")}, {"provider", m.value("author", "")},
-                     {"pipeline_tag", m.value("pipeline_tag", "")}, {"hf_downloads", m.value("downloads", 0)},
-                     {"hf_likes", m.value("likes", 0)},
-                     {"parameters_raw", m.contains("safetensors") ? m["safetensors"].value("total", int64_t{0}) : int64_t{0}}});
+      arr.push_back(
+          Json{{"name", m.value("id", "")},
+               {"provider", m.value("author", "")},
+               {"pipeline_tag", m.value("pipeline_tag", "")},
+               {"hf_downloads", m.value("downloads", 0)},
+               {"hf_likes", m.value("likes", 0)},
+               {"parameters_raw",
+                m.contains("safetensors") ? m["safetensors"].value("total", int64_t{0}) : int64_t{0}}});
     send_json(res, {{"models", arr}});
   });
 
@@ -745,15 +797,26 @@ Result<void> serve(const ServerOptions& o) {
     std::atomic<bool> cancel{false};
     mutable std::mutex m;
     std::string state = "queued", error;
-    void set(std::string st, std::string err = {}) { std::lock_guard lk(m); state = std::move(st); error = std::move(err); }
+    void set(std::string st, std::string err = {}) {
+      std::lock_guard lk(m);
+      state = std::move(st);
+      error = std::move(err);
+    }
   };
   std::mutex dl_mu;
   std::map<std::string, std::shared_ptr<Download>> downloads;
   auto dl_json = [](const Download& d) {
     std::lock_guard lk(d.m);
-    return Json{{"id", d.id}, {"repo", d.repo}, {"group", d.group}, {"dir", d.dir}, {"state", d.state},
-                {"error", d.error}, {"bytes_done", d.done.load()}, {"bytes_total", d.total},
-                {"files_done", d.files_done.load()}, {"files_total", d.files_total}};
+    return Json{{"id", d.id},
+                {"repo", d.repo},
+                {"group", d.group},
+                {"dir", d.dir},
+                {"state", d.state},
+                {"error", d.error},
+                {"bytes_done", d.done.load()},
+                {"bytes_total", d.total},
+                {"files_done", d.files_done.load()},
+                {"files_total", d.files_total}};
   };
 
   svr.Post("/api/v1/download", [&](const httplib::Request& req, httplib::Response& res) {
@@ -762,10 +825,13 @@ Result<void> serve(const ServerOptions& o) {
     std::string repo = body->value("model", "");
     if (repo.starts_with("hf:")) repo = repo.substr(3);
     static const std::regex repo_re(R"(^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$)");
-    if (!std::regex_match(repo, repo_re)) return send_error(res, 400, "invalid_argument", "model must be <org>/<name>");
-    if (o.allowed_roots.empty()) return send_error(res, 403, "forbidden", "server has no --allow root to download into");
+    if (!std::regex_match(repo, repo_re))
+      return send_error(res, 400, "invalid_argument", "model must be <org>/<name>");
+    if (o.allowed_roots.empty())
+      return send_error(res, 403, "forbidden", "server has no --allow root to download into");
     const std::string out_root = body->value("output_dir", o.allowed_roots.front());
-    if (!path_allowed(o.allowed_roots, out_root)) return send_error(res, 403, "forbidden", "output_dir is outside allowed roots");
+    if (!path_allowed(o.allowed_roots, out_root))
+      return send_error(res, 403, "forbidden", "output_dir is outside allowed roots");
     auto files = hub::list_files({}, repo);
     if (!files) return send_error(res, files.error());
     const auto groups = hub::group_files(*files);
@@ -776,10 +842,13 @@ Result<void> serve(const ServerOptions& o) {
       budget = *p;
     }
     const auto g = hub::choose_group(groups, budget, body->value("quant", ""));
-    if (!g) return send_error(res, 404, "not_found", "no downloadable weights (or requested quant) in " + repo);
+    if (!g)
+      return send_error(res, 404, "not_found", "no downloadable weights (or requested quant) in " + repo);
     if (body->value("list", false)) {
       Json arr = Json::array();
-      for (const auto& x : groups) arr.push_back({{"group", x.key}, {"bytes", x.bytes}, {"files", x.files.size()}, {"quality", x.quality}});
+      for (const auto& x : groups)
+        arr.push_back(
+            {{"group", x.key}, {"bytes", x.bytes}, {"files", x.files.size()}, {"quality", x.quality}});
       return send_json(res, {{"groups", arr}, {"chosen", g->key}});
     }
     auto d = std::make_shared<Download>();
@@ -798,7 +867,10 @@ Result<void> serve(const ServerOptions& o) {
       for (const auto& f : files) {
         const uint64_t base = d->done.load();
         auto r = hub::download_file({}, d->repo, f.path, std::filesystem::path(d->dir) / f.path,
-                                    [&](uint64_t cur, uint64_t) { d->done = base + cur; return !d->cancel.load(); });
+                                    [&](uint64_t cur, uint64_t) {
+                                      d->done = base + cur;
+                                      return !d->cancel.load();
+                                    });
         if (!r) return d->set(d->cancel ? "cancelled" : "failed", r.error().message);
         d->done = base + *r;
         ++d->files_done;
@@ -808,19 +880,21 @@ Result<void> serve(const ServerOptions& o) {
     send_json(res, dl_json(*d), 202);
   });
 
-  svr.Get(R"(/api/v1/download/([A-Za-z0-9-]+)/status)", [&](const httplib::Request& req, httplib::Response& res) {
-    std::lock_guard lk(dl_mu);
-    const auto it = downloads.find(req.matches[1]);
-    if (it == downloads.end()) return send_error(res, 404, "not_found", "no such download");
-    send_json(res, dl_json(*it->second));
-  });
-  svr.Post(R"(/api/v1/download/([A-Za-z0-9-]+):cancel)", [&](const httplib::Request& req, httplib::Response& res) {
-    std::lock_guard lk(dl_mu);
-    const auto it = downloads.find(req.matches[1]);
-    if (it == downloads.end()) return send_error(res, 404, "not_found", "no such download");
-    it->second->cancel = true;
-    send_json(res, dl_json(*it->second));
-  });
+  svr.Get(R"(/api/v1/download/([A-Za-z0-9-]+)/status)",
+          [&](const httplib::Request& req, httplib::Response& res) {
+            std::lock_guard lk(dl_mu);
+            const auto it = downloads.find(req.matches[1]);
+            if (it == downloads.end()) return send_error(res, 404, "not_found", "no such download");
+            send_json(res, dl_json(*it->second));
+          });
+  svr.Post(R"(/api/v1/download/([A-Za-z0-9-]+):cancel)",
+           [&](const httplib::Request& req, httplib::Response& res) {
+             std::lock_guard lk(dl_mu);
+             const auto it = downloads.find(req.matches[1]);
+             if (it == downloads.end()) return send_error(res, 404, "not_found", "no such download");
+             it->second->cancel = true;
+             send_json(res, dl_json(*it->second));
+           });
 
   // ---------------- jobs ----------------
   svr.Post("/api/v1/jobs", [&](const httplib::Request& req, httplib::Response& res) {
@@ -828,16 +902,20 @@ Result<void> serve(const ServerOptions& o) {
     if (!body) return;
     Json job = *body;
     const auto model = job.value("/model/path"_json_pointer, "");
-    if (!path_allowed(o.allowed_roots, model)) return send_error(res, 403, "forbidden", "model path is outside allowed roots");
+    if (!path_allowed(o.allowed_roots, model))
+      return send_error(res, 403, "forbidden", "model path is outside allowed roots");
     for (const char* ptr : {"/calibration/dataset", "/evaluation/dataset"}) {
       const auto ds = job.value(Json::json_pointer(ptr), std::string("synthetic"));
-      if (!path_allowed(o.allowed_roots, ds)) return send_error(res, 403, "forbidden", std::string(ptr) + " is outside allowed roots");
+      if (!path_allowed(o.allowed_roots, ds))
+        return send_error(res, 403, "forbidden", std::string(ptr) + " is outside allowed roots");
     }
     const auto recipes = job.value("/quant/recipe"_json_pointer, Json::array());
-    if (!recipes.is_array() || recipes.empty()) return send_error(res, 400, "invalid_argument", "quant.recipe must be a non-empty list");
+    if (!recipes.is_array() || recipes.empty())
+      return send_error(res, 400, "invalid_argument", "quant.recipe must be a non-empty list");
     for (const auto& r : recipes)
       if (auto rr = estimator::load_recipe(r.get<std::string>()); !rr) return send_error(res, rr.error());
-    if (const auto algo = job.value("/quant/algorithm"_json_pointer, std::string("recipe")); algo != "recipe") {
+    if (const auto algo = job.value("/quant/algorithm"_json_pointer, std::string("recipe"));
+        algo != "recipe") {
       auto known = load_algorithms();
       if (!known) return send_error(res, known.error());
       bool ok = false;
@@ -845,10 +923,14 @@ Result<void> serve(const ServerOptions& o) {
       if (!ok) return send_error(res, 400, "invalid_argument", "unknown quant.algorithm '" + algo + "'");
     }
     const auto mtype = job.value("/model/type"_json_pointer, std::string("vla"));
-    if (mtype != "vla" && mtype != "llm") return send_error(res, 400, "invalid_argument", "model.type must be 'vla' or 'llm'");
+    if (mtype != "vla" && mtype != "llm")
+      return send_error(res, 400, "invalid_argument", "model.type must be 'vla' or 'llm'");
     const bool cpu = job.value("/deploy/device"_json_pointer, std::string()) == "cpu";
-    if (cpu && mtype != "llm") return send_error(res, 400, "invalid_argument", "deploy.device=cpu is only supported for model.type=llm");
-    if (!cpu && o.gpus.empty()) return send_error(res, 503, "unavailable", "server started without a GPU pool (--gpus)");
+    if (cpu && mtype != "llm")
+      return send_error(res, 400, "invalid_argument",
+                        "deploy.device=cpu is only supported for model.type=llm");
+    if (!cpu && o.gpus.empty())
+      return send_error(res, 503, "unavailable", "server started without a GPU pool (--gpus)");
     job["apiVersion"] = "mqde/v1";
     job["kind"] = "Job";
     const auto id = runner.submit(job);
@@ -869,9 +951,12 @@ Result<void> serve(const ServerOptions& o) {
       auto spec_yaml = load_structured_file(e.path() / "job.yaml");
       const Json jy = spec_yaml ? *spec_yaml : Json::object();
       // report.kind is written by llm_job; job.yaml carries model.type for server-submitted jobs; else VLA
-      j["kind"] = rep.is_object() && rep.value("kind", "") == "llm" ? std::string("llm")
-                                                                   : jy.value("/model/type"_json_pointer, std::string("vla"));
-      j["device"] = jy.value("/deploy/device"_json_pointer, rep.is_object() ? rep.value("/spec/device"_json_pointer, std::string()) : std::string());
+      j["kind"] = rep.is_object() && rep.value("kind", "") == "llm"
+                      ? std::string("llm")
+                      : jy.value("/model/type"_json_pointer, std::string("vla"));
+      j["device"] =
+          jy.value("/deploy/device"_json_pointer,
+                   rep.is_object() ? rep.value("/spec/device"_json_pointer, std::string()) : std::string());
       if (rep.is_object()) {
         j["name"] = rep.value("/spec/name"_json_pointer, id);
         j["recipes"] = rep.value("/spec/recipes"_json_pointer, Json::array());
@@ -902,11 +987,12 @@ Result<void> serve(const ServerOptions& o) {
     send_json(res, j);
   });
 
-  svr.Post(R"(/api/v1/jobs/([A-Za-z0-9_\-]+):cancel)", [&](const httplib::Request& req, httplib::Response& res) {
-    const auto id = req.matches[1].str();
-    if (!runner.cancel(id)) return send_error(res, 409, "conflict", "job is not queued or running");
-    send_json(res, {{"job_id", id}, {"state", "CANCELLED"}});
-  });
+  svr.Post(R"(/api/v1/jobs/([A-Za-z0-9_\-]+):cancel)",
+           [&](const httplib::Request& req, httplib::Response& res) {
+             const auto id = req.matches[1].str();
+             if (!runner.cancel(id)) return send_error(res, 409, "conflict", "job is not queued or running");
+             send_json(res, {{"job_id", id}, {"state", "CANCELLED"}});
+           });
 
   svr.Get(R"(/api/v1/jobs/([A-Za-z0-9_\-]+)/log)", [&](const httplib::Request& req, httplib::Response& res) {
     const auto id = req.matches[1].str();
@@ -922,7 +1008,8 @@ Result<void> serve(const ServerOptions& o) {
   // Events: replay from `after_seq`, then (stream) follow the file until the job ends.
   auto events_handler = [&](const httplib::Request& req, httplib::Response& res, bool stream) {
     const auto id = req.matches[1].str();
-    if (!valid_job_id(id) || !fs::is_directory(o.runs_dir / id)) return send_error(res, 404, "not_found", "no such job");
+    if (!valid_job_id(id) || !fs::is_directory(o.runs_dir / id))
+      return send_error(res, 404, "not_found", "no such job");
     const int64_t after = req.has_param("after_seq") ? std::stoll(req.get_param_value("after_seq")) : 0;
     const auto path = o.runs_dir / id / "events.jsonl";
     if (!stream) {
@@ -943,38 +1030,40 @@ Result<void> serve(const ServerOptions& o) {
     auto offset = std::make_shared<std::streamoff>(0);
     auto last_seq = std::make_shared<int64_t>(after);
     auto idle = std::make_shared<int>(0);
-    res.set_chunked_content_provider("text/event-stream", [&, path, id, offset, last_seq, idle](size_t, httplib::DataSink& sink) {
-      std::ifstream in(path);
-      bool terminal = false;
-      if (in) {
-        in.seekg(*offset);
-        std::string line;
-        while (std::getline(in, line)) {
-          if (in.eof()) break;  // partial line; re-read next round
-          *offset = in.tellg();
-          try {
-            auto ev = Json::parse(line);
-            const int64_t seq = ev.value("seq", 0);
-            if (seq <= *last_seq) continue;
-            *last_seq = seq;
-            const auto msg = fmt::format("id: {}\ndata: {}\n\n", seq, line);
-            if (!sink.write(msg.data(), msg.size())) return false;
-            if (ev.value("type", "") == "job_state" && ev.value("state", "") != "RUNNING") terminal = true;
-          } catch (...) {
+    res.set_chunked_content_provider(
+        "text/event-stream", [&, path, id, offset, last_seq, idle](size_t, httplib::DataSink& sink) {
+          std::ifstream in(path);
+          bool terminal = false;
+          if (in) {
+            in.seekg(*offset);
+            std::string line;
+            while (std::getline(in, line)) {
+              if (in.eof()) break;  // partial line; re-read next round
+              *offset = in.tellg();
+              try {
+                auto ev = Json::parse(line);
+                const int64_t seq = ev.value("seq", 0);
+                if (seq <= *last_seq) continue;
+                *last_seq = seq;
+                const auto msg = fmt::format("id: {}\ndata: {}\n\n", seq, line);
+                if (!sink.write(msg.data(), msg.size())) return false;
+                if (ev.value("type", "") == "job_state" && ev.value("state", "") != "RUNNING")
+                  terminal = true;
+              } catch (...) {
+              }
+            }
           }
-        }
-      }
-      auto p = runner.get(id);
-      const bool running = p && (p->state == "QUEUED" || p->state == "RUNNING");
-      if (terminal || (!running && ++*idle > 4)) {
-        sink.done();
-        return true;
-      }
-      static const std::string ping = ": ping\n\n";
-      if (!sink.write(ping.data(), ping.size())) return false;
-      std::this_thread::sleep_for(std::chrono::milliseconds(400));
-      return true;
-    });
+          auto p = runner.get(id);
+          const bool running = p && (p->state == "QUEUED" || p->state == "RUNNING");
+          if (terminal || (!running && ++*idle > 4)) {
+            sink.done();
+            return true;
+          }
+          static const std::string ping = ": ping\n\n";
+          if (!sink.write(ping.data(), ping.size())) return false;
+          std::this_thread::sleep_for(std::chrono::milliseconds(400));
+          return true;
+        });
   };
   svr.Get(R"(/api/v1/jobs/([A-Za-z0-9_\-]+)/events)",
           [&](const httplib::Request& req, httplib::Response& res) { events_handler(req, res, false); });
@@ -998,7 +1087,8 @@ Result<void> serve(const ServerOptions& o) {
 
   svr.new_task_queue = [] { return new httplib::ThreadPool(16); };
   MQDE_LOG_WARN("mqde-server listening on http://{}:{} (runs: {}, gpus: [{}], web: {})", o.host, o.port,
-                fs::absolute(o.runs_dir).string(), fmt::join(o.gpus, ","), o.web_dir.empty() ? "-" : o.web_dir.string());
+                fs::absolute(o.runs_dir).string(), fmt::join(o.gpus, ","),
+                o.web_dir.empty() ? "-" : o.web_dir.string());
   if (!svr.listen(o.host, o.port)) return make_error(Errc::kIo, "cannot listen on {}:{}", o.host, o.port);
   return {};
 }

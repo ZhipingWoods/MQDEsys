@@ -51,7 +51,10 @@ YAML::Node to_yaml(const Json& j) {
 }  // namespace
 
 JobRunner::JobRunner(fs::path runs_dir, fs::path repo_root, std::string python, std::vector<int> gpus)
-    : runs_(std::move(runs_dir)), repo_(std::move(repo_root)), python_(std::move(python)), gpus_(std::move(gpus)) {
+    : runs_(std::move(runs_dir)),
+      repo_(std::move(repo_root)),
+      python_(std::move(python)),
+      gpus_(std::move(gpus)) {
   fs::create_directories(runs_);
   thread_ = std::thread([this] { loop(); });
 }
@@ -122,8 +125,10 @@ std::vector<JobProc> JobRunner::list() const {
 Json JobRunner::gpu_status() const {
   std::lock_guard lk(mu_);
   Json arr = Json::array();
-  for (int g : gpus_) arr.push_back({{"gpu", g}, {"job", busy_.contains(g) ? Json(busy_.at(g)) : Json(nullptr)}});
-  return {{"pool", arr}, {"cpu", cpu_busy_.empty() ? Json(nullptr) : Json(cpu_busy_)}, {"queued", queue_.size()}};
+  for (int g : gpus_)
+    arr.push_back({{"gpu", g}, {"job", busy_.contains(g) ? Json(busy_.at(g)) : Json(nullptr)}});
+  return {
+      {"pool", arr}, {"cpu", cpu_busy_.empty() ? Json(nullptr) : Json(cpu_busy_)}, {"queued", queue_.size()}};
 }
 
 void JobRunner::launch(JobProc& j, int gpu) {
@@ -145,8 +150,8 @@ void JobRunner::launch(JobProc& j, int gpu) {
     ::setenv("PYTHONPATH", old && *old ? (pythonpath + ":" + old).c_str() : pythonpath.c_str(), 1);
     ::setenv("MQDE_DATA_DIR", (repo_ / "data").c_str(), 1);
     ::setenv("PYTHONUNBUFFERED", "1", 1);
-    ::execlp(python_.c_str(), python_.c_str(), "-m", j.module.c_str(), job_yaml.c_str(), "--job-id", j.id.c_str(),
-             "--device", gpu >= 0 ? "cuda:0" : "cpu", static_cast<char*>(nullptr));
+    ::execlp(python_.c_str(), python_.c_str(), "-m", j.module.c_str(), job_yaml.c_str(), "--job-id",
+             j.id.c_str(), "--device", gpu >= 0 ? "cuda:0" : "cpu", static_cast<char*>(nullptr));
     std::fprintf(stderr, "exec %s failed: %s\n", python_.c_str(), std::strerror(errno));
     ::_exit(127);
   }
@@ -156,7 +161,8 @@ void JobRunner::launch(JobProc& j, int gpu) {
   j.started_at = now_s();
   if (pid > 0 && gpu >= 0) busy_[gpu] = j.id;
   if (pid > 0 && gpu < 0) cpu_busy_ = j.id;
-  MQDE_LOG_INFO("job {} started on {} (pid {}, {})", j.id, gpu >= 0 ? fmt::format("GPU {}", gpu) : "CPU", pid, j.module);
+  MQDE_LOG_INFO("job {} started on {} (pid {}, {})", j.id, gpu >= 0 ? fmt::format("GPU {}", gpu) : "CPU", pid,
+                j.module);
 }
 
 void JobRunner::reap() {

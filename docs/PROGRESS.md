@@ -16,7 +16,7 @@
 | 环境 | conda env `mqde`（python 3.11, torch 2.11+cu128, transformers 5.7.0, cmake/gcc12/fmt/yaml-cpp/httplib 来自 conda-forge） |
 | 服务 | `mqde serve` 监听 127.0.0.1:18080，GPU 池 2,3；本机访问：`ssh -N -L 18080:127.0.0.1:18080 4090` → http://localhost:18080 |
 | 下一步建议 | ① 真实部署路径（T-0405 打包 → T-0705 llama.cpp / T-0701 vLLM）让显存真正下降；② GPTQ/AWQ/SmoothQuant（T-0601~0603）改善 W4A8/W2；③ 敏感层混合精度（T-0608/T-0904，数据已指向视觉前 5 块）；④ T-0005/T-0006 CI |
-| 最后更新 | 2026-09-29 · Claude（Opus 5.5） |
+| 最后更新 | 2026-09-30 · Claude（Opus 5） |
 
 ### 快速复现
 
@@ -172,6 +172,20 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **下一步**（按顺序）：T-R06→R07→R08（GPTQModel 式量化流程），T-R11→R12→R13（evalscope 式评测），T-R14→R15（FlagTree 式多硬件）。
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
+
+### 2026-09-30 · 前端 LLM 化 + AWQ/SmoothQuant 折叠 + 代码门禁（T-0005/0603/0705/0807）
+- **本次完成**：
+  - 前端：配方对比页重写为 LLM / VLA 双页签（LLM 为 PPL × 量化层平均位宽散点 + 明细表 + llama.cpp 部署表）；LLM 作业页新增 llama.cpp 部署卡片（解码速度柱 + PPL 折线）与敏感度卡片；作业列表显示作业类型与 CPU/GPU 设备；资源预估、模型结构页支持 `hf:org/name`（服务端对目录外模型回退 `inspect_remote`）；新建作业页可勾选 GGUF 部署类型与敏感度分析。
+  - `llm_job` 新增 `deploy_llamacpp` 阶段：F16 转换 → 我们的块量化重编码 → `llama-perplexity` + `llama-bench`，结果进 report。
+  - AWQ / SmoothQuant 改为**按输入分组搜索一个平滑系数并折叠进产生该输入的算子**（input_layernorm / post_attention_layernorm / up_proj 行 / v_proj 行）：FP 下等价、推理时无额外除法、可直接导出；GQA 模型 v_proj 行数 ≠ o_proj 输入维，o_proj 不折叠（trace 里写明原因）。`restore()` 会逐字节还原被改写的 norm/权重。
+  - T-0005 代码门禁：`scripts/check_all.sh`（deps / clang-format / 构建 / ctest / clang-tidy / ruff / mypy / pytest / 前端构建，末尾汇总表，SKIP 与 FAIL 区分）、`scripts/check_deps.py`（按 STRUCTURE.md 的模块依赖方向检查 `#include <mqde/...>`）、`.clang-format`、`.clang-tidy`、`.editorconfig`、`.pre-commit-config.yaml`、`python/pyproject.toml`（ruff + mypy + pytest 配置）、`docs/guides/coding-standards.md`。
+- **校验结果**（实测）：
+  - `scripts/check_all.sh` 全绿：deps 55 文件 0 违规、clang-format 通过、ctest 98/98、ruff 通过、mypy `31 source files` 无问题、pytest 66 passed、前端构建通过；clang-tidy 为 SKIP（conda clang-tools 23 与系统 clang 14 的 builtin 头不兼容，脚本按“仓库外文件报错=环境问题”判定为 SKIP 而非 FAIL）。
+  - 门禁有效性：故意加入反向依赖 + 格式错误 + 无注解函数，分别被 check_deps（`cpp/src/quant/metrics.cpp:2: 'quant' must not depend on 'server'`）、clang-format（`metrics.cpp:84:33`）、mypy（`ppl.py:37 no-untyped-def`）指出并使门禁失败。
+  - 为此次门禁做的实质修复：ruff 116 → 0（含 `zip(..., strict=True)` 7 处、percentile 下界 bug 之外的 `E741`/长行/未用 noqa）；mypy 51 → 0（`FakeQuantLinear` 的 buffer 类型声明、`materialize` 返回 Optional zero、GPTQ 组参数断言、进度回调改为返回 None 的具名函数等）；clang-format 一次性格式化 51 个文件（1354+/833-，纯格式，ctest 仍 98/98）；删除 `quant_spec.cpp` 里 `? 8 : 8` 的死分支。
+  - 全功能 LLM 作业（API 提交，CPU）：W4A16/W4A8 GPTQ + KV int8 + 按层类型敏感度 + GPTQ/AWQ 导出 + llama.cpp(q8_0,q4_k) 一次跑通；W4A16 PPL 20.411（导出后真实权重 20.412），敏感度最差层类型 `mlp.down_proj`/`up_proj`/`gate_proj`，建议升 8 bit 的是 `self_attn.v_proj`+`mlp.down_proj`；llama.cpp：F16 13.890（27.9 tok/s 解码）、我们的 Q8_0 13.935（41.6）、Q4_K 15.741（54.2）。
+- **未完成 / 下一步**：clang-tidy 需要一致的 clang 工具链（装 conda `clangxx` 或系统 clang-19+）才能真正跑；T-0006 CI 可直接调用 `scripts/check_all.sh`；折叠后的 AWQ/SmoothQuant PPL 对照仍在后台跑（`/cache/wuzhiping/llm_fold`）。
+
 
 ### 2026-09-29 · 敏感度分析 + 混合精度建议（T-0902/T-0904）+ Hub 远程检查（T-0204）
 - **本次完成**：

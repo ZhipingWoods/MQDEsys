@@ -12,15 +12,18 @@ pytest.importorskip("transformers")
 pytest.importorskip("safetensors")
 sys.path.insert(0, str(Path(__file__).parent))
 
-from _tiny import calib, tiny  # noqa: E402
+from _tiny import calib, tiny
 
-from mqde.export import get_exporter  # noqa: E402
-from mqde.export.real_check import real_check, use_real_weights  # noqa: E402
-from mqde.quant.blockwise import BlockwiseQuantizer  # noqa: E402
-from mqde.quant.engine import RecipeSpec  # noqa: E402
+from mqde.export import get_exporter
+from mqde.export.real_check import real_check, use_real_weights
+from mqde.quant.blockwise import BlockwiseQuantizer
+from mqde.quant.engine import RecipeSpec
 
 
-@pytest.mark.parametrize("fmt,recipe,algo", [("gptq", "w4a16", "gptq"), ("gptq", "w2a16", "gptq"), ("gptq", "w8a16", "rtn"), ("awq", "w4a16", "rtn")])
+@pytest.mark.parametrize(
+    "fmt,recipe,algo",
+    [("gptq", "w4a16", "gptq"), ("gptq", "w2a16", "gptq"), ("gptq", "w8a16", "rtn"), ("awq", "w4a16", "rtn")],
+)
 def test_codes_identical_and_weights_close(fmt: str, recipe: str, algo: str, tmp_path: Path) -> None:
     ad = tiny()
     BlockwiseQuantizer(ad, RecipeSpec.load(recipe), algo).run(calib())

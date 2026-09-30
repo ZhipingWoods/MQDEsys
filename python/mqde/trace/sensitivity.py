@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from torch import nn
 
@@ -60,7 +60,7 @@ def fallback_sensitivity(
                      "avg_bits": w_bits / max(params, 1)})
         if progress:
             progress(i + 1, len(groups), g)
-    ranked = sorted(rows, key=lambda r: -r["recovered"])
+    ranked = sorted(rows, key=lambda r: -cast(float, r["recovered"]))
     return {"by": by, "metric_quantized": base, "groups": rows, "ranking": [r["group"] for r in ranked],
             "seconds": time.perf_counter() - t0}
 

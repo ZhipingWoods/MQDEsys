@@ -15,6 +15,15 @@ from mqde.quant.numerics import QuantSpec, fake_quant, fake_quant_act, params_fr
 
 
 class FakeQuantLinear(nn.Module):
+    # Buffer types: nn.Module.__getattr__ is typed `Tensor | Module`, so declaring them here is what lets
+    # callers (and mypy) treat them as tensors.
+    weight: torch.Tensor
+    w_scale: torch.Tensor | None
+    w_zero: torch.Tensor | None
+    in_scale: torch.Tensor | None
+    act_scale: torch.Tensor | None
+    act_zero: torch.Tensor | None
+
     def __init__(
         self,
         linear: nn.Linear,
@@ -24,7 +33,7 @@ class FakeQuantLinear(nn.Module):
         w_override: torch.Tensor | None = None,
         in_scale: torch.Tensor | None = None,
         final: bool = False,
-        w_qparams: tuple[torch.Tensor, torch.Tensor] | None = None,
+        w_qparams: tuple[torch.Tensor, torch.Tensor | None] | None = None,
     ) -> None:
         """w_override: transformed weight from an algorithm (AWQ/SmoothQuant scaled, or GPTQ-compensated).
         in_scale: per-input-channel divisor for activations paired with a scaled weight.
@@ -64,7 +73,7 @@ class FakeQuantLinear(nn.Module):
         if self.in_scale is not None:
             x = (x.to(torch.float32) / self.in_scale).to(x.dtype)
         if self.a_spec.enabled:
-            if self.act_scale is not None:
+            if self.act_scale is not None and self.act_zero is not None:
                 x = qdq(x.to(torch.float32), self.act_scale, self.act_zero, self.a_spec).to(x.dtype)
             else:
                 x = fake_quant_act(x, self.a_spec)

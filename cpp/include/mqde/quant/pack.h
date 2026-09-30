@@ -6,11 +6,14 @@
 //                            10-1-10-1-10 3-bit scheme) and AWQ are exactly this stream.
 //   GPTQ (GPTQModel/AutoGPTQ) qweight [in*bits/32, out]  packs along the input dim (one column per output)
 //                            qzeros  [groups, out*bits/32] packs along the output dim
-//                            scales  [groups, out] fp16; v1 checkpoints store zero-1 (mod 2^bits), v2 store zero
-//   AWQ GEMM (llm-awq)       qweight [in, out*bits/32] packs along the output dim; qzeros [groups, out*bits/32];
+//                            scales  [groups, out] fp16; v1 checkpoints store zero-1 (mod 2^bits), v2 store
+//                            zero
+//   AWQ GEMM (llm-awq)       qweight [in, out*bits/32] packs along the output dim; qzeros [groups,
+//   out*bits/32];
 //                            4-bit words hold outputs in the order [0,2,4,6,1,3,5,7]
 //   GGUF blocks              Q8_0 / Q4_0 / Q4_K / Q2_K; quantizers are bit-identical ports of ggml's
-//                            quantize_row_*_ref (llama.cpp ggml-quants.c), dequantizers match dequantize_row_*.
+//                            quantize_row_*_ref (llama.cpp ggml-quants.c), dequantizers match
+//                            dequantize_row_*.
 //
 // Integer codes are unsigned in [0, 2^bits - 1] with dequant w = scale * (code - zero). Symmetric specs
 // (codes in [-2^(b-1), 2^(b-1)-1], zero 0) are exported by adding 2^(b-1) to both codes and zero.
@@ -37,15 +40,16 @@ struct IntPacked {
   int64_t qweight_rows = 0, qweight_cols = 0, qzeros_rows = 0, qzeros_cols = 0;
 };
 
-// codes [out, in] and zeros/scales [out, groups] are row-major (the QParams layout); groups = in / group_size.
-Result<IntPacked> pack_gptq(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out, int64_t in,
-                            int64_t group_size, int bits, bool v1 = true);
+// codes [out, in] and zeros/scales [out, groups] are row-major (the QParams layout); groups = in /
+// group_size.
+Result<IntPacked> pack_gptq(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out,
+                            int64_t in, int64_t group_size, int bits, bool v1 = true);
 Result<void> unpack_gptq(const IntPacked& p, int64_t out, int64_t in, int64_t group_size, int bits, bool v1,
                          uint8_t* codes, uint8_t* zeros);
-Result<IntPacked> pack_awq(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out, int64_t in,
-                           int64_t group_size, int bits = 4);
-Result<void> unpack_awq(const IntPacked& p, int64_t out, int64_t in, int64_t group_size, int bits, uint8_t* codes,
-                        uint8_t* zeros);
+Result<IntPacked> pack_awq(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out,
+                           int64_t in, int64_t group_size, int bits = 4);
+Result<void> unpack_awq(const IntPacked& p, int64_t out, int64_t in, int64_t group_size, int bits,
+                        uint8_t* codes, uint8_t* zeros);
 
 // ggml_type ids, so tensors can be written into GGUF files unchanged.
 enum class GgufType : uint32_t { kQ4_0 = 2, kQ8_0 = 8, kQ2_K = 10, kQ4_K = 12 };

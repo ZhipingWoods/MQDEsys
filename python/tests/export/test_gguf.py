@@ -9,8 +9,8 @@ import pytest
 
 gguf = pytest.importorskip("gguf")
 
-from mqde import core  # noqa: E402
-from mqde.export.gguf import dequantize_linear_weights, requantize  # noqa: E402
+from mqde import core
+from mqde.export.gguf import dequantize_linear_weights, requantize
 
 
 def _src(path: Path) -> dict[str, np.ndarray]:

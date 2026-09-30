@@ -36,7 +36,8 @@ Result<std::vector<TensorInfo>> read_safetensors_header(const fs::path& file) {
   return parse_safetensors_header(header, file.filename().string());
 }
 
-Result<std::vector<TensorInfo>> parse_safetensors_header(const std::string& header, const std::string& file_name) {
+Result<std::vector<TensorInfo>> parse_safetensors_header(const std::string& header,
+                                                         const std::string& file_name) {
   const uint64_t len = header.size();
   Json j;
   try {
@@ -72,7 +73,8 @@ Result<std::vector<TensorInfo>> parse_safetensors_header(const std::string& head
 
 Result<std::vector<TensorInfo>> read_model_tensors(const fs::path& model_dir) {
   if (fs::is_regular_file(model_dir)) return read_safetensors_header(model_dir);
-  if (!fs::is_directory(model_dir)) return make_error(Errc::kNotFound, "model path '{}' does not exist", model_dir.string());
+  if (!fs::is_directory(model_dir))
+    return make_error(Errc::kNotFound, "model path '{}' does not exist", model_dir.string());
 
   std::set<fs::path> shards;
   for (const auto& e : fs::directory_iterator(model_dir)) {
@@ -83,7 +85,8 @@ Result<std::vector<TensorInfo>> read_model_tensors(const fs::path& model_dir) {
       const Json weight_map = idx.value("weight_map", Json::object());
       for (auto it = weight_map.begin(); it != weight_map.end(); ++it) {
         if (!it->is_string())
-          return make_error(Errc::kParse, "'{}': weight_map entry for '{}' is not a file name", name, it.key());
+          return make_error(Errc::kParse, "'{}': weight_map entry for '{}' is not a file name", name,
+                            it.key());
         shards.insert(model_dir / it->get<std::string>());
       }
     }
@@ -92,7 +95,8 @@ Result<std::vector<TensorInfo>> read_model_tensors(const fs::path& model_dir) {
     for (const auto& e : fs::directory_iterator(model_dir))
       if (e.path().extension() == ".safetensors") shards.insert(e.path());
   }
-  if (shards.empty()) return make_error(Errc::kNotFound, "no *.safetensors found in '{}'", model_dir.string());
+  if (shards.empty())
+    return make_error(Errc::kNotFound, "no *.safetensors found in '{}'", model_dir.string());
 
   std::vector<TensorInfo> all;
   for (const auto& s : shards) {
@@ -115,13 +119,16 @@ float f16_to_f32(uint16_t h) {
   const uint32_t sign = (h & 0x8000u) << 16, exp = (h >> 10) & 0x1f, man = h & 0x3ff;
   uint32_t u;
   if (exp == 0) {
-    if (man == 0) u = sign;
+    if (man == 0)
+      u = sign;
     else {  // subnormal
       float f = std::ldexp(static_cast<float>(man), -24);
       return sign ? -f : f;
     }
-  } else if (exp == 31) u = sign | 0x7f800000u | (man << 13);
-  else u = sign | ((exp + 112) << 23) | (man << 13);
+  } else if (exp == 31)
+    u = sign | 0x7f800000u | (man << 13);
+  else
+    u = sign | ((exp + 112) << 23) | (man << 13);
   float f;
   std::memcpy(&f, &u, 4);
   return f;
@@ -131,15 +138,18 @@ float f8_to_f32(uint8_t v, bool e4m3) {
   const int sign = v >> 7, exp = (v >> mbits) & ((1 << ebits) - 1), man = v & ((1 << mbits) - 1);
   if (e4m3 && exp == 15 && man == 7) return std::nanf("");
   if (!e4m3 && exp == 31) return man ? std::nanf("") : (sign ? -INFINITY : INFINITY);
-  const float m = exp == 0 ? static_cast<float>(man) / (1 << mbits) : 1.0f + static_cast<float>(man) / (1 << mbits);
+  const float m =
+      exp == 0 ? static_cast<float>(man) / (1 << mbits) : 1.0f + static_cast<float>(man) / (1 << mbits);
   const float f = std::ldexp(m, (exp == 0 ? 1 : exp) - bias);
   return sign ? -f : f;
 }
 }  // namespace
 
-Result<std::vector<float>> read_tensor_f32(const fs::path& model_dir, const TensorInfo& t, int64_t max_elems) {
+Result<std::vector<float>> read_tensor_f32(const fs::path& model_dir, const TensorInfo& t,
+                                           int64_t max_elems) {
   const double eb = dtype_bytes(t.dtype);
-  if (!(t.dtype == "BF16" || t.dtype == "F16" || t.dtype == "F32" || t.dtype == "F8_E4M3" || t.dtype == "F8_E5M2"))
+  if (!(t.dtype == "BF16" || t.dtype == "F16" || t.dtype == "F32" || t.dtype == "F8_E4M3" ||
+        t.dtype == "F8_E5M2"))
     return make_error(Errc::kUnsupported, "dtype {} is packed or non-float; no value view", t.dtype);
   std::ifstream in(model_dir / t.file, std::ios::binary);
   if (!in) return make_error(Errc::kNotFound, "cannot open shard '{}'", t.file);
@@ -161,10 +171,18 @@ Result<std::vector<float>> read_tensor_f32(const fs::path& model_dir, const Tens
     for (int64_t i = 0; i < span; i += stride) {
       const char* p = buf.data() + static_cast<size_t>(i) * esz;
       float v = 0;
-      if (t.dtype == "F32") std::memcpy(&v, p, 4);
-      else if (t.dtype == "BF16") { uint16_t h; std::memcpy(&h, p, 2); v = bf16_to_f32(h); }
-      else if (t.dtype == "F16") { uint16_t h; std::memcpy(&h, p, 2); v = f16_to_f32(h); }
-      else v = f8_to_f32(static_cast<uint8_t>(*p), t.dtype == "F8_E4M3");
+      if (t.dtype == "F32")
+        std::memcpy(&v, p, 4);
+      else if (t.dtype == "BF16") {
+        uint16_t h;
+        std::memcpy(&h, p, 2);
+        v = bf16_to_f32(h);
+      } else if (t.dtype == "F16") {
+        uint16_t h;
+        std::memcpy(&h, p, 2);
+        v = f16_to_f32(h);
+      } else
+        v = f8_to_f32(static_cast<uint8_t>(*p), t.dtype == "F8_E4M3");
       out.push_back(v);
     }
   }

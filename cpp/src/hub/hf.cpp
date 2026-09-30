@@ -16,7 +16,8 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// "org/name@rev" -> ("org/name", "rev"); callers have validated the string with parse_repo_ref where it matters.
+// "org/name@rev" -> ("org/name", "rev"); callers have validated the string with parse_repo_ref where it
+// matters.
 std::pair<std::string, std::string> split_rev(const std::string& repo) {
   const auto at = repo.rfind('@');
   if (at == std::string::npos) return {repo, "main"};
@@ -53,9 +54,12 @@ std::unique_ptr<httplib::Client> make_client(const HfOptions& o, const std::stri
   cli->set_follow_location(true);
   cli->set_connection_timeout(o.timeout_s, 0);
   cli->set_read_timeout(o.timeout_s, 0);
-  for (const char* ca : {"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt",
-                         "/etc/ssl/cert.pem"})
-    if (fs::exists(ca)) { cli->set_ca_cert_path(ca); break; }
+  for (const char* ca :
+       {"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/cert.pem"})
+    if (fs::exists(ca)) {
+      cli->set_ca_cert_path(ca);
+      break;
+    }
   // https_proxy=http://host:port (only the host:port part is used).
   for (const char* var : {"https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"}) {
     const char* p = std::getenv(var);
@@ -71,11 +75,14 @@ std::unique_ptr<httplib::Client> make_client(const HfOptions& o, const std::stri
 
 // Never include the token in an error message: only status and path.
 Error http_error(const httplib::Result& r, const std::string& what) {
-  if (!r) return Error{Errc::kExternal, fmt::format("{}: network error ({})", what, httplib::to_string(r.error()))};
-  const Errc c = r->status == 404 ? Errc::kNotFound : r->status == 401 || r->status == 403 ? Errc::kInvalidArgument
-                                                                                          : Errc::kExternal;
-  return Error{c, fmt::format("{}: HTTP {}{}", what, r->status,
-                              r->status == 401 || r->status == 403 ? " (gated or private repo; set HF_TOKEN)" : "")};
+  if (!r)
+    return Error{Errc::kExternal, fmt::format("{}: network error ({})", what, httplib::to_string(r.error()))};
+  const Errc c = r->status == 404                       ? Errc::kNotFound
+                 : r->status == 401 || r->status == 403 ? Errc::kInvalidArgument
+                                                        : Errc::kExternal;
+  return Error{
+      c, fmt::format("{}: HTTP {}{}", what, r->status,
+                     r->status == 401 || r->status == 403 ? " (gated or private repo; set HF_TOKEN)" : "")};
 }
 
 Result<Json> get_json(const HfOptions& o, const std::string& path, const std::string& what) {
@@ -139,7 +146,8 @@ Result<Json> fetch_json_file(const HfOptions& o, const std::string& repo, const 
 
 Result<std::vector<RepoFile>> list_files(const HfOptions& o, const std::string& repo) {
   const auto [r, rev] = split_rev(repo);
-  MQDE_ASSIGN_OR_RETURN(Json j, get_json(o, "/api/models/" + r + "/tree/" + url_encode(rev) + "?recursive=1", "list files " + repo));
+  MQDE_ASSIGN_OR_RETURN(Json j, get_json(o, "/api/models/" + r + "/tree/" + url_encode(rev) + "?recursive=1",
+                                         "list files " + repo));
   std::vector<RepoFile> out;
   for (const auto& e : j) {
     if (e.value("type", "") != "file") continue;
@@ -154,7 +162,8 @@ Result<std::vector<RepoFile>> list_files(const HfOptions& o, const std::string& 
 }
 
 Result<uint64_t> download_file(const HfOptions& o, const std::string& repo, const std::string& file,
-                               const fs::path& dest, const std::function<bool(uint64_t, uint64_t)>& progress) {
+                               const fs::path& dest,
+                               const std::function<bool(uint64_t, uint64_t)>& progress) {
   std::error_code ec;
   fs::create_directories(dest.parent_path(), ec);
   const fs::path part = dest.string() + ".part";
@@ -172,12 +181,21 @@ Result<uint64_t> download_file(const HfOptions& o, const std::string& repo, cons
         return static_cast<bool>(out);
       },
       [&](uint64_t cur, uint64_t total) {
-        if (progress && !progress(cur, total)) { aborted = true; return false; }
+        if (progress && !progress(cur, total)) {
+          aborted = true;
+          return false;
+        }
         return true;
       });
   out.close();
-  if (aborted) { fs::remove(part, ec); return make_error(Errc::kCancelled, "download of {} cancelled", file); }
-  if (!r || r->status != 200) { fs::remove(part, ec); return std::unexpected(http_error(r, repo + "/" + file)); }
+  if (aborted) {
+    fs::remove(part, ec);
+    return make_error(Errc::kCancelled, "download of {} cancelled", file);
+  }
+  if (!r || r->status != 200) {
+    fs::remove(part, ec);
+    return std::unexpected(http_error(r, repo + "/" + file));
+  }
   fs::rename(part, dest, ec);
   if (ec) return make_error(Errc::kIo, "rename {} -> {}: {}", part.string(), dest.string(), ec.message());
   return done;
@@ -189,7 +207,8 @@ namespace {
 
 Result<std::string> get_range(httplib::Client& cli, const std::string& path, uint64_t first, uint64_t last,
                               const std::string& what, uint64_t* fetched) {
-  auto r = with_retry([&] { return cli.Get(path, httplib::Headers{httplib::make_range_header({{first, last}})}); });
+  auto r = with_retry(
+      [&] { return cli.Get(path, httplib::Headers{httplib::make_range_header({{first, last}})}); });
   if (!r || (r->status != 206 && r->status != 200)) return std::unexpected(http_error(r, what));
   if (fetched) *fetched += r->body.size();
   if (r->status == 206) return r->body;
@@ -199,8 +218,8 @@ Result<std::string> get_range(httplib::Client& cli, const std::string& path, uin
 }
 
 // 8-byte little-endian length, then exactly that many header bytes: two Range requests per shard.
-Result<std::vector<modelspec::TensorInfo>> header_via(httplib::Client& cli, const std::string& repo, const std::string& file,
-                                                      uint64_t* fetched) {
+Result<std::vector<modelspec::TensorInfo>> header_via(httplib::Client& cli, const std::string& repo,
+                                                      const std::string& file, uint64_t* fetched) {
   const auto path = resolve_path(repo, file);
   const auto what = repo + "/" + file;
   MQDE_ASSIGN_OR_RETURN(std::string lb, get_range(cli, path, 0, 7, what, fetched));
@@ -215,13 +234,15 @@ Result<std::vector<modelspec::TensorInfo>> header_via(httplib::Client& cli, cons
 
 }  // namespace
 
-Result<std::vector<modelspec::TensorInfo>> remote_safetensors_header(const HfOptions& o, const std::string& repo,
+Result<std::vector<modelspec::TensorInfo>> remote_safetensors_header(const HfOptions& o,
+                                                                     const std::string& repo,
                                                                      const std::string& file) {
   auto cli = make_client(o, o.endpoint);
   return header_via(*cli, repo, file, nullptr);
 }
 
-Result<modelspec::ModelSpec> inspect_remote(const HfOptions& o, const std::string& repo, uint64_t* bytes_fetched) {
+Result<modelspec::ModelSpec> inspect_remote(const HfOptions& o, const std::string& repo,
+                                            uint64_t* bytes_fetched) {
   MQDE_ASSIGN_OR_RETURN(RepoRef ref, parse_repo_ref(repo));
   const std::string rr = ref.repo + "@" + ref.revision;
   MQDE_ASSIGN_OR_RETURN(Json cfg, fetch_json_file(o, rr, "config.json"));
@@ -252,10 +273,10 @@ namespace {
 // Approximate bits per weight of common GGUF quant tags, used as the quality ordering.
 double gguf_bits(const std::string& tag) {
   static const std::map<std::string, double> k = {
-      {"f32", 32}, {"f16", 16}, {"bf16", 16}, {"q8_0", 8.5}, {"q6_k", 6.6}, {"q5_k_m", 5.7}, {"q5_k_s", 5.5},
-      {"q5_0", 5.5}, {"q4_k_m", 4.8}, {"q4_k_s", 4.6}, {"q4_0", 4.5}, {"iq4_xs", 4.3}, {"q3_k_l", 4.3},
-      {"q3_k_m", 3.9}, {"q3_k_s", 3.5}, {"iq3_m", 3.7}, {"iq3_xxs", 3.1}, {"q2_k", 3.0}, {"iq2_m", 2.7},
-      {"iq2_xs", 2.3}, {"iq1_m", 1.8}};
+      {"f32", 32},     {"f16", 16},     {"bf16", 16},    {"q8_0", 8.5},   {"q6_k", 6.6},    {"q5_k_m", 5.7},
+      {"q5_k_s", 5.5}, {"q5_0", 5.5},   {"q4_k_m", 4.8}, {"q4_k_s", 4.6}, {"q4_0", 4.5},    {"iq4_xs", 4.3},
+      {"q3_k_l", 4.3}, {"q3_k_m", 3.9}, {"q3_k_s", 3.5}, {"iq3_m", 3.7},  {"iq3_xxs", 3.1}, {"q2_k", 3.0},
+      {"iq2_m", 2.7},  {"iq2_xs", 2.3}, {"iq1_m", 1.8}};
   const auto it = k.find(lower(tag));
   return it == k.end() ? 4.0 : it->second;
 }
@@ -264,8 +285,8 @@ double gguf_bits(const std::string& tag) {
 
 std::vector<FileGroup> group_files(const std::vector<RepoFile>& files) {
   static const std::regex shard_re(R"(-\d{5}-of-\d{5})");
-  static const std::regex quant_re(R"((?:^|[-_.])((?:I?Q\d(?:_[A-Z0-9]+)*)|FP16|F16|BF16|FP32|F32)(?:[-_.]|$))",
-                                   std::regex::icase);
+  static const std::regex quant_re(
+      R"((?:^|[-_.])((?:I?Q\d(?:_[A-Z0-9]+)*)|FP16|F16|BF16|FP32|F32)(?:[-_.]|$))", std::regex::icase);
   std::map<std::string, FileGroup> gguf;
   FileGroup st{"safetensors", {}, 0, 16};
   bool has_st = false;
@@ -296,13 +317,17 @@ std::vector<FileGroup> group_files(const std::vector<RepoFile>& files) {
   std::vector<FileGroup> out;
   for (auto& [_, g] : gguf) out.push_back(std::move(g));
   if (has_st) {
-    for (const auto& s : side) { st.files.push_back(s); st.bytes += s.size; }
+    for (const auto& s : side) {
+      st.files.push_back(s);
+      st.bytes += s.size;
+    }
     out.push_back(std::move(st));
   }
   return out;
 }
 
-std::optional<FileGroup> choose_group(const std::vector<FileGroup>& groups, uint64_t budget, const std::string& want) {
+std::optional<FileGroup> choose_group(const std::vector<FileGroup>& groups, uint64_t budget,
+                                      const std::string& want) {
   if (groups.empty()) return std::nullopt;
   if (!want.empty()) {
     for (const auto& g : groups)
@@ -312,18 +337,22 @@ std::optional<FileGroup> choose_group(const std::vector<FileGroup>& groups, uint
   const FileGroup* best = nullptr;
   for (const auto& g : groups) {
     if (budget > 0 && g.bytes > budget) continue;
-    if (!best || g.quality > best->quality || (g.quality == best->quality && g.bytes < best->bytes)) best = &g;
+    if (!best || g.quality > best->quality || (g.quality == best->quality && g.bytes < best->bytes))
+      best = &g;
   }
   if (best) return *best;
   // Nothing fits: llmfit falls back to the smallest file.
-  return *std::min_element(groups.begin(), groups.end(), [](const auto& a, const auto& b) { return a.bytes < b.bytes; });
+  return *std::min_element(groups.begin(), groups.end(),
+                           [](const auto& a, const auto& b) { return a.bytes < b.bytes; });
 }
 
 std::string url_encode(const std::string& s) {
   std::string out;
   for (unsigned char c : s) {
-    if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') out += static_cast<char>(c);
-    else out += fmt::format("%{:02X}", c);
+    if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~')
+      out += static_cast<char>(c);
+    else
+      out += fmt::format("%{:02X}", c);
   }
   return out;
 }
@@ -334,11 +363,20 @@ std::optional<uint64_t> parse_size(const std::string& s) {
   if (!std::regex_match(s, m, re)) return std::nullopt;
   double v = std::stod(m[1].str());
   switch (std::toupper(m[2].str().empty() ? ' ' : m[2].str()[0])) {
-    case 'T': v *= 1024; [[fallthrough]];
-    case 'G': v *= 1024; [[fallthrough]];
-    case 'M': v *= 1024; [[fallthrough]];
-    case 'K': v *= 1024; break;
-    default: break;
+    case 'T':
+      v *= 1024;
+      [[fallthrough]];
+    case 'G':
+      v *= 1024;
+      [[fallthrough]];
+    case 'M':
+      v *= 1024;
+      [[fallthrough]];
+    case 'K':
+      v *= 1024;
+      break;
+    default:
+      break;
   }
   return static_cast<uint64_t>(v);
 }

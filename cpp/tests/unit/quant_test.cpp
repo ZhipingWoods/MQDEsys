@@ -10,7 +10,8 @@
 using namespace mqde::quant;
 
 namespace {
-QuantSpec int_spec(int bits, bool sym, Granularity g, int64_t group = 0, CalibAlgo calib = CalibAlgo::kMinMax) {
+QuantSpec int_spec(int bits, bool sym, Granularity g, int64_t group = 0,
+                   CalibAlgo calib = CalibAlgo::kMinMax) {
   QuantSpec s;
   s.fmt = NumFormat::kInt;
   s.bits = bits;
@@ -117,7 +118,8 @@ TEST(quant_calib, mse_beats_minmax_with_outliers) {
   for (int r = 0; r < 4; ++r) x[static_cast<size_t>(r * 512 + 7)] = 1.0f;  // one large outlier per row
   std::vector<float> a(x.size()), b(x.size());
   ASSERT_TRUE(fake_quant(x.data(), 4, 512, int_spec(4, true, Granularity::kPerChannel), a.data()));
-  ASSERT_TRUE(fake_quant(x.data(), 4, 512, int_spec(4, true, Granularity::kPerChannel, 0, CalibAlgo::kMse), b.data()));
+  ASSERT_TRUE(fake_quant(x.data(), 4, 512, int_spec(4, true, Granularity::kPerChannel, 0, CalibAlgo::kMse),
+                         b.data()));
   const auto ma = measure(x.data(), a.data(), static_cast<int64_t>(x.size()));
   const auto mb = measure(x.data(), b.data(), static_cast<int64_t>(x.size()));
   EXPECT_LE(mb.mse, ma.mse);

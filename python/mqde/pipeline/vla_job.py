@@ -29,6 +29,7 @@ import platform
 import subprocess
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -116,7 +117,7 @@ class VLAJob:
         }
 
     # ------------------------------------------------------------------ helpers
-    def _stage(self, name: str, fn, **kw: Any) -> Any:
+    def _stage(self, name: str, fn: Callable[[], Any], **kw: Any) -> Any:
         t0 = self.ev.start_stage(name, **kw)
         try:
             result = fn()
@@ -131,15 +132,17 @@ class VLAJob:
     def _save(self) -> None:
         (self.out / "report.json").write_text(json.dumps(self.report, indent=2, default=str))
 
-    def _run_eval(self, vla: MiniCPMVLA, samples: list[VLASample], inputs: list[dict], seed_offset: int = 0) -> list[dict[str, torch.Tensor]]:
+    def _run_eval(
+        self, vla: MiniCPMVLA, samples: list[VLASample], inputs: list[dict], seed_offset: int = 0
+    ) -> list[dict[str, torch.Tensor]]:
         outs = []
-        for i, (s, inp) in enumerate(zip(samples, inputs)):
+        for i, (s, inp) in enumerate(zip(samples, inputs, strict=True)):
             outs.append(vla.predict(s, seed=self.spec.seed + i + seed_offset, inputs=inp))
         return outs
 
     def _score(self, ref: list[dict], cur: list[dict], samples: list[VLASample]) -> dict[str, Any]:
         per = []
-        for r, c, s in zip(ref, cur, samples):
+        for r, c, s in zip(ref, cur, samples, strict=True):
             a = compare(r["actions"], c["actions"])
             v = compare(r["vl_embs"], c["vl_embs"])
             per.append(
@@ -154,7 +157,7 @@ class VLAJob:
             )
 
         def agg(k: str) -> float | None:
-            vals = [p[k] for p in per if p[k] is not None]
+            vals = [float(v) for p in per if (v := p[k]) is not None]
             return float(np.mean(vals)) if vals else None
 
         return {k: agg(k) for k in per[0]} | {"per_sample": per}
@@ -197,7 +200,7 @@ class VLAJob:
         def preflight() -> dict[str, Any]:
             model_spec = core.inspect_model(spec.model_path)
             est = {}
-            for r in spec.recipes + ["bf16"]:
+            for r in [*spec.recipes, "bf16"]:
                 est[r] = {
                     str(c): core.estimate(
                         spec.model_path, r, spec.hardware, concurrency=c, images_per_step=2, extra_modalities=spec.extra_modalities
@@ -255,7 +258,9 @@ class VLAJob:
             self.report["baseline"] = {
                 "latency_ms_per_step": lat,
                 "peak_mem_bytes": torch.cuda.max_memory_allocated(spec.device),
-                "gt_mae": floor["gt_mae"] if floor["gt_mae"] is None else float(np.mean([_gt_mae(r["actions"], s.gt_action) for r, s in zip(ref, evals)])),
+                "gt_mae": floor["gt_mae"]
+                if floor["gt_mae"] is None
+                else float(np.mean([_gt_mae(r["actions"], s.gt_action) for r, s in zip(ref, evals, strict=True)])),
                 "noise_floor": {k: v for k, v in floor.items() if k != "per_sample"},
                 "context_tokens": int(eval_inputs[0]["input_ids"].shape[1]),
             }
@@ -267,18 +272,21 @@ class VLAJob:
         self._save()
 
         def calibrate() -> None:
-            for s, inp in zip(calib, calib_inputs):
+            for s, inp in zip(calib, calib_inputs, strict=True):
                 vla.predict(s, seed=spec.seed, inputs=inp)
 
         self.report["recipes"] = {}
         for recipe in recipes:
-            rep: dict[str, Any] = {"recipe": recipe.name, "weight": recipe.weight.to_dict(), "act": recipe.act.to_dict(), "maturity": recipe.maturity}
+            rep: dict[str, Any] = {"recipe": recipe.name, "weight": recipe.weight.to_dict(),
+                                   "act": recipe.act.to_dict(), "maturity": recipe.maturity}
             modalities = list(dict.fromkeys(recipe.modalities + spec.extra_modalities))
             algo = recipe.default_algorithm if spec.algorithm in ("", "recipe") else spec.algorithm
             rep["algorithm"] = algo
-            engine = FakeQuantEngine(
-                vla.qmodel, recipe, progress=lambda e: self.ev.emit("trace", **e) if e["kind"] == "layer" else None, algorithm=algo
-            )
+            def on_trace(e: dict[str, Any]) -> None:
+                if e["kind"] == "layer":
+                    self.ev.emit("trace", **e)
+
+            engine = FakeQuantEngine(vla.qmodel, recipe, progress=on_trace, algorithm=algo)
             if not recipe.weight.enabled:
                 continue
 
@@ -296,7 +304,8 @@ class VLAJob:
                         engine.restore()
                         engine.traces.clear()
                         rows.append({"modality": mod, "units": len(units), **{k: v for k, v in score.items() if k != "per_sample"}})
-                        self.ev.emit("metric", name=f"{recipe.name}.attribution.{mod}.action_rel_l2", value=score["action_rel_l2"], msg=f"{recipe.name} only-{mod}")
+                        self.ev.emit("metric", name=f"{recipe.name}.attribution.{mod}.action_rel_l2",
+                                     value=score["action_rel_l2"], msg=f"{recipe.name} only-{mod}")
                     return rows
 
                 rep["attribution"] = self._stage("attribution", attribution, msg=recipe.name)
@@ -334,16 +343,18 @@ class VLAJob:
         self._stage("report", self._save)
 
     def _summarize(self, rep: dict[str, Any]) -> dict[str, Any]:
-        layers = [l for l in rep["layers"] if l.get("out_sqnr_db") is not None]
-        worst = sorted(layers, key=lambda l: l["out_sqnr_db"])[:10]
+        layers = [t for t in rep["layers"] if t.get("out_sqnr_db") is not None]
+        worst = sorted(layers, key=lambda t: t["out_sqnr_db"])[:10]
         by_comp: dict[str, list[float]] = {}
-        for l in layers:
-            by_comp.setdefault(l["component"], []).append(l["out_sqnr_db"])
+        for t in layers:
+            by_comp.setdefault(t["component"], []).append(t["out_sqnr_db"])
         attr = rep.get("attribution") or []
         worst_stage = max(attr, key=lambda r: r["action_rel_l2"] or 0.0)["modality"] if attr else None
         nf = self.report["baseline"]["noise_floor"]["action_rel_l2"] or 0.0
         return {
-            "worst_layers": [{"name": l["name"], "out_sqnr_db": l["out_sqnr_db"], "act_kurtosis": l["act_kurtosis"]} for l in worst],
+            "worst_layers": [
+                {"name": t["name"], "out_sqnr_db": t["out_sqnr_db"], "act_kurtosis": t["act_kurtosis"]} for t in worst
+            ],
             "component_mean_out_sqnr_db": {k: float(np.mean(v)) for k, v in by_comp.items()},
             "worst_stage": worst_stage,
             "action_rel_l2_over_noise_floor": (rep["eval"]["action_rel_l2"] / nf) if nf else None,
@@ -373,7 +384,8 @@ def main() -> None:
         spec.calib_samples = args.calib_samples
     job = VLAJob(spec, job_id=args.job_id)
     rep = job.run()
-    print(json.dumps({"job_id": job.job_id, "report": str(job.out / "report.json"), "recipes": {k: v["summary"] | {"action_rel_l2": v["eval"]["action_rel_l2"]} for k, v in rep["recipes"].items()}}, indent=2, default=str))
+    summary = {k: v["summary"] | {"action_rel_l2": v["eval"]["action_rel_l2"]} for k, v in rep["recipes"].items()}
+    print(json.dumps({"job_id": job.job_id, "report": str(job.out / "report.json"), "recipes": summary}, indent=2, default=str))
 
 
 if __name__ == "__main__":

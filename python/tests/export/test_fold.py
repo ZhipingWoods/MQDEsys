@@ -12,13 +12,13 @@ import torch
 pytest.importorskip("transformers")
 sys.path.insert(0, str(Path(__file__).parent))
 
-from _tiny import calib, tiny  # noqa: E402
+from _tiny import calib, tiny
 
-from mqde.export import get_exporter  # noqa: E402
-from mqde.export.real_check import real_check  # noqa: E402
-from mqde.quant.blockwise import BlockwiseQuantizer  # noqa: E402
-from mqde.quant.engine import RecipeSpec  # noqa: E402
-from mqde.quant.modules import FakeQuantLinear, replace_module  # noqa: E402
+from mqde.export import get_exporter
+from mqde.export.real_check import real_check
+from mqde.quant.blockwise import BlockwiseQuantizer
+from mqde.quant.engine import RecipeSpec
+from mqde.quant.modules import FakeQuantLinear, replace_module
 
 
 @pytest.mark.parametrize("algo", ["awq", "smoothquant", "awq+gptq"])

@@ -46,10 +46,10 @@ Result<std::vector<std::string>> list_data_entries(std::string_view sub);  // re
 Result<HardwareProfile> match_hardware(std::string_view device_name);
 
 struct RuntimeParams {
-  int64_t concurrency = 1;       // independent sequences (robots / requests) served at once
-  int64_t images_per_step = 1;   // camera views x frames in the context
-  int64_t text_tokens = 32;      // instruction + template tokens
-  int64_t context_tokens = 0;    // override total LM context (0 = derived from images/text)
+  int64_t concurrency = 1;      // independent sequences (robots / requests) served at once
+  int64_t images_per_step = 1;  // camera views x frames in the context
+  int64_t text_tokens = 32;     // instruction + template tokens
+  int64_t context_tokens = 0;   // override total LM context (0 = derived from images/text)
   int64_t image_resolution = 448;
   double gpu_memory_utilization = 0.9;
   std::vector<std::string> extra_modalities;  // e.g. {"action"} to also quantize the action head
@@ -73,13 +73,13 @@ struct Estimate {
   uint64_t qmeta_bytes = 0;
   uint64_t original_weights_bytes = 0;
   int64_t context_tokens = 0;
-  uint64_t kv_bytes_per_token = 0;       // full-attention layers only
-  uint64_t state_bytes_per_seq = 0;      // linear-attention recurrent + conv state
-  uint64_t kv_bytes = 0;                 // (kv/token * context + state) * concurrency
+  uint64_t kv_bytes_per_token = 0;   // full-attention layers only
+  uint64_t state_bytes_per_seq = 0;  // linear-attention recurrent + conv state
+  uint64_t kv_bytes = 0;             // (kv/token * context + state) * concurrency
   uint64_t activation_bytes = 0;
   uint64_t runtime_bytes = 0;
   uint64_t peak_bytes = 0;
-  uint64_t capacity_bytes = 0;           // mem_bytes * utilization
+  uint64_t capacity_bytes = 0;  // mem_bytes * utilization
   bool feasible = false;
   int64_t max_concurrency = 0;
   std::vector<std::string> reasons;
@@ -101,10 +101,12 @@ struct CurvePoint {
   uint64_t kv_bytes = 0;
   bool feasible = false;
 };
-std::vector<CurvePoint> memory_vs_concurrency(const modelspec::ModelSpec&, const Recipe&, const HardwareProfile&,
-                                              const BackendProfile&, RuntimeParams rt, const std::vector<int64_t>& xs);
+std::vector<CurvePoint> memory_vs_concurrency(const modelspec::ModelSpec&, const Recipe&,
+                                              const HardwareProfile&, const BackendProfile&, RuntimeParams rt,
+                                              const std::vector<int64_t>& xs);
 std::vector<CurvePoint> memory_vs_images(const modelspec::ModelSpec&, const Recipe&, const HardwareProfile&,
-                                         const BackendProfile&, RuntimeParams rt, const std::vector<int64_t>& xs);
+                                         const BackendProfile&, RuntimeParams rt,
+                                         const std::vector<int64_t>& xs);
 
 Json to_json(const Recipe& r);
 Json to_json(const HardwareProfile& h);

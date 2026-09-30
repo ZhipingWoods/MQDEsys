@@ -12,12 +12,12 @@ from torch import nn
 pytest.importorskip("transformers")
 sys.path.insert(0, str(Path(__file__).parents[1] / "export"))
 
-from _tiny import calib, tiny  # noqa: E402
+from _tiny import calib, tiny
 
-from mqde.quant.blockwise import BlockwiseQuantizer, MixedPrecisionPolicy  # noqa: E402
-from mqde.quant.engine import RecipeSpec  # noqa: E402
-from mqde.quant.modules import FakeQuantLinear  # noqa: E402
-from mqde.trace.sensitivity import fallback_sensitivity, group_key, suggest  # noqa: E402
+from mqde.quant.blockwise import BlockwiseQuantizer, MixedPrecisionPolicy
+from mqde.quant.engine import RecipeSpec
+from mqde.quant.modules import FakeQuantLinear
+from mqde.trace.sensitivity import fallback_sensitivity, group_key, suggest
 
 
 def _setup():

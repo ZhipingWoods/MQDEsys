@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from mqde import _core
+from mqde import _core  # type: ignore[attr-defined]  # compiled extension, built by CMake
 
 
 def version() -> str:

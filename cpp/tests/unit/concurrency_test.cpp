@@ -25,20 +25,18 @@ estimator::BackendProfile hf_backend() {
 
 // Dense LLM spec built via build_model_spec (matching fit_test.cpp::dense_llm).
 modelspec::ModelSpec tiny_dense(double params_b) {
-  nlohmann::json cfg = {{"model_type", "llama"},
-                        {"num_hidden_layers", 32},
-                        {"hidden_size", 4096},
-                        {"num_attention_heads", 32},
-                        {"num_key_value_heads", 8},
-                        {"head_dim", 128},
-                        {"intermediate_size", 14336},
-                        {"vocab_size", 128256},
-                        {"max_position_embeddings", 131072}};
+  nlohmann::json cfg = {
+      {"model_type", "llama"},      {"num_hidden_layers", 32},  {"hidden_size", 4096},
+      {"num_attention_heads", 32},  {"num_key_value_heads", 8}, {"head_dim", 128},
+      {"intermediate_size", 14336}, {"vocab_size", 128256},     {"max_position_embeddings", 131072}};
   const int64_t rows = 4096;
   const int64_t cols = static_cast<int64_t>(params_b * 1e9 / rows);
-  std::vector<modelspec::TensorInfo> t = {
-      {"model.layers.0.mlp.up_proj.weight", "BF16", {rows, cols}, rows * cols,
-       static_cast<uint64_t>(rows * cols * 2), "m"}};
+  std::vector<modelspec::TensorInfo> t = {{"model.layers.0.mlp.up_proj.weight",
+                                           "BF16",
+                                           {rows, cols},
+                                           rows * cols,
+                                           static_cast<uint64_t>(rows * cols * 2),
+                                           "m"}};
   auto fam = modelspec::find_model_family("llama");
   if (!fam) throw std::runtime_error("llama family not found");
   auto spec = modelspec::build_model_spec(cfg, t, *fam);

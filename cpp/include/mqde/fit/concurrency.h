@@ -34,11 +34,9 @@ struct ConcurrencyEstimate {
 // Forward-solve: compute memory breakdown for (users, context).
 // Uses the same memory model as estimator::estimate() so totals are consistent.
 // The recipe is identified by name (e.g. "bf16", "w4a16"); loaded from data/recipes/.
-ConcurrencyEstimate estimate_concurrency(const modelspec::ModelSpec& spec,
-                                         std::string_view recipe_name,
+ConcurrencyEstimate estimate_concurrency(const modelspec::ModelSpec& spec, std::string_view recipe_name,
                                          const estimator::HardwareProfile& hw,
-                                         const estimator::BackendProfile& backend,
-                                         int64_t users,
+                                         const estimator::BackendProfile& backend, int64_t users,
                                          int64_t context_tokens);
 
 // Expose to_json for the API endpoint.

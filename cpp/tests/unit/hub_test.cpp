@@ -33,8 +33,10 @@ TEST(hub, parse_size_units) {
 }
 
 TEST(hub, group_files_keeps_shards_together) {
-  std::vector<RepoFile> f = {{"model-Q4_K_M-00001-of-00002.gguf", 5}, {"model-Q4_K_M-00002-of-00002.gguf", 5},
-                             {"model-Q8_0.gguf", 18}, {"README.md", 1}};
+  std::vector<RepoFile> f = {{"model-Q4_K_M-00001-of-00002.gguf", 5},
+                             {"model-Q4_K_M-00002-of-00002.gguf", 5},
+                             {"model-Q8_0.gguf", 18},
+                             {"README.md", 1}};
   const auto g = group_files(f);
   ASSERT_EQ(g.size(), 2u);
   const auto q4 = std::find_if(g.begin(), g.end(), [](const auto& x) { return x.key == "Q4_K_M"; });
@@ -44,7 +46,8 @@ TEST(hub, group_files_keeps_shards_together) {
 }
 
 TEST(hub, group_files_fp16_tag) {
-  const auto g = group_files({{"qwen2.5-0.5b-instruct-fp16.gguf", 9}, {"qwen2.5-0.5b-instruct-q8_0.gguf", 5}});
+  const auto g =
+      group_files({{"qwen2.5-0.5b-instruct-fp16.gguf", 9}, {"qwen2.5-0.5b-instruct-q8_0.gguf", 5}});
   ASSERT_EQ(g.size(), 2u);
   EXPECT_EQ(g[0].key, "F16");
   EXPECT_EQ(g[1].key, "Q8_0");
@@ -53,16 +56,19 @@ TEST(hub, group_files_fp16_tag) {
 TEST(hub, choose_group_budget_and_fallback) {
   std::vector<RepoFile> f = {{"m-Q4_K_M.gguf", 10}, {"m-Q8_0.gguf", 18}, {"m-Q2_K.gguf", 6}};
   const auto g = group_files(f);
-  EXPECT_EQ(choose_group(g, 0)->key, "Q8_0");   // unlimited: best quality
+  EXPECT_EQ(choose_group(g, 0)->key, "Q8_0");     // unlimited: best quality
   EXPECT_EQ(choose_group(g, 12)->key, "Q4_K_M");  // best within budget
-  EXPECT_EQ(choose_group(g, 3)->key, "Q2_K");   // nothing fits: smallest
+  EXPECT_EQ(choose_group(g, 3)->key, "Q2_K");     // nothing fits: smallest
   EXPECT_EQ(choose_group(g, 0, "q4_k_m")->key, "Q4_K_M");
   EXPECT_FALSE(choose_group(g, 0, "Q5_K_M"));
 }
 
 TEST(hub, safetensors_group_includes_config) {
-  std::vector<RepoFile> f = {{"model-00001-of-00002.safetensors", 4}, {"model-00002-of-00002.safetensors", 4},
-                             {"config.json", 1}, {"tokenizer.json", 1}, {"README.md", 1}};
+  std::vector<RepoFile> f = {{"model-00001-of-00002.safetensors", 4},
+                             {"model-00002-of-00002.safetensors", 4},
+                             {"config.json", 1},
+                             {"tokenizer.json", 1},
+                             {"README.md", 1}};
   const auto g = group_files(f);
   ASSERT_EQ(g.size(), 1u);
   EXPECT_EQ(g[0].key, "safetensors");
@@ -131,9 +137,11 @@ TEST(hub, catalog_roundtrip_and_search) {
 TEST(hub, packed_int_checkpoint_uses_name_size) {
   auto info = qwen7_info();
   info["id"] = "someone/Model-27B-AWQ";
-  info["safetensors"] = Json::parse(R"({"parameters":{"I32":3000000000,"F16":800000000},"total":3800000000})");
+  info["safetensors"] =
+      Json::parse(R"({"parameters":{"I32":3000000000,"F16":800000000},"total":3800000000})");
   auto cfg = qwen7_config();
-  cfg["quantization_config"] = Json::parse(R"({"quant_method":"awq","bits":4,"group_size":128,"modules_to_not_convert":["a","b"]})");
+  cfg["quantization_config"] =
+      Json::parse(R"({"quant_method":"awq","bits":4,"group_size":128,"modules_to_not_convert":["a","b"]})");
   const auto e = entry_from_hub(info, cfg);
   EXPECT_EQ(e.quantization, "INT4");
   EXPECT_EQ(e.parameters_raw, 27000000000);
@@ -145,7 +153,8 @@ TEST(hub, gpt2_style_keys_are_kept) {
   auto info = qwen7_info();
   info["id"] = "openai-community/gpt2";
   info["safetensors"] = Json::parse(R"({"parameters":{"F32":137022720},"total":137022720})");
-  const auto cfg = Json::parse(R"({"model_type":"gpt2","n_layer":12,"n_embd":768,"n_head":12,"n_ctx":1024,"n_positions":1024,"vocab_size":50257})");
+  const auto cfg = Json::parse(
+      R"({"model_type":"gpt2","n_layer":12,"n_embd":768,"n_head":12,"n_ctx":1024,"n_positions":1024,"vocab_size":50257})");
   const auto e = entry_from_hub(info, cfg);
   EXPECT_FALSE(e.demoted) << e.demote_reason;
   EXPECT_EQ(e.context_length, 1024);

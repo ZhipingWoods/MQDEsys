@@ -19,11 +19,11 @@ namespace hub {
 
 struct CatalogEntry {
   // required (A.12 ★)
-  std::string name;          // "Qwen/Qwen3-8B"
-  std::string provider;      // "Qwen"
+  std::string name;             // "Qwen/Qwen3-8B"
+  std::string provider;         // "Qwen"
   std::string parameter_count;  // human form, "8B"
-  std::string quantization;  // "BF16" | "FP8" | "INT4" ...
-  std::string format;        // "safetensors" | "gguf"
+  std::string quantization;     // "BF16" | "FP8" | "INT4" ...
+  std::string format;           // "safetensors" | "gguf"
   int64_t context_length = 0;
   // optional
   int64_t parameters_raw = 0;
@@ -52,8 +52,9 @@ void apply_hygiene(CatalogEntry& e);
 
 // Case-insensitive substring search over name; demoted entries only when include_demoted.
 // If capability is non-empty, only returns entries that have that capability.
-std::vector<const CatalogEntry*> search(const Catalog& c, const std::string& query, const std::string& provider,
-                                        const std::string& capability, size_t limit, bool include_demoted = false);
+std::vector<const CatalogEntry*> search(const Catalog& c, const std::string& query,
+                                        const std::string& provider, const std::string& capability,
+                                        size_t limit, bool include_demoted = false);
 const CatalogEntry* find(const Catalog& c, const std::string& name);
 
 // Builds a weight-less ModelSpec from the stored config so the fit/estimator path works unchanged.

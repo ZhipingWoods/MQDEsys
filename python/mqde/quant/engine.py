@@ -29,7 +29,7 @@ from mqde import core
 from mqde.models.base import QuantModel, Unit
 from mqde.quant import algorithms
 from mqde.quant.modules import FakeQuantLinear, replace_module
-from mqde.quant.numerics import QuantSpec, fake_quant, fake_quant_act
+from mqde.quant.numerics import QuantSpec, fake_quant_act
 
 ProgressFn = Callable[[dict[str, Any]], None]
 
@@ -199,7 +199,7 @@ class FakeQuantEngine:
             xq = fake_quant_act(xs, self.recipe.act) if self.recipe.act.enabled else xs
             y_q = xq @ wq.T
             om = compare(y_ref, y_q)
-            astats = core.tensor_stats(acts.numpy())
+            astats = core.tensor_stats(x.cpu().numpy())
             tr.out_sqnr_db, tr.out_rel_l2, tr.out_cosine = om["sqnr_db"], om["rel_l2"], om["cosine"]
             tr.act_absmax, tr.act_kurtosis, tr.act_outlier_ratio = (
                 astats["absmax"],

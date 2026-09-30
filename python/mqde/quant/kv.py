@@ -13,10 +13,10 @@ Tensors are [batch, heads, seq, head_dim]. Granularity:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any, cast
 
 import torch
 
@@ -92,7 +92,7 @@ def kv_quant(model: torch.nn.Module, q: NaiveKVQuant | None) -> Iterator[None]:
     from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
     from transformers.models.llama.modeling_llama import eager_attention_forward
 
-    cfg = model.config
+    cfg = cast(Any, model).config  # HF config objects are dynamic
     base_impl = cfg._attn_implementation or "eager"
     base = ALL_ATTENTION_FUNCTIONS.get(base_impl, eager_attention_forward) if base_impl != "eager" else eager_attention_forward
     name = "mqde_kvq"
@@ -112,7 +112,7 @@ def kv_quant(model: torch.nn.Module, q: NaiveKVQuant | None) -> Iterator[None]:
     try:
         yield
     finally:
-        for c, s in zip(cfgs, saved):
+        for c, s in zip(cfgs, saved, strict=True):
             c._attn_implementation = s
         ALL_ATTENTION_FUNCTIONS.pop(name, None)
         ALL_MASK_ATTENTION_FUNCTIONS._global_mapping.pop(name, None)

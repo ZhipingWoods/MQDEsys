@@ -19,6 +19,7 @@ import argparse
 import json
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -101,7 +102,7 @@ class LLMJob:
     def _save(self) -> None:
         (self.out / "report.json").write_text(json.dumps(self.report, indent=2, default=str))
 
-    def _stage(self, name: str, fn, msg: str = "") -> Any:
+    def _stage(self, name: str, fn: Callable[[], Any], msg: str = "") -> Any:
         t0 = self.ev.start_stage(name, msg=msg) if msg else self.ev.start_stage(name)
         try:
             r = fn()
@@ -135,8 +136,11 @@ class LLMJob:
 
     def _ppl(self, ad: HFCausalLM, ids: torch.Tensor, label: str) -> dict[str, float]:
         s = self.spec
-        r = perplexity(ad.logits, ids, s.eval_seq_len, s.eval_windows,
-                       progress=lambda i, n: self.ev.emit("progress", value=i / n, msg=label) if i % 10 == 0 else None)
+        def on_window(i: int, n: int) -> None:
+            if i % 10 == 0:
+                self.ev.emit("progress", value=i / n, msg=label)
+
+        r = perplexity(ad.logits, ids, s.eval_seq_len, s.eval_windows, progress=on_window)
         self.ev.emit("metric", name=f"{label}.ppl", value=round(r["ppl"], 4), msg=label)
         return r
 
@@ -154,8 +158,11 @@ class LLMJob:
             finally:
                 for n, m in fqs.items():
                     replace_module(ad.model, n, m)
-        sens = fallback_sensitivity(ad.model, q.originals, metric, by=s.sensitivity,
-                                    progress=lambda i, n, g: self.ev.emit("progress", value=i / n, msg=f"{recipe} FP {g}"))
+        def on_group(i: int, n: int, g: str) -> None:
+            self.ev.emit("progress", value=i / n, msg=f"{recipe} FP {g}")
+
+        assert s.sensitivity is not None  # only called when the stage is enabled
+        sens = fallback_sensitivity(ad.model, q.originals, metric, by=s.sensitivity, progress=on_group)
         sens["metric"] = f"ppl@{s.sensitivity_windows}x{s.eval_seq_len}"
         sens["metric_fp"] = self._fp_small
         sens["suggestion"] = suggest(sens, self._fp_small, target_share=s.suggest_target)
@@ -177,8 +184,8 @@ class LLMJob:
         text.write_text(wikitext_text("test"))
         threads = torch.get_num_threads()
         f16 = convert_f16(s.model_path, d / "model-f16.gguf")
-        out: dict[str, Any] = {"protocol": f"llama-perplexity ctx {s.eval_seq_len}, {s.eval_windows} chunks, scores the second half of each chunk",
-                               "threads": threads, "results": {}}
+        protocol = f"llama-perplexity ctx {s.eval_seq_len}, {s.eval_windows} chunks, scores the second half of each chunk"
+        out: dict[str, Any] = {"protocol": protocol, "threads": threads, "results": {}}
         for ty in ["f16", *s.llamacpp]:
             path = f16 if ty == "f16" else d / f"model-{ty}.gguf"
             info = {"type": ty, "bytes": path.stat().st_size} if ty == "f16" else requantize(f16, path, ty)
@@ -225,7 +232,8 @@ class LLMJob:
         recipes = self._stage("validate", lambda: [RecipeSpec.load(r) for r in s.recipes], ",".join(s.recipes))
         ad = self._stage("inspect", lambda: HFCausalLM(s.model_path, device=s.device))
         self.report["model"] = {"path": s.model_path, "blocks": len(ad.get_blocks()), "linears": len(ad.qmodel.units)}
-        cal, ids = self._stage("calib_prepare", lambda: (calib_batches(ad.tokenizer, s.calib_samples, s.calib_seq_len, s.seed), eval_ids(ad.tokenizer)))
+        prep = lambda: (calib_batches(ad.tokenizer, s.calib_samples, s.calib_seq_len, s.seed), eval_ids(ad.tokenizer))  # noqa: E731
+        cal, ids = self._stage("calib_prepare", prep)
         self.report["data"] = {"calib": {"dataset": "wikitext-2 train", "n": len(cal), "seq_len": s.calib_seq_len},
                                "eval": {"dataset": "wikitext-2 test", "windows": s.eval_windows, "seq_len": s.eval_seq_len}}
         base = self._stage("eval_baseline", lambda: self._ppl(ad, ids, "pretrain"))
@@ -312,7 +320,9 @@ def main() -> None:
     if a.recipes:
         spec.recipes = a.recipes.split(",")
     if a.kv:
-        spec.kv_override = {"format": "fp8_e4m3", "bits": 8} if a.kv.startswith("fp8") else {"format": "int", "bits": int(a.kv[3:]), "symmetric": False}
+        spec.kv_override = (
+            {"format": "fp8_e4m3", "bits": 8} if a.kv.startswith("fp8") else {"format": "int", "bits": int(a.kv[3:]), "symmetric": False}
+        )
     if a.export:
         spec.export = a.export.split(",")
     if a.sensitivity:
@@ -326,8 +336,8 @@ def main() -> None:
         spec.mixed_precision = yaml.safe_load(mp.read_text() if mp.is_file() else a.mixed_precision)
     job = LLMJob(spec, a.job_dir, a.job_id)
     rep = job.run()
-    print(json.dumps({"job_id": job.job_id, "baseline_ppl": rep["baseline"]["ppl"],
-                      "recipes": {k: v["summary"] | {"algorithm": v["algorithm"]} for k, v in rep["recipes"].items()}}, indent=1, default=str))
+    summary = {k: v["summary"] | {"algorithm": v["algorithm"]} for k, v in rep["recipes"].items()}
+    print(json.dumps({"job_id": job.job_id, "baseline_ppl": rep["baseline"]["ppl"], "recipes": summary}, indent=1, default=str))
 
 
 if __name__ == "__main__":

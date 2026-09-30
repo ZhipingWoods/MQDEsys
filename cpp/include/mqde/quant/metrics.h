@@ -14,7 +14,7 @@ struct ErrorMetrics {
   double max_abs = 0;
   double sqnr_db = 0;  // 10*log10(signal power / noise power); +inf when exact
   double cosine = 1;
-  double rel_l2 = 0;   // ||ref - approx|| / ||ref||
+  double rel_l2 = 0;  // ||ref - approx|| / ||ref||
 };
 
 struct TensorStats {

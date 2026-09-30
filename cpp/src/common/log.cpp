@@ -32,19 +32,26 @@ void init(std::string_view level, Format format) {
   g_format = static_cast<int>(format);
 }
 
-bool enabled(Level l) { return static_cast<int>(l) >= g_level.load(std::memory_order_relaxed) && l != Level::kOff; }
+bool enabled(Level l) {
+  return static_cast<int>(l) >= g_level.load(std::memory_order_relaxed) && l != Level::kOff;
+}
 
 void write(Level l, std::string_view msg) {
   const auto now = std::chrono::system_clock::now();
   const auto t = std::chrono::system_clock::to_time_t(now);
-  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+  const auto ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
   std::tm tm{};
   localtime_r(&t, &tm);
   char ts[32];
   std::strftime(ts, sizeof ts, "%Y-%m-%dT%H:%M:%S", &tm);
   std::string line;
   if (g_format == static_cast<int>(Format::kJson)) {
-    line = nlohmann::json{{"ts", fmt::format("{}.{:03d}", ts, ms)}, {"level", kNames[static_cast<int>(l)]}, {"msg", msg}}.dump();
+    line = nlohmann::json{
+        {"ts", fmt::format("{}.{:03d}", ts, ms)},
+        {"level", kNames[static_cast<int>(l)]},
+        {"msg",
+         msg}}.dump();
   } else {
     line = fmt::format("[{} {}] {}", ts + 11, kNames[static_cast<int>(l)], msg);
   }

@@ -13,11 +13,11 @@ pytest.importorskip("transformers")
 pytest.importorskip("safetensors")
 sys.path.insert(0, str(Path(__file__).parent))
 
-from _tiny import calib, tiny  # noqa: E402
+from _tiny import calib, tiny
 
-from mqde.export import get_exporter  # noqa: E402
-from mqde.quant.blockwise import BlockwiseQuantizer, MixedPrecisionPolicy  # noqa: E402
-from mqde.quant.engine import RecipeSpec  # noqa: E402
+from mqde.export import get_exporter
+from mqde.quant.blockwise import BlockwiseQuantizer, MixedPrecisionPolicy
+from mqde.quant.engine import RecipeSpec
 
 
 @pytest.mark.parametrize("fmt,algo", [("gptq", "gptq"), ("gptq", "rtn"), ("awq", "rtn")])

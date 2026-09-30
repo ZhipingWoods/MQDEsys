@@ -23,7 +23,7 @@ struct InstalledModel {
 
 struct InstalledIndex {
   std::vector<InstalledModel> models;
-  std::vector<std::string> active_sources;   // sources that responded / had files
+  std::vector<std::string> active_sources;  // sources that responded / had files
   double elapsed_ms = 0;
 
   // Returns true when any installed model's canonical form matches the given name

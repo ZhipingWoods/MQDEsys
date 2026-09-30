@@ -32,12 +32,12 @@ std::string default_endpoint();
 
 struct HfOptions {
   std::string endpoint = default_endpoint();
-  std::string token;       // empty -> read HF_TOKEN from the environment
+  std::string token;  // empty -> read HF_TOKEN from the environment
   int timeout_s = 30;
 };
 
 struct RepoRef {
-  std::string repo;              // "org/name"
+  std::string repo;  // "org/name"
   std::string revision = "main";
 };
 
@@ -63,12 +63,14 @@ Result<std::vector<RepoFile>> list_files(const HfOptions& o, const std::string& 
 
 // Tensor names / dtypes / shapes of one remote .safetensors file from two small Range requests
 // (8-byte length, then the JSON header); the payload is never fetched.
-Result<std::vector<modelspec::TensorInfo>> remote_safetensors_header(const HfOptions& o, const std::string& repo,
+Result<std::vector<modelspec::TensorInfo>> remote_safetensors_header(const HfOptions& o,
+                                                                     const std::string& repo,
                                                                      const std::string& file);
 
 // config.json + every weight shard's header -> the same ModelSpec inspect_local() builds, without downloading
 // weights. `bytes_fetched` (optional) receives the number of body bytes transferred.
-Result<modelspec::ModelSpec> inspect_remote(const HfOptions& o, const std::string& repo, uint64_t* bytes_fetched = nullptr);
+Result<modelspec::ModelSpec> inspect_remote(const HfOptions& o, const std::string& repo,
+                                            uint64_t* bytes_fetched = nullptr);
 
 // Download one file to `dest` (parent dirs created). Writes to "<dest>.part" then renames.
 // `progress(done, total)` is called as bytes arrive; returning false (or `cancel`) aborts.
@@ -79,10 +81,10 @@ Result<uint64_t> download_file(const HfOptions& o, const std::string& repo, cons
 // ---- file selection for `download` (A.13) ----
 
 struct FileGroup {
-  std::string key;                 // quant / variant label, e.g. "Q4_K_M", "safetensors"
-  std::vector<RepoFile> files;     // all shards of the group
+  std::string key;              // quant / variant label, e.g. "Q4_K_M", "safetensors"
+  std::vector<RepoFile> files;  // all shards of the group
   uint64_t bytes = 0;
-  double quality = 0;              // higher is better (bits-per-weight proxy)
+  double quality = 0;  // higher is better (bits-per-weight proxy)
 };
 
 // Groups repo files into downloadable units: GGUF files by quant tag with shards

@@ -15,7 +15,7 @@ struct QParams {
   std::vector<float> scale;  // one per group, row-major [rows, groups_per_row] (or [1] for per_tensor)
   std::vector<float> zero;   // integer asymmetric only; empty otherwise (stored as float, integral values)
   int64_t groups_per_row = 1;
-  int64_t group_cols = 0;    // columns per group
+  int64_t group_cols = 0;  // columns per group
   bool per_tensor = false;
 };
 
@@ -25,9 +25,10 @@ Result<QParams> compute_qparams(const float* x, int64_t rows, int64_t cols, cons
 Result<void> fake_quant(const float* x, int64_t rows, int64_t cols, const QuantSpec& spec, float* out,
                         QParams* qparams_out = nullptr);
 
-// Real integer path: codes in [qmin, qmax] (int16 storage so 8-bit asymmetric 0..255 fits; bit packing is a later stage).
-Result<void> quantize_int(const float* x, int64_t rows, int64_t cols, const QuantSpec& spec, const QParams& qp,
-                          int16_t* codes);
+// Real integer path: codes in [qmin, qmax] (int16 storage so 8-bit asymmetric 0..255 fits; bit packing is a
+// later stage).
+Result<void> quantize_int(const float* x, int64_t rows, int64_t cols, const QuantSpec& spec,
+                          const QParams& qp, int16_t* codes);
 Result<void> dequantize_int(const int16_t* codes, int64_t rows, int64_t cols, const QuantSpec& spec,
                             const QParams& qp, float* out);
 

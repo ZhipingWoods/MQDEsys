@@ -17,7 +17,7 @@ struct TensorInfo {
   std::vector<int64_t> shape;
   int64_t numel = 0;
   uint64_t nbytes = 0;
-  std::string file;  // shard file name
+  std::string file;          // shard file name
   uint64_t data_offset = 0;  // absolute byte offset of the payload inside `file`
 };
 
@@ -33,7 +33,8 @@ Result<std::vector<TensorInfo>> read_safetensors_header(const std::filesystem::p
 
 // Parses the JSON header (the `header_len` bytes after the 8-byte length) of shard `file_name`; shared by the
 // local reader and the Hub's HTTP Range reader.
-Result<std::vector<TensorInfo>> parse_safetensors_header(const std::string& header, const std::string& file_name);
+Result<std::vector<TensorInfo>> parse_safetensors_header(const std::string& header,
+                                                         const std::string& file_name);
 
 // Header length limit (same as the reference implementation).
 inline constexpr uint64_t kMaxSafetensorsHeader = 100ull << 20;

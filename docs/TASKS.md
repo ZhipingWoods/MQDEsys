@@ -64,7 +64,7 @@
 | T-0002 | C++ 构建系统（CMake + vcpkg + Presets） | P0 | T-0001 | L2 | DONE (2026-09-24, CMake+Presets(conda deps, not vcpkg yet)) |
 | T-0003 | Python 包骨架与 pybind11 构建链 | P0 | T-0002 | L2 | DONE (2026-09-24, pybind11 _core in-tree build) |
 | T-0004 | 前端工程骨架 | P0 | T-0001 | L2 | PARTIAL (2026-09-24, Vite+React+ECharts (no AntD/tests yet)) |
-| T-0005 | 代码规范与 pre-commit | P0 | T-0002,T-0003,T-0004 | L2 | TODO |
+| T-0005 | 代码规范与 pre-commit | P0 | T-0002,T-0003,T-0004 | L2 | DONE (2026-09-30, check_all.sh + check_deps.py + clang-format/tidy + ruff/mypy clean + pre-commit) |
 | T-0006 | CI 流水线（PR 门禁） | P0 | T-0005 | L2 | TODO |
 | T-0007 | 契约与 Schema 初版 | P0 | T-0001 | L2 | TODO |
 | T-0008 | 开发指南与 ADR 初始化 | P0 | T-0001 | L2 | TODO |
@@ -114,10 +114,10 @@
 | T-0512 | server：作业端点 + WebSocket 事件流 | P5 | T-0511,T-0301 | L2 | PARTIAL (2026-09-29, SSE; model.type vla/llm, CPU slot) |
 | T-0513 | 前端：作业执行页（DAG + 日志 + 资源） | P5 | T-0512,T-0303 | L1 | PARTIAL (2026-09-24) |
 | T-0514 | 前端：量化误差页（初版：热力图 + Top-K） | P5 | T-0512,T-0509 | L1 | PARTIAL (2026-09-24, heatmap + Top-K + attribution) |
-| T-0515 | 端到端最小闭环验收（M3） | P5 | T-0513,T-0514 | L1 | TODO |
+| T-0515 | 端到端最小闭环验收（M3） | P5 | T-0513,T-0514 | L1 | PARTIAL (2026-09-30, docs/guides/quickstart.md + LLM 全功能作业跑通; VLA 演示待 GPU) |
 | T-0601 | 算法：AWQ | P6 | T-0508 | L1 | DONE (2026-09-29, b2248e4; per-layer scale search, VLA eval pending GPU) |
 | T-0602 | 算法：GPTQ | P6 | T-0508 | L1 | DONE (2026-09-29, b2248e4; per-layer OBS on FP inputs, not sequential-block) |
-| T-0603 | 算法：SmoothQuant（等效变换 + transformed 位点） | P6 | T-0508 | L1 | PARTIAL (2026-09-29, b2248e4; per-layer X/s, W*s; transformed eval position not yet) |
+| T-0603 | 算法：SmoothQuant（等效变换 + transformed 位点） | P6 | T-0508 | L1 | PARTIAL (2026-09-30, per-group scales folded into the previous op (FP-exact, exportable); transformed eval position not yet) |
 | T-0604 | 激活量化（动态/静态）→ W4A8、W2A8 | P6 | T-0603 | L1 | DONE (2026-09-29, dynamic per-token + static per-tensor minmax/ema/percentile) |
 | T-0605 | FP8 配方（E4M3/E5M2，per_channel/per_block） | P6 | T-0508 | L1 | PARTIAL (2026-09-24, FP8 E4M3/E5M2 per-channel/per-tensor fake-quant; no per-block) |
 | T-0606 | 2bit 配方（W2A16/W2A8）与 HQQ | P6 | T-0602,T-0604 | L1 | PARTIAL (2026-09-24, W2A16/W2A8 fake-quant via RTN-MSE; no GPTQ/HQQ) |
@@ -129,7 +129,7 @@
 | T-0702 | Fake/Real 一致性检查（S10） | P7 | T-0701 | L1 | DONE (2026-09-29, 0 code mismatches; real PPL +0.0005% vs fake) |
 | T-0703 | 部署后端接口 + vLLM 适配器（S11） | P7 | T-0701,T-0504 | L2 | TODO |
 | T-0704 | SGLang 导出与适配 | P7 | T-0703 | L1 | TODO |
-| T-0705 | llama.cpp（GGUF）导出与适配 | P7 | T-0703,T-0405 | L1 | PARTIAL (2026-09-29, GGUF export + llama-perplexity/bench on CPU; llama-server + Metal pending) |
+| T-0705 | llama.cpp（GGUF）导出与适配 | P7 | T-0703,T-0405 | L1 | PARTIAL (2026-09-30, deploy_llamacpp stage in llm_job + UI; llama-server + Metal pending) |
 | T-0706 | TensorRT-LLM 导出与适配（扩展） | P7 | T-0703 | L1 | TODO |
 | T-0801 | 精度评测：lm-eval-harness / evalscope / 自定义 | P8 | T-0510 | L3 | TODO |
 | T-0802 | 部署后精度评测（S12） | P8 | T-0801,T-0703 | L1 | TODO |
@@ -137,7 +137,7 @@
 | T-0804 | 显存采样与 OOM 边界搜索 | P8 | T-0803,T-0202 | L1 | TODO |
 | T-0805 | HAL 微基准（带宽/算力实测） | P8 | T-1101 | L1 | TODO |
 | T-0806 | 报告生成（JSON + HTML） | P8 | T-0802,T-0804 | L1 | TODO |
-| T-0807 | 前端：评估报告页 + 对比页 | P8 | T-0806 | L1 | TODO |
+| T-0807 | 前端：评估报告页 + 对比页 | P8 | T-0806 | L1 | PARTIAL (2026-09-30, LLM/VLA compare tabs + llama.cpp table; standalone report page pending T-0806) |
 | T-0808 | M4 验收：全配方 × 多后端参考集 | P8 | T-0807,T-0606,T-0705 | L1 | TODO |
 | T-0901 | 阶段归因（瀑布）数据链路 | P9 | T-0702,T-0802 | L1 | PARTIAL (2026-09-24, modality-level attribution only) |
 | T-0902 | 敏感度分析（逐层回退） | P9 | T-0509 | L1 | PARTIAL (2026-09-29, block/type FP fallback in llm_job; 7B GPU timing pending) |

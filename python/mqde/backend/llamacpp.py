@@ -22,10 +22,16 @@ def bin_dir() -> Path:
 
 def _env() -> dict[str, str]:
     b = str(bin_dir())
-    return {**os.environ, "LD_LIBRARY_PATH": f"{b}:{os.environ.get('LD_LIBRARY_PATH', '')}", "CUDA_VISIBLE_DEVICES": os.environ.get("CUDA_VISIBLE_DEVICES", "")}
+    return {
+        **os.environ,
+        "LD_LIBRARY_PATH": f"{b}:{os.environ.get('LD_LIBRARY_PATH', '')}",
+        "CUDA_VISIBLE_DEVICES": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
+    }
 
 
-def perplexity(model: str | Path, text_file: str | Path, ctx: int = 512, chunks: int = 40, threads: int = 32, timeout: int = 3600) -> dict[str, Any]:
+def perplexity(
+    model: str | Path, text_file: str | Path, ctx: int = 512, chunks: int = 40, threads: int = 32, timeout: int = 3600
+) -> dict[str, Any]:
     """llama-perplexity: scores the second half of each ctx-token chunk (its standard protocol)."""
     cmd = [str(bin_dir() / "llama-perplexity"), "-m", str(model), "-f", str(text_file), "-c", str(ctx),
            "--chunks", str(chunks), "-t", str(threads), "-b", str(ctx)]

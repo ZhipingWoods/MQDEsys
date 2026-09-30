@@ -10,8 +10,9 @@ import json
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 
 class EventSink:
@@ -19,7 +20,7 @@ class EventSink:
         self.job_id = job_id
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._f = open(self.path, "a", buffering=1)
+        self._f = open(self.path, "a", buffering=1)  # noqa: SIM115  (lives for the job; closed by close())
         self._seq = 0
         self._lock = threading.Lock()
         self.echo = echo

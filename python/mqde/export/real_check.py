@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -91,7 +92,7 @@ def real_check(model: nn.Module, export_dir: str | Path) -> dict[str, Any]:
         "code_mismatch": sum(r["code_mismatch"] for r in ok),
         "zero_mismatch": sum(r["zero_mismatch"] for r in ok),
         "codes_identical": all(r["code_mismatch"] == 0 and r["zero_mismatch"] == 0 for r in ok) and len(ok) == len(rows),
-        "w_max_abs": max((r["w_max_abs"] for r in ok), default=0.0),
+        "w_max_abs": max((cast(float, r["w_max_abs"]) for r in ok), default=0.0),
         "w_rel_l2_mean": float(np.mean([r["w_rel_l2"] for r in ok])) if ok else 0.0,
         "per_layer": rows,
     }
@@ -101,12 +102,12 @@ def real_check(model: nn.Module, export_dir: str | Path) -> dict[str, Any]:
 def use_real_weights(model: nn.Module, export_dir: str | Path) -> Iterator[None]:
     """Temporarily replace every fake weight with the checkpoint's dequantized weight (fp16 scales)."""
     cfg, real = load_real(export_dir)
-    saved = {}
+    saved: dict[str, torch.Tensor] = {}
     try:
         for n, m in fake_linears(model).items():
-            w, _, _ = dequant_real(cfg, n, real[n], m.out_features, m.in_features)
+            wr, _, _ = dequant_real(cfg, n, real[n], m.out_features, m.in_features)
             saved[n] = m.weight
-            m.weight = torch.from_numpy(w).to(m.weight.device, m.weight.dtype)
+            m.weight = torch.from_numpy(wr).to(m.weight.device, m.weight.dtype)
         yield
     finally:
         fq = fake_linears(model)

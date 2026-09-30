@@ -1,0 +1,30 @@
+# Defect-focused checks only. Style is clang-format's job: this codebase deliberately uses single-line
+# `if (!r) return ...;` guards (AllowShortIfStatementsOnASingleLine), so brace/readability checks are off.
+# Vendor SDKs are dlopen'ed, so the C-interop noise from cppcoreguidelines-*/fuchsia-* is not enabled either.
+Checks: >
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-signed-bitwise,
+  -bugprone-branch-clone,
+  clang-analyzer-*,
+  misc-*,
+  -misc-non-private-member-variables-in-classes,
+  -misc-include-cleaner,
+  -misc-use-internal-linkage,
+  -misc-const-correctness,
+  -misc-no-recursion,
+  modernize-use-override,
+  modernize-use-nullptr,
+  modernize-use-emplace,
+  modernize-loop-convert,
+  modernize-make-unique,
+  modernize-redundant-void-arg,
+  performance-*,
+  -performance-enum-size,
+  -performance-avoid-endl,
+  readability-misleading-indentation,
+  readability-string-compare
+WarningsAsErrors: 'bugprone-use-after-move,bugprone-dangling-handle,clang-analyzer-core.*,performance-move-const-arg'
+HeaderFilterRegex: 'cpp/(include|src)/.*'
+FormatStyle: file

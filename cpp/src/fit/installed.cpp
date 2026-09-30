@@ -1,9 +1,9 @@
 #include "mqde/fit/installed.h"
 
 #include <algorithm>
-#include <functional>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <future>
 #include <regex>
 
@@ -45,10 +45,8 @@ std::string normalize_installed_name(std::string_view raw) {
 
 // ---------- HTTP helper ----------
 
-static std::vector<std::string> http_probe(const std::string& host, int port,
-                                            const std::string& path,
-                                            const std::string& json_ptr,
-                                            int timeout_ms) {
+static std::vector<std::string> http_probe(const std::string& host, int port, const std::string& path,
+                                           const std::string& json_ptr, int timeout_ms) {
   httplib::Client cli(host, port);
   cli.set_connection_timeout(timeout_ms / 1000, (timeout_ms % 1000) * 1000);
   cli.set_read_timeout(timeout_ms / 1000, (timeout_ms % 1000) * 1000);
@@ -78,9 +76,8 @@ static std::vector<std::string> http_probe(const std::string& host, int port,
 
 // ---------- filesystem probe ----------
 
-static std::vector<std::string> fs_probe(const std::vector<std::string>& raw_paths,
-                                          const std::string& marker, const std::string& ext,
-                                          int depth) {
+static std::vector<std::string> fs_probe(const std::vector<std::string>& raw_paths, const std::string& marker,
+                                         const std::string& ext, int depth) {
   std::vector<std::string> names;
   for (const auto& rp : raw_paths) {
     std::string expanded = rp;
@@ -105,8 +102,7 @@ static std::vector<std::string> fs_probe(const std::vector<std::string>& raw_pat
           }
           walk(entry.path(), d - 1);
         } else if (entry.is_regular_file() && !ext.empty()) {
-          if (entry.path().extension() == ext)
-            names.push_back(entry.path().stem().string());
+          if (entry.path().extension() == ext) names.push_back(entry.path().stem().string());
         }
       }
     };
@@ -153,9 +149,12 @@ InstalledIndex probe_installed() {
     // is the model id, the snapshot hashes are not.
     std::vector<std::string> names;
     std::string root = "~/.cache/huggingface/hub";
-    if (const char* h = ::getenv("HF_HUB_CACHE")) root = h;
-    else if (const char* h2 = ::getenv("HF_HOME")) root = std::string(h2) + "/hub";
-    if (root[0] == '~') if (const char* home = ::getenv("HOME")) root = std::string(home) + root.substr(1);
+    if (const char* h = ::getenv("HF_HUB_CACHE"))
+      root = h;
+    else if (const char* h2 = ::getenv("HF_HOME"))
+      root = std::string(h2) + "/hub";
+    if (root[0] == '~')
+      if (const char* home = ::getenv("HOME")) root = std::string(home) + root.substr(1);
     std::error_code ec;
     for (const auto& e : fs::directory_iterator(root, ec)) {
       const auto dn = e.path().filename().string();
@@ -218,8 +217,7 @@ std::vector<std::string> InstalledIndex::installed_providers(std::string_view mo
   std::vector<std::string> sources;
   for (const auto& m : models) {
     if (m.canonical == canon) {
-      if (std::find(sources.begin(), sources.end(), m.source) == sources.end())
-        sources.push_back(m.source);
+      if (std::find(sources.begin(), sources.end(), m.source) == sources.end()) sources.push_back(m.source);
     }
   }
   return sources;
@@ -229,9 +227,7 @@ nlohmann::json to_json(const InstalledIndex& idx) {
   nlohmann::json models = nlohmann::json::array();
   for (const auto& m : idx.models)
     models.push_back({{"name", m.name}, {"canonical", m.canonical}, {"source", m.source}});
-  return {{"models", models},
-          {"active_sources", idx.active_sources},
-          {"elapsed_ms", idx.elapsed_ms}};
+  return {{"models", models}, {"active_sources", idx.active_sources}, {"elapsed_ms", idx.elapsed_ms}};
 }
 
 }  // namespace mqde::fit

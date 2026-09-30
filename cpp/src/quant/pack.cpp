@@ -25,7 +25,8 @@ Result<void> check_int(int64_t out, int64_t in, int64_t group_size, int bits) {
   if (bits < 1 || bits > 8) return make_error(Errc::kInvalidArgument, "bits must be in [1, 8], got {}", bits);
   if (out <= 0 || in <= 0) return make_error(Errc::kInvalidArgument, "empty weight [{}, {}]", out, in);
   if (group_size <= 0 || in % group_size != 0)
-    return make_error(Errc::kInvalidArgument, "in_features {} is not divisible by group_size {}", in, group_size);
+    return make_error(Errc::kInvalidArgument, "in_features {} is not divisible by group_size {}", in,
+                      group_size);
   return {};
 }
 
@@ -95,12 +96,13 @@ std::vector<uint8_t> unpack_bits(std::span<const uint32_t> words, int bits, size
 }
 
 // ------------------------------------------------------------------ GPTQ
-Result<IntPacked> pack_gptq(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out, int64_t in,
-                            int64_t group_size, int bits, bool v1) {
+Result<IntPacked> pack_gptq(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out,
+                            int64_t in, int64_t group_size, int bits, bool v1) {
   if (auto ok = check_int(out, in, group_size, bits); !ok) return std::unexpected(ok.error());
   if ((in * bits) % 32 != 0 || (out * bits) % 32 != 0)
-    return make_error(Errc::kInvalidArgument, "GPTQ packing needs in*bits and out*bits divisible by 32 ([{}, {}], {} bit)",
-                      out, in, bits);
+    return make_error(Errc::kInvalidArgument,
+                      "GPTQ packing needs in*bits and out*bits divisible by 32 ([{}, {}], {} bit)", out, in,
+                      bits);
   const int64_t groups = in / group_size;
   const uint8_t mask = static_cast<uint8_t>((1u << bits) - 1u);
   IntPacked p;
@@ -133,7 +135,8 @@ Result<void> unpack_gptq(const IntPacked& p, int64_t out, int64_t in, int64_t gr
   if (auto ok = check_int(out, in, group_size, bits); !ok) return ok;
   const int64_t groups = in / group_size;
   if (p.qweight_rows != in * bits / 32 || p.qweight_cols != out || p.qzeros_rows != groups)
-    return make_error(Errc::kInvalidArgument, "GPTQ tensor shapes do not match [{}, {}] g{} {}bit", out, in, group_size, bits);
+    return make_error(Errc::kInvalidArgument, "GPTQ tensor shapes do not match [{}, {}] g{} {}bit", out, in,
+                      group_size, bits);
   const uint8_t mask = static_cast<uint8_t>((1u << bits) - 1u);
   std::vector<uint32_t> col(p.qweight_rows);
   for (int64_t o = 0; o < out; ++o) {
@@ -144,7 +147,8 @@ Result<void> unpack_gptq(const IntPacked& p, int64_t out, int64_t in, int64_t gr
   for (int64_t g = 0; g < groups; ++g) {
     const auto* w = reinterpret_cast<const uint32_t*>(p.qzeros.data() + g * p.qzeros_cols);
     const auto z = unpack_bits({w, static_cast<size_t>(p.qzeros_cols)}, bits, out);
-    for (int64_t o = 0; o < out; ++o) zeros[o * groups + g] = v1 ? static_cast<uint8_t>((z[o] + 1) & mask) : z[o];
+    for (int64_t o = 0; o < out; ++o)
+      zeros[o * groups + g] = v1 ? static_cast<uint8_t>((z[o] + 1) & mask) : z[o];
   }
   return {};
 }
@@ -171,11 +175,12 @@ void awq_deinterleave(std::vector<uint8_t>& v, int bits) {
 }
 }  // namespace
 
-Result<IntPacked> pack_awq(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out, int64_t in,
-                           int64_t group_size, int bits) {
+Result<IntPacked> pack_awq(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out,
+                           int64_t in, int64_t group_size, int bits) {
   if (auto ok = check_int(out, in, group_size, bits); !ok) return std::unexpected(ok.error());
   if ((out * bits) % 32 != 0)
-    return make_error(Errc::kInvalidArgument, "AWQ packing needs out*bits divisible by 32 (out={}, {} bit)", out, bits);
+    return make_error(Errc::kInvalidArgument, "AWQ packing needs out*bits divisible by 32 (out={}, {} bit)",
+                      out, bits);
   const int64_t groups = in / group_size;
   IntPacked p;
   p.qweight_rows = in;
@@ -186,7 +191,8 @@ Result<IntPacked> pack_awq(const uint8_t* codes, const uint8_t* zeros, const flo
     for (int64_t o = 0; o < out; ++o) row[o] = codes[o * in + i];
     awq_interleave(row, bits);
     const auto w = pack_bits(row, bits);
-    for (int64_t c = 0; c < p.qweight_cols; ++c) p.qweight[i * p.qweight_cols + c] = static_cast<int32_t>(w[c]);
+    for (int64_t c = 0; c < p.qweight_cols; ++c)
+      p.qweight[i * p.qweight_cols + c] = static_cast<int32_t>(w[c]);
   }
   p.qzeros_rows = groups;
   p.qzeros_cols = p.qweight_cols;
@@ -204,12 +210,13 @@ Result<IntPacked> pack_awq(const uint8_t* codes, const uint8_t* zeros, const flo
   return p;
 }
 
-Result<void> unpack_awq(const IntPacked& p, int64_t out, int64_t in, int64_t group_size, int bits, uint8_t* codes,
-                        uint8_t* zeros) {
+Result<void> unpack_awq(const IntPacked& p, int64_t out, int64_t in, int64_t group_size, int bits,
+                        uint8_t* codes, uint8_t* zeros) {
   if (auto ok = check_int(out, in, group_size, bits); !ok) return ok;
   const int64_t groups = in / group_size;
   if (p.qweight_rows != in || p.qweight_cols != out * bits / 32 || p.qzeros_rows != groups)
-    return make_error(Errc::kInvalidArgument, "AWQ tensor shapes do not match [{}, {}] g{} {}bit", out, in, group_size, bits);
+    return make_error(Errc::kInvalidArgument, "AWQ tensor shapes do not match [{}, {}] g{} {}bit", out, in,
+                      group_size, bits);
   for (int64_t i = 0; i < in; ++i) {
     const auto* w = reinterpret_cast<const uint32_t*>(p.qweight.data() + i * p.qweight_cols);
     auto row = unpack_bits({w, static_cast<size_t>(p.qweight_cols)}, bits, out);
@@ -250,7 +257,8 @@ struct BlockQ4_K {
   uint8_t scales[12];
   uint8_t qs[kQKK / 2];
 };
-static_assert(sizeof(BlockQ4_0) == 18 && sizeof(BlockQ8_0) == 34 && sizeof(BlockQ2_K) == 84 && sizeof(BlockQ4_K) == 144);
+static_assert(sizeof(BlockQ4_0) == 18 && sizeof(BlockQ8_0) == 34 && sizeof(BlockQ2_K) == 84 &&
+              sizeof(BlockQ4_K) == 144);
 
 inline int nearest_int(float fval) {
   const float val = fval + 12582912.f;
@@ -259,8 +267,8 @@ inline int nearest_int(float fval) {
   return (i & 0x007fffff) - 0x00400000;
 }
 
-float make_qkx2_quants(int n, int nmax, const float* x, const float* weights, uint8_t* L, float* the_min, uint8_t* Laux,
-                       float rmin, float rdelta, int nstep, bool use_mad) {
+float make_qkx2_quants(int n, int nmax, const float* x, const float* weights, uint8_t* L, float* the_min,
+                       uint8_t* Laux, float rmin, float rdelta, int nstep, bool use_mad) {
   float min = x[0];
   float max = x[0];
   float sum_w = weights[0];
@@ -409,13 +417,15 @@ void quantize_q2_K(const float* x, BlockQ2_K* y, int64_t k) {
     float max_scale = 0, max_min = 0;
     for (int j = 0; j < kQKK / 16; ++j) {
       for (int l = 0; l < 16; ++l) weights[l] = std::fabs(x[16 * j + l]);
-      scales[j] = make_qkx2_quants(16, 3, x + 16 * j, weights, L + 16 * j, &mins[j], Laux, -0.5f, 0.1f, 15, true);
+      scales[j] =
+          make_qkx2_quants(16, 3, x + 16 * j, weights, L + 16 * j, &mins[j], Laux, -0.5f, 0.1f, 15, true);
       if (scales[j] > max_scale) max_scale = scales[j];
       if (mins[j] > max_min) max_min = mins[j];
     }
     if (max_scale > 0) {
       const float iscale = q4scale / max_scale;
-      for (int j = 0; j < kQKK / 16; ++j) y[i].scales[j] = static_cast<uint8_t>(nearest_int(iscale * scales[j]));
+      for (int j = 0; j < kQKK / 16; ++j)
+        y[i].scales[j] = static_cast<uint8_t>(nearest_int(iscale * scales[j]));
       y[i].d = fp32_to_fp16(max_scale / q4scale);
     } else {
       for (int j = 0; j < kQKK / 16; ++j) y[i].scales[j] = 0;
@@ -423,7 +433,8 @@ void quantize_q2_K(const float* x, BlockQ2_K* y, int64_t k) {
     }
     if (max_min > 0) {
       const float iscale = q4scale / max_min;
-      for (int j = 0; j < kQKK / 16; ++j) y[i].scales[j] |= static_cast<uint8_t>(nearest_int(iscale * mins[j]) << 4);
+      for (int j = 0; j < kQKK / 16; ++j)
+        y[i].scales[j] |= static_cast<uint8_t>(nearest_int(iscale * mins[j]) << 4);
       y[i].dmin = fp32_to_fp16(max_min / q4scale);
     } else {
       y[i].dmin = fp32_to_fp16(0.f);
@@ -439,7 +450,8 @@ void quantize_q2_K(const float* x, BlockQ2_K* y, int64_t k) {
     }
     for (int j = 0; j < kQKK; j += 128)
       for (int l = 0; l < 32; ++l)
-        y[i].qs[j / 4 + l] = static_cast<uint8_t>(L[j + l] | (L[j + l + 32] << 2) | (L[j + l + 64] << 4) | (L[j + l + 96] << 6));
+        y[i].qs[j / 4 + l] = static_cast<uint8_t>(L[j + l] | (L[j + l + 32] << 2) | (L[j + l + 64] << 4) |
+                                                  (L[j + l + 96] << 6));
     x += kQKK;
   }
 }
@@ -482,7 +494,8 @@ void quantize_q4_K(const float* x, BlockQ4_K* y, int64_t k) {
       for (int l = 0; l < 32; ++l) sum_x2 += x[32 * j + l] * x[32 * j + l];
       const float av_x = std::sqrt(sum_x2 / 32);
       for (int l = 0; l < 32; ++l) weights[l] = av_x + std::fabs(x[32 * j + l]);
-      scales[j] = make_qkx2_quants(32, 15, x + 32 * j, weights, L + 32 * j, &mins[j], Laux, -1.f, 0.1f, 20, false);
+      scales[j] =
+          make_qkx2_quants(32, 15, x + 32 * j, weights, L + 32 * j, &mins[j], Laux, -1.f, 0.1f, 20, false);
       if (scales[j] > max_scale) max_scale = scales[j];
       if (mins[j] > max_min) max_min = mins[j];
     }
@@ -549,10 +562,14 @@ void dequantize_q4_K(const BlockQ4_K* x, float* y, int64_t k) {
 
 GgufTraits gguf_traits(GgufType t) {
   switch (t) {
-    case GgufType::kQ4_0: return {kQK, sizeof(BlockQ4_0), "Q4_0"};
-    case GgufType::kQ8_0: return {kQK, sizeof(BlockQ8_0), "Q8_0"};
-    case GgufType::kQ2_K: return {kQKK, sizeof(BlockQ2_K), "Q2_K"};
-    case GgufType::kQ4_K: return {kQKK, sizeof(BlockQ4_K), "Q4_K"};
+    case GgufType::kQ4_0:
+      return {kQK, sizeof(BlockQ4_0), "Q4_0"};
+    case GgufType::kQ8_0:
+      return {kQK, sizeof(BlockQ8_0), "Q8_0"};
+    case GgufType::kQ2_K:
+      return {kQKK, sizeof(BlockQ2_K), "Q2_K"};
+    case GgufType::kQ4_K:
+      return {kQKK, sizeof(BlockQ4_K), "Q4_K"};
   }
   return {0, 0, "?"};
 }
@@ -569,29 +586,49 @@ Result<GgufType> gguf_type_from_name(std::string_view name) {
 
 Result<std::vector<uint8_t>> gguf_quantize(GgufType t, const float* x, int64_t n) {
   const auto tr = gguf_traits(t);
-  if (tr.block_elems == 0) return make_error(Errc::kInvalidArgument, "unknown GGUF type {}", static_cast<uint32_t>(t));
+  if (tr.block_elems == 0)
+    return make_error(Errc::kInvalidArgument, "unknown GGUF type {}", static_cast<uint32_t>(t));
   if (n <= 0 || n % tr.block_elems != 0)
-    return make_error(Errc::kInvalidArgument, "{}: element count {} is not a multiple of {}", tr.name, n, tr.block_elems);
+    return make_error(Errc::kInvalidArgument, "{}: element count {} is not a multiple of {}", tr.name, n,
+                      tr.block_elems);
   std::vector<uint8_t> out(n / tr.block_elems * tr.block_bytes);
   switch (t) {
-    case GgufType::kQ4_0: quantize_q4_0(x, reinterpret_cast<BlockQ4_0*>(out.data()), n); break;
-    case GgufType::kQ8_0: quantize_q8_0(x, reinterpret_cast<BlockQ8_0*>(out.data()), n); break;
-    case GgufType::kQ2_K: quantize_q2_K(x, reinterpret_cast<BlockQ2_K*>(out.data()), n); break;
-    case GgufType::kQ4_K: quantize_q4_K(x, reinterpret_cast<BlockQ4_K*>(out.data()), n); break;
+    case GgufType::kQ4_0:
+      quantize_q4_0(x, reinterpret_cast<BlockQ4_0*>(out.data()), n);
+      break;
+    case GgufType::kQ8_0:
+      quantize_q8_0(x, reinterpret_cast<BlockQ8_0*>(out.data()), n);
+      break;
+    case GgufType::kQ2_K:
+      quantize_q2_K(x, reinterpret_cast<BlockQ2_K*>(out.data()), n);
+      break;
+    case GgufType::kQ4_K:
+      quantize_q4_K(x, reinterpret_cast<BlockQ4_K*>(out.data()), n);
+      break;
   }
   return out;
 }
 
 Result<void> gguf_dequantize(GgufType t, const uint8_t* data, int64_t n, float* out) {
   const auto tr = gguf_traits(t);
-  if (tr.block_elems == 0) return make_error(Errc::kInvalidArgument, "unknown GGUF type {}", static_cast<uint32_t>(t));
+  if (tr.block_elems == 0)
+    return make_error(Errc::kInvalidArgument, "unknown GGUF type {}", static_cast<uint32_t>(t));
   if (n <= 0 || n % tr.block_elems != 0)
-    return make_error(Errc::kInvalidArgument, "{}: element count {} is not a multiple of {}", tr.name, n, tr.block_elems);
+    return make_error(Errc::kInvalidArgument, "{}: element count {} is not a multiple of {}", tr.name, n,
+                      tr.block_elems);
   switch (t) {
-    case GgufType::kQ4_0: dequantize_q4_0(reinterpret_cast<const BlockQ4_0*>(data), out, n); break;
-    case GgufType::kQ8_0: dequantize_q8_0(reinterpret_cast<const BlockQ8_0*>(data), out, n); break;
-    case GgufType::kQ2_K: dequantize_q2_K(reinterpret_cast<const BlockQ2_K*>(data), out, n); break;
-    case GgufType::kQ4_K: dequantize_q4_K(reinterpret_cast<const BlockQ4_K*>(data), out, n); break;
+    case GgufType::kQ4_0:
+      dequantize_q4_0(reinterpret_cast<const BlockQ4_0*>(data), out, n);
+      break;
+    case GgufType::kQ8_0:
+      dequantize_q8_0(reinterpret_cast<const BlockQ8_0*>(data), out, n);
+      break;
+    case GgufType::kQ2_K:
+      dequantize_q2_K(reinterpret_cast<const BlockQ2_K*>(data), out, n);
+      break;
+    case GgufType::kQ4_K:
+      dequantize_q4_K(reinterpret_cast<const BlockQ4_K*>(data), out, n);
+      break;
   }
   return {};
 }

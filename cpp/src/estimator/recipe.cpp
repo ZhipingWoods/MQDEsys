@@ -19,7 +19,8 @@ Result<Recipe> load_recipe(std::string_view name_or_path) {
   MQDE_ASSIGN_OR_RETURN(r.act, quant::parse_quant_spec(j.value("act", Json()), where + ".act"));
   MQDE_ASSIGN_OR_RETURN(r.kv, quant::parse_quant_spec(j.value("kv", Json()), where + ".kv"));
   if (r.act.enabled() && r.act.gran == quant::Granularity::kPerGroup)
-    return make_error(Errc::kInvalidArgument, "{}.act: per_group activation quantization is not supported", where);
+    return make_error(Errc::kInvalidArgument, "{}.act: per_group activation quantization is not supported",
+                      where);
   return r;
 }
 

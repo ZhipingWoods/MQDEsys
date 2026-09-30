@@ -12,7 +12,8 @@ namespace {
 
 std::string lower(std::string_view s) {
   std::string o(s);
-  std::transform(o.begin(), o.end(), o.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  std::transform(o.begin(), o.end(), o.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return o;
 }
 
@@ -59,9 +60,10 @@ Result<std::vector<BenchmarkIndex::Row>> read_submission(const fs::path& file, c
                                                          bool require_source) {
   MQDE_ASSIGN_OR_RETURN(Json j, load_structured_file(file));
   if (!j.is_object()) return make_error(Errc::kParse, "{}: not a JSON object", file.string());
-  if (require_source && !(j.contains("source") && j["source"].is_string() && !j["source"].get<std::string>().empty()))
-    return make_error(Errc::kInvalidArgument, "{}: community data must carry a non-empty `source` (origin + license)",
-                      file.string());
+  if (require_source &&
+      !(j.contains("source") && j["source"].is_string() && !j["source"].get<std::string>().empty()))
+    return make_error(Errc::kInvalidArgument,
+                      "{}: community data must carry a non-empty `source` (origin + license)", file.string());
   const Json h = j.value("hardware", Json::object());
   // llmfit hardware_payload_matches: same CPU name AND same GPU name (both absent also matches).
   const std::string cpu = h.value("cpu", "");
@@ -151,14 +153,15 @@ std::optional<MeasuredTps> BenchmarkIndex::lookup(std::string_view model, std::s
 Json to_json(const Submission& s) {
   Json results = Json::array();
   for (const auto& r : s.results) {
-    Json e = {{"model", r.model},     {"quant", r.quant},     {"runtime", r.runtime}, {"avgTps", r.avg_tps},
-              {"minTps", r.min_tps},  {"maxTps", r.max_tps},  {"numRuns", r.num_runs}, {"unit", r.unit}};
+    Json e = {{"model", r.model},    {"quant", r.quant},    {"runtime", r.runtime},  {"avgTps", r.avg_tps},
+              {"minTps", r.min_tps}, {"maxTps", r.max_tps}, {"numRuns", r.num_runs}, {"unit", r.unit}};
     if (r.avg_ttft_ms) e["avgTtftMs"] = *r.avg_ttft_ms;
     if (r.peak_mem_bytes > 0) e["peakMemBytes"] = r.peak_mem_bytes;
     if (r.context_tokens > 0) e["contextTokens"] = r.context_tokens;
     results.push_back(e);
   }
-  const auto now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch());
+  const auto now =
+      std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch());
   return {{"schemaVersion", 1},
           {"submittedAtUnix", now.count()},
           {"tool", {{"name", "mqde"}, {"version", s.tool_version}}},

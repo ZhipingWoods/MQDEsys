@@ -11,19 +11,17 @@ namespace {
 
 // Dense LLM of `params_b` billion params in BF16, llama-like geometry (32 layers, 8 kv heads, 128 dim).
 modelspec::ModelSpec dense_llm(double params_b) {
-  Json cfg = {{"model_type", "llama"},
-              {"num_hidden_layers", 32},
-              {"hidden_size", 4096},
-              {"num_attention_heads", 32},
-              {"num_key_value_heads", 8},
-              {"head_dim", 128},
-              {"intermediate_size", 14336},
-              {"vocab_size", 128256},
-              {"max_position_embeddings", 131072}};
+  Json cfg = {{"model_type", "llama"},      {"num_hidden_layers", 32},  {"hidden_size", 4096},
+              {"num_attention_heads", 32},  {"num_key_value_heads", 8}, {"head_dim", 128},
+              {"intermediate_size", 14336}, {"vocab_size", 128256},     {"max_position_embeddings", 131072}};
   const int64_t rows = 4096;
   const int64_t cols = static_cast<int64_t>(params_b * 1e9 / rows);
-  std::vector<modelspec::TensorInfo> t = {
-      {"model.layers.0.mlp.up_proj.weight", "BF16", {rows, cols}, rows * cols, static_cast<uint64_t>(rows * cols * 2), "m"}};
+  std::vector<modelspec::TensorInfo> t = {{"model.layers.0.mlp.up_proj.weight",
+                                           "BF16",
+                                           {rows, cols},
+                                           rows * cols,
+                                           static_cast<uint64_t>(rows * cols * 2),
+                                           "m"}};
   auto fam = modelspec::find_model_family("llama");
   EXPECT_TRUE(fam);
   auto spec = modelspec::build_model_spec(cfg, t, *fam);
@@ -73,7 +71,8 @@ TEST(fit, small_model_is_perfect_on_bf16) {
 TEST(fit, walks_hierarchy_to_smaller_quant) {
   auto c = load_fit_config();
   ASSERT_TRUE(c);
-  // 20B: BF16 (~40 GB) does not fit in 24 GB; FP8 (~20 GB, ratio ~0.9) is the best quant that fits (Marginal).
+  // 20B: BF16 (~40 GB) does not fit in 24 GB; FP8 (~20 GB, ratio ~0.9) is the best quant that fits
+  // (Marginal).
   auto f = analyze(dense_llm(20.0), gpu24(), *c, estimator::BackendProfile{}, Request{});
   ASSERT_TRUE(f);
   EXPECT_EQ(f->best_quant, "FP8");
@@ -139,7 +138,8 @@ TEST(fit, quality_tiers_match_llmfit_strict_bounds) {
   ASSERT_TRUE(c);
   // (active params B, expected base) — strict "<" upper bounds.
   const std::vector<std::pair<double, double>> cases = {
-      // dense_llm() truncates columns, so "N B" is slightly under N·1e9; use N+0.01 to land just above a bound.
+      // dense_llm() truncates columns, so "N B" is slightly under N·1e9; use N+0.01 to land just above a
+      // bound.
       {0.9, 30}, {1.01, 45}, {3.01, 60}, {7.01, 75}, {10.01, 82}, {20.01, 89}, {40.01, 95}, {70.0, 95}};
   const double family = c->family_bonus.at("llama");  // dense_llm() is model_type=llama
   for (const auto& [b, want] : cases) {
@@ -204,7 +204,8 @@ TEST(fit, many_cores_bonus_on_k_constant_path) {
 
 namespace {
 // dense_llm geometry turned into a Mixtral-like MoE: 8 experts, top-2, expert FFN 14336.
-modelspec::ModelSpec moe_llm(double params_b, bool with_expert_width = true, const char* model_type = "mixtral") {
+modelspec::ModelSpec moe_llm(double params_b, bool with_expert_width = true,
+                             const char* model_type = "mixtral") {
   auto s = dense_llm(params_b);
   s.model_type = model_type;
   s.text.n_experts = 8;
@@ -280,7 +281,8 @@ TEST(fit, moe_vram_pressure_boundaries) {
   EXPECT_NEAR(moe_vram_pressure(0.80, 256, 8, mc), 1.0 - 0.20 * inactive, 1e-12);
   EXPECT_NEAR(moe_vram_pressure(1.00, 256, 8, mc), 1.0 - 0.40 * inactive, 1e-12);
   EXPECT_DOUBLE_EQ(moe_vram_pressure(1.20, 256, 8, mc), 1.0) << "util > 1 cannot be GPU mode";
-  EXPECT_NEAR(moe_vram_pressure(0.80, 0, 0, mc), 1.0 - 0.20 * 0.50, 1e-12) << "unknown experts -> default ratio";
+  EXPECT_NEAR(moe_vram_pressure(0.80, 0, 0, mc), 1.0 - 0.20 * 0.50, 1e-12)
+      << "unknown experts -> default ratio";
   // With the default threshold (0.60) the factor bottoms out at 1 - 0.4 * inactive >= 0.6, so the
   // 0.30 floor is only reachable with a lower threshold.
   MoeConfig low = mc;
@@ -291,7 +293,8 @@ TEST(fit, moe_vram_pressure_boundaries) {
 TEST(fit, moe_pressure_applied_in_gpu_mode) {
   auto c = load_fit_config();
   ASSERT_TRUE(c);
-  auto f = analyze(moe_llm(8.0), gpu24(), *c, estimator::BackendProfile{}, Request{});  // BF16 ~16 GB -> util ~0.67
+  auto f = analyze(moe_llm(8.0), gpu24(), *c, estimator::BackendProfile{},
+                   Request{});  // BF16 ~16 GB -> util ~0.67
   ASSERT_TRUE(f);
   ASSERT_EQ(f->run_mode, RunMode::kGpu);
   ASSERT_EQ(f->best_quant, "BF16");
@@ -361,8 +364,8 @@ TEST(fit_calibration, two_anchors_calibrate_non_measured) {
   // Anchors: ratio 0.8 and 0.6 → median 0.7
   std::vector<ModelFit> v = {
       with_local_measurement(7.0, 100.0, 80.0),  // ratio 0.8
-      with_local_measurement(3.0, 50.0,  30.0),  // ratio 0.6
-      unmeasured(1.5, 40.0),                      // will be calibrated
+      with_local_measurement(3.0, 50.0, 30.0),   // ratio 0.6
+      unmeasured(1.5, 40.0),                     // will be calibrated
   };
   apply_local_calibration(v);
   // Anchors unchanged
@@ -428,9 +431,9 @@ TEST(fit_calibration, steps_per_s_calibrated_separately) {
   // A steps/s anchor should not affect tok/s candidates, and vice versa.
   std::vector<ModelFit> v = {
       with_local_measurement(7.0, 100.0, 80.0),  // tok/s anchor 0.8
-      with_local_measurement(3.0, 50.0,  30.0),  // tok/s anchor 0.6
-      unmeasured(1.5, 40.0, "steps/s"),           // steps/s, no anchor → noop
-      unmeasured(2.0, 60.0, "tok/s"),             // tok/s → calibrated
+      with_local_measurement(3.0, 50.0, 30.0),   // tok/s anchor 0.6
+      unmeasured(1.5, 40.0, "steps/s"),          // steps/s, no anchor → noop
+      unmeasured(2.0, 60.0, "tok/s"),            // tok/s → calibrated
   };
   apply_local_calibration(v);
   EXPECT_EQ(v[2].confidence, Confidence::kEstimated) << "steps/s with no anchors stays estimated";

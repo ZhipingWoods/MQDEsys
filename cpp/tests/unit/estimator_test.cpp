@@ -9,31 +9,37 @@ namespace {
 
 modelspec::ModelSpec tiny_spec() {
   // Single language weight [256, 1024] + the MiniCPM-VLA text geometry.
-  Json cfg = {{"model_type", "minicpm_vla"},
-              {"action_horizon", 30},
-              {"num_inference_timesteps", 4},
-              {"action_dim", 80},
-              {"vlm_config",
-               {{"text_config",
-                 {{"num_hidden_layers", 24},
-                  {"hidden_size", 1024},
-                  {"num_attention_heads", 8},
-                  {"num_key_value_heads", 2},
-                  {"head_dim", 256},
-                  {"intermediate_size", 3584},
-                  {"vocab_size", 1000},
-                  {"linear_num_key_heads", 16},
-                  {"linear_num_value_heads", 16},
-                  {"linear_key_head_dim", 128},
-                  {"linear_value_head_dim", 128},
-                  {"linear_conv_kernel_dim", 4},
-                  {"mamba_ssm_dtype", "float32"}}},
-                {"vision_config", {{"num_hidden_layers", 1}, {"hidden_size", 64}, {"intermediate_size", 128}, {"patch_size", 14}}}}}};
+  Json cfg = {
+      {"model_type", "minicpm_vla"},
+      {"action_horizon", 30},
+      {"num_inference_timesteps", 4},
+      {"action_dim", 80},
+      {"vlm_config",
+       {{"text_config",
+         {{"num_hidden_layers", 24},
+          {"hidden_size", 1024},
+          {"num_attention_heads", 8},
+          {"num_key_value_heads", 2},
+          {"head_dim", 256},
+          {"intermediate_size", 3584},
+          {"vocab_size", 1000},
+          {"linear_num_key_heads", 16},
+          {"linear_num_value_heads", 16},
+          {"linear_key_head_dim", 128},
+          {"linear_value_head_dim", 128},
+          {"linear_conv_kernel_dim", 4},
+          {"mamba_ssm_dtype", "float32"}}},
+        {"vision_config",
+         {{"num_hidden_layers", 1}, {"hidden_size", 64}, {"intermediate_size", 128}, {"patch_size", 14}}}}}};
   std::vector<std::string> types;
   for (int i = 0; i < 24; ++i) types.push_back(i % 4 == 3 ? "full_attention" : "linear_attention");
   cfg["vlm_config"]["text_config"]["layer_types"] = types;
-  std::vector<modelspec::TensorInfo> t = {
-      {"vlm.model.language_model.layers.0.mlp.up_proj.weight", "BF16", {256, 1024}, 256 * 1024, 256 * 1024 * 2, "m"}};
+  std::vector<modelspec::TensorInfo> t = {{"vlm.model.language_model.layers.0.mlp.up_proj.weight",
+                                           "BF16",
+                                           {256, 1024},
+                                           256 * 1024,
+                                           256 * 1024 * 2,
+                                           "m"}};
   auto fam = modelspec::find_model_family("minicpm_vla");
   EXPECT_TRUE(fam);
   auto spec = modelspec::build_model_spec(cfg, t, *fam);

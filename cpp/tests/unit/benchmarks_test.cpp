@@ -17,7 +17,8 @@ const HardwareId kHere{"NVIDIA GeForce RTX 4090", "AMD EPYC 7763 64-Core Process
 struct TempRoot {
   fs::path dir;
   TempRoot() {
-    dir = fs::temp_directory_path() / fmt::format("mqde-bench-{}", ::testing::UnitTest::GetInstance()->random_seed());
+    dir = fs::temp_directory_path() /
+          fmt::format("mqde-bench-{}", ::testing::UnitTest::GetInstance()->random_seed());
     dir /= ::testing::UnitTest::GetInstance()->current_test_info()->name();
     fs::remove_all(dir);
     fs::create_directories(dir);
@@ -58,7 +59,8 @@ TEST(benchmarks, plausibility_bounds) {
 
 TEST(benchmarks, median_merge_and_sample_counts) {
   auto idx = BenchmarkIndex::from_rows(
-      {{"m", "bf16", 10.0, 100.0, 3}, {"m", "bf16", 30.0, std::nullopt, 2}, {"m", "bf16", 20.0, 300.0, 1}}, {});
+      {{"m", "bf16", 10.0, 100.0, 3}, {"m", "bf16", 30.0, std::nullopt, 2}, {"m", "bf16", 20.0, 300.0, 1}},
+      {});
   auto m = idx.lookup("org/m", "BF16");
   ASSERT_TRUE(m);
   EXPECT_DOUBLE_EQ(m->tok_s, 20.0);  // median of 10, 20, 30
@@ -68,13 +70,15 @@ TEST(benchmarks, median_merge_and_sample_counts) {
   EXPECT_EQ(m->source, MeasuredSource::kLocal);
   EXPECT_EQ(m->hardware_label, "this machine");
 
-  auto even = BenchmarkIndex::from_rows({{"m", "", 10.0, std::nullopt, 1}, {"m", "", 20.0, std::nullopt, 1}}, {});
+  auto even =
+      BenchmarkIndex::from_rows({{"m", "", 10.0, std::nullopt, 1}, {"m", "", 20.0, std::nullopt, 1}}, {});
   EXPECT_DOUBLE_EQ(even.lookup("m")->tok_s, 15.0);
 }
 
 TEST(benchmarks, quant_narrows_but_unrecorded_quant_matches_any) {
-  auto idx = BenchmarkIndex::from_rows({{"m", "bf16", 10.0, std::nullopt, 1}, {"m", "", 40.0, std::nullopt, 1}}, {});
-  EXPECT_DOUBLE_EQ(idx.lookup("m", "bf16")->tok_s, 25.0);  // bf16 row + quant-less row
+  auto idx =
+      BenchmarkIndex::from_rows({{"m", "bf16", 10.0, std::nullopt, 1}, {"m", "", 40.0, std::nullopt, 1}}, {});
+  EXPECT_DOUBLE_EQ(idx.lookup("m", "bf16")->tok_s, 25.0);   // bf16 row + quant-less row
   EXPECT_DOUBLE_EQ(idx.lookup("m", "w4a16")->tok_s, 40.0);  // only the quant-less row
 }
 
@@ -98,9 +102,10 @@ TEST(benchmarks, identical_hardware_only) {
   TempRoot t;
   const Json r = Json::array({{{"model", "M"}, {"avgTps", 12.0}, {"numRuns", 2}}});
   t.put("local/a/1.json", submission(kHere.gpu_name, kHere.cpu_name, r));
-  t.put("local/a/2.json", submission("nvidia geforce rtx 4090", "amd epyc 7763 64-core processor", r));  // case-insensitive
-  t.put("local/b/3.json", submission("NVIDIA GeForce RTX 3090", kHere.cpu_name, r));                    // other GPU
-  t.put("local/b/4.json", submission(kHere.gpu_name, "Intel Xeon", r));                                 // other CPU
+  t.put("local/a/2.json",
+        submission("nvidia geforce rtx 4090", "amd epyc 7763 64-core processor", r));  // case-insensitive
+  t.put("local/b/3.json", submission("NVIDIA GeForce RTX 3090", kHere.cpu_name, r));   // other GPU
+  t.put("local/b/4.json", submission(kHere.gpu_name, "Intel Xeon", r));                // other CPU
   auto idx = BenchmarkIndex::load(kHere, t.dir);
   EXPECT_EQ(idx.local_runs(), 2);
   auto m = idx.lookup("M");
@@ -139,8 +144,8 @@ TEST(benchmarks, write_then_load_round_trip) {
   Submission s;
   s.hw = kHere;
   s.tool_version = "0.1.0";
-  s.results.push_back({"/cache/hub/MiniCPM-RobotManip", "bf16", "hf_transformers", 3.6, 3.4, 3.8, 280.0, 5, "steps/s",
-                       3'900'000'000, 612});
+  s.results.push_back({"/cache/hub/MiniCPM-RobotManip", "bf16", "hf_transformers", 3.6, 3.4, 3.8, 280.0, 5,
+                       "steps/s", 3'900'000'000, 612});
   const Json j = to_json(s);
   EXPECT_EQ(j["results"][0]["peakMemBytes"], 3'900'000'000);
   EXPECT_EQ(j["results"][0]["contextTokens"], 612);

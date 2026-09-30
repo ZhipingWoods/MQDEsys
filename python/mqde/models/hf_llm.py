@@ -8,8 +8,9 @@ attention mask), and ``QuantModel`` provides the per-linear ``Unit`` classificat
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch import nn
@@ -31,9 +32,9 @@ class HFCausalLM:
         self.device = torch.device(device)
         self.dtype = dtype
         self.tokenizer = AutoTokenizer.from_pretrained(self.path)
-        self.model = AutoModelForCausalLM.from_pretrained(self.path, dtype=dtype, trust_remote_code=False)
-        self.model.to(self.device).eval()
-        self.model.config.use_cache = False
+        hf = AutoModelForCausalLM.from_pretrained(self.path, dtype=dtype, trust_remote_code=False)
+        self.model: nn.Module = cast(Any, hf).to(self.device).eval()
+        cast(Any, self.model).config.use_cache = False
         self.qmodel = QuantModel(self.model, QuantModel.load_family(self.family_name))
 
     @classmethod
@@ -43,17 +44,17 @@ class HFCausalLM:
         p = next(model.parameters())
         self.path, self.device, self.dtype, self.tokenizer = "<memory>", p.device, p.dtype, tokenizer
         self.model = model.eval()
-        self.model.config.use_cache = False
+        cast(Any, self.model).config.use_cache = False
         self.qmodel = QuantModel(self.model, QuantModel.load_family(self.family_name))
         return self
 
     # ------------------------------------------------------------ block view
     def decoder(self) -> nn.Module:
         m = self.model
-        return m.model if hasattr(m, "model") else m
+        return cast(nn.Module, m.model) if hasattr(m, "model") else m
 
     def get_blocks(self) -> nn.ModuleList:
-        return self.decoder().layers
+        return cast(nn.ModuleList, cast(Any, self.decoder()).layers)
 
     def block_prefix(self, i: int) -> str:
         for name, mod in self.model.named_modules():
@@ -82,10 +83,8 @@ class HFCausalLM:
         blocks[0] = Catcher(orig)
         try:
             for ids in batches:
-                try:
+                with contextlib.suppress(_Caught):
                     self.model(input_ids=ids.to(self.device))
-                except _Caught:
-                    pass
         finally:
             blocks[0] = orig
         return hs, kws

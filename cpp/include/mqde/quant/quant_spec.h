@@ -12,7 +12,11 @@
 namespace mqde::quant {
 
 enum class NumFormat { kInt, kFp8E4M3, kFp8E5M2, kNone /* keep original precision */ };
-enum class Granularity { kPerTensor, kPerChannel /* per row: out-channel for weights, token for acts */, kPerGroup };
+enum class Granularity {
+  kPerTensor,
+  kPerChannel /* per row: out-channel for weights, token for acts */,
+  kPerGroup
+};
 enum class CalibAlgo { kMinMax, kMse };
 
 struct QuantSpec {

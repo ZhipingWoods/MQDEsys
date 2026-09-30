@@ -70,16 +70,16 @@ class BenchmarkIndex {
   static BenchmarkIndex from_rows(std::vector<Row> local, std::vector<Row> community);
 
  private:
-  std::optional<MeasuredTps> find(const std::vector<Row>& rows, const std::string& slug, std::string_view quant,
-                                  MeasuredSource src) const;
+  std::optional<MeasuredTps> find(const std::vector<Row>& rows, const std::string& slug,
+                                  std::string_view quant, MeasuredSource src) const;
   std::vector<Row> local_, community_;
   int skipped_ = 0;
 };
 
 // Parses one submission file. Returns the rows that match `hw` (empty when the hardware differs).
 // `require_source` rejects community files lacking a top-level `source` (license attribution).
-Result<std::vector<BenchmarkIndex::Row>> read_submission(const std::filesystem::path& file, const HardwareId& hw,
-                                                         bool require_source);
+Result<std::vector<BenchmarkIndex::Row>> read_submission(const std::filesystem::path& file,
+                                                         const HardwareId& hw, bool require_source);
 
 // A new local submission as written by `mqde bench` (schema: data/benchmarks/schema.json).
 struct Submission {
@@ -100,6 +100,7 @@ struct Submission {
 };
 Json to_json(const Submission& s);
 // Writes <root>/local/<hardware_slug>/<unix>-<8 hex>.json and returns the path.
-Result<std::filesystem::path> write_local_submission(const Submission& s, const std::filesystem::path& root = {});
+Result<std::filesystem::path> write_local_submission(const Submission& s,
+                                                     const std::filesystem::path& root = {});
 
 }  // namespace mqde::fit

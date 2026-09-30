@@ -33,9 +33,12 @@ TextSpec parse_text(const Json& t) {
   s.layer_types = get_or<std::vector<std::string>>(t, "layer_types", {});
   if (s.layer_types.empty()) s.layer_types.assign(static_cast<size_t>(s.n_layers), "full_attention");
   for (const auto& lt : s.layer_types) {
-    if (lt == "linear_attention") ++s.n_linear_attention;
-    else if (lt == "sliding_attention") ++s.n_sliding_attention;
-    else ++s.n_full_attention;
+    if (lt == "linear_attention")
+      ++s.n_linear_attention;
+    else if (lt == "sliding_attention")
+      ++s.n_sliding_attention;
+    else
+      ++s.n_full_attention;
   }
   s.linear_num_key_heads = get_or<int64_t>(t, "linear_num_key_heads", 0);
   s.linear_num_value_heads = get_or<int64_t>(t, "linear_num_value_heads", 0);
@@ -43,7 +46,8 @@ TextSpec parse_text(const Json& t) {
   s.linear_value_head_dim = get_or<int64_t>(t, "linear_value_head_dim", 0);
   s.linear_conv_kernel = get_or<int64_t>(t, "linear_conv_kernel_dim", 0);
   s.linear_state_dtype = get_or<std::string>(t, "mamba_ssm_dtype", "float32");
-  s.n_experts = get_or<int64_t>(t, "num_experts", get_or<int64_t>(t, "n_routed_experts", get_or<int64_t>(t, "num_local_experts", 0)));
+  s.n_experts = get_or<int64_t>(
+      t, "num_experts", get_or<int64_t>(t, "n_routed_experts", get_or<int64_t>(t, "num_local_experts", 0)));
   s.experts_per_tok = get_or<int64_t>(t, "num_experts_per_tok", get_or<int64_t>(t, "moe_topk", 0));
   s.moe_intermediate = get_or<int64_t>(t, "moe_intermediate_size", 0);
   s.shared_expert_intermediate = get_or<int64_t>(t, "shared_expert_intermediate_size", 0);
@@ -52,7 +56,8 @@ TextSpec parse_text(const Json& t) {
 
 }  // namespace
 
-Result<ModelSpec> build_model_spec(const Json& config, std::vector<TensorInfo> tensors, const ModelFamily& family) {
+Result<ModelSpec> build_model_spec(const Json& config, std::vector<TensorInfo> tensors,
+                                   const ModelFamily& family) {
   ModelSpec spec;
   spec.model_type = get_or<std::string>(config, "model_type", "unknown");
   spec.architectures = get_or<std::vector<std::string>>(config, "architectures", {});
@@ -86,7 +91,8 @@ Result<ModelSpec> build_model_spec(const Json& config, std::vector<TensorInfo> t
 
   std::vector<std::regex> keep_fp, block_res;
   for (const auto& p : family.default_keep_fp) keep_fp.emplace_back(p);
-  for (const auto& c : family.components) block_res.emplace_back(c.block_regex.empty() ? "$^" : c.block_regex);
+  for (const auto& c : family.components)
+    block_res.emplace_back(c.block_regex.empty() ? "$^" : c.block_regex);
   spec.keep_fp_patterns = family.default_keep_fp;
 
   std::map<std::string, ComponentStat> stats;
@@ -169,8 +175,8 @@ Result<ModelSpec> build_model_spec(const Json& config, std::vector<TensorInfo> t
       if (t.dtype == "I32" || t.dtype == "U32") mult = 32 / ck_bits;
     }
     u.aux = t.name.ends_with("_scale") || t.name.ends_with(".scales") || t.name.ends_with(".qzeros") ||
-            t.name.ends_with(".g_idx") || t.name.ends_with("pre_quant_scale") || t.name.ends_with("weight_scale_inv") ||
-            t.name.ends_with("input_scale");
+            t.name.ends_with(".g_idx") || t.name.ends_with("pre_quant_scale") ||
+            t.name.ends_with("weight_scale_inv") || t.name.ends_with("input_scale");
     u.logical_shape = t.shape;
     if (!u.logical_shape.empty()) u.logical_shape.back() *= mult;
     u.logical_numel = t.numel * mult;
@@ -183,7 +189,8 @@ Result<ModelSpec> build_model_spec(const Json& config, std::vector<TensorInfo> t
   }
   spec.active_params = spec.logical_params;
   if (spec.text.n_experts > 0 && spec.text.experts_per_tok > 0 && spec.expert_params > 0) {
-    const double frac = static_cast<double>(spec.text.experts_per_tok) / static_cast<double>(spec.text.n_experts);
+    const double frac =
+        static_cast<double>(spec.text.experts_per_tok) / static_cast<double>(spec.text.n_experts);
     spec.active_params = spec.logical_params - spec.expert_params +
                          static_cast<int64_t>(static_cast<double>(spec.expert_params) * frac);
   }
@@ -201,7 +208,8 @@ Result<ModelSpec> build_model_spec(const Json& config, std::vector<TensorInfo> t
   }
 
   if (unassigned > 0)
-    spec.warnings.push_back(fmt::format("{} tensors did not match any component of family '{}'", unassigned, family.family));
+    spec.warnings.push_back(
+        fmt::format("{} tensors did not match any component of family '{}'", unassigned, family.family));
   spec.tensors = std::move(tensors);
   return spec;
 }

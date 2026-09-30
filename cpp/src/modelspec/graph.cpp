@@ -10,12 +10,14 @@ namespace {
 
 std::string op_of(const std::string& module, const TensorInfo& w) {
   auto has = [&](const char* s) { return module.find(s) != std::string::npos; };
-  if (has("embed") || has("pos_embed") || has("position_embedding") || has("future_tokens")) return "Embedding";
+  if (has("embed") || has("pos_embed") || has("position_embedding") || has("future_tokens"))
+    return "Embedding";
   if (has("norm") || has("layernorm") || has("ln_")) return "Norm";
   if (has("conv") || has("patch_embed") || w.shape.size() >= 4) return "Conv";
   if (has("experts.")) return "Expert";
   if (has("router") || module.ends_with(".gate") || has("shared_expert_gate")) return "Router";
-  if (has("attn") || has("q_proj") || has("k_proj") || has("v_proj") || has("o_proj") || has("qkv")) return "Attention";
+  if (has("attn") || has("q_proj") || has("k_proj") || has("v_proj") || has("o_proj") || has("qkv"))
+    return "Attention";
   if (has("mlp") || has("ff") || has("fc")) return "MLP";
   if (w.shape.size() == 2) return "Linear";
   return "Param";

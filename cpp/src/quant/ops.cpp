@@ -44,7 +44,8 @@ GroupParams params_from_range(float mn, float mx, const QuantSpec& s) {
 
 inline float qdq_one(float v, const GroupParams& p, const QuantSpec& s) {
   if (s.fmt == NumFormat::kInt) {
-    const float q = std::clamp(rne(v / p.scale) + p.zero, static_cast<float>(s.qmin()), static_cast<float>(s.qmax()));
+    const float q =
+        std::clamp(rne(v / p.scale) + p.zero, static_cast<float>(s.qmin()), static_cast<float>(s.qmax()));
     return (q - p.zero) * p.scale;
   }
   const float fm = s.fp8_max();
@@ -106,7 +107,8 @@ Result<void> check_shape(int64_t rows, int64_t cols, const QuantSpec& s) {
 }
 
 template <class F>
-void for_each_group(const float* x, int64_t rows, int64_t cols, const QuantSpec& s, const QParams& qp, F&& f) {
+void for_each_group(const float* x, int64_t rows, int64_t cols, const QuantSpec& s, const QParams& qp,
+                    F&& f) {
   if (qp.per_tensor) {
     f(0, GroupView{x, rows, cols, cols}, 0, 0);
     return;
@@ -162,7 +164,8 @@ Result<void> fake_quant(const float* x, int64_t rows, int64_t cols, const QuantS
   auto qp = compute_qparams(x, rows, cols, s);
   if (!qp) return std::unexpected(qp.error());
   for_each_group(x, rows, cols, s, *qp, [&](int64_t gi, const GroupView& g, int64_t r0, int64_t c0) {
-    const GroupParams p{qp->scale[static_cast<size_t>(gi)], qp->zero.empty() ? 0.0f : qp->zero[static_cast<size_t>(gi)]};
+    const GroupParams p{qp->scale[static_cast<size_t>(gi)],
+                        qp->zero.empty() ? 0.0f : qp->zero[static_cast<size_t>(gi)]};
     for (int64_t r = 0; r < g.n_rows; ++r)
       for (int64_t c = 0; c < g.n_cols; ++c) {
         const int64_t idx = (r0 + r) * cols + c0 + c;
@@ -175,7 +178,8 @@ Result<void> fake_quant(const float* x, int64_t rows, int64_t cols, const QuantS
 
 Result<void> quantize_int(const float* x, int64_t rows, int64_t cols, const QuantSpec& s, const QParams& qp,
                           int16_t* codes) {
-  if (s.fmt != NumFormat::kInt) return make_error(Errc::kUnsupported, "quantize_int requires an integer format");
+  if (s.fmt != NumFormat::kInt)
+    return make_error(Errc::kUnsupported, "quantize_int requires an integer format");
   if (auto ok = check_shape(rows, cols, s); !ok) return std::unexpected(ok.error());
   const float qmin = static_cast<float>(s.qmin()), qmax = static_cast<float>(s.qmax());
   for_each_group(x, rows, cols, s, qp, [&](int64_t gi, const GroupView& g, int64_t r0, int64_t c0) {
@@ -190,9 +194,10 @@ Result<void> quantize_int(const float* x, int64_t rows, int64_t cols, const Quan
   return {};
 }
 
-Result<void> dequantize_int(const int16_t* codes, int64_t rows, int64_t cols, const QuantSpec& s, const QParams& qp,
-                            float* out) {
-  if (s.fmt != NumFormat::kInt) return make_error(Errc::kUnsupported, "dequantize_int requires an integer format");
+Result<void> dequantize_int(const int16_t* codes, int64_t rows, int64_t cols, const QuantSpec& s,
+                            const QParams& qp, float* out) {
+  if (s.fmt != NumFormat::kInt)
+    return make_error(Errc::kUnsupported, "dequantize_int requires an integer format");
   if (auto ok = check_shape(rows, cols, s); !ok) return std::unexpected(ok.error());
   // Group iteration only needs geometry; pass `out` as a dummy source pointer.
   for_each_group(out, rows, cols, s, qp, [&](int64_t gi, const GroupView& g, int64_t r0, int64_t c0) {

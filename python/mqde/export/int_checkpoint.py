@@ -14,7 +14,7 @@ import re
 import shutil
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -32,6 +32,8 @@ def layer_codes(m: FakeQuantLinear) -> tuple[np.ndarray, np.ndarray, np.ndarray,
     """(codes [out, in] u8, zeros [out, groups] u8, scales [out, groups] f32, group_size) in the unsigned
     convention w = scale * (code - zero)."""
     s = m.w_spec
+    if m.w_scale is None or m.w_zero is None:
+        raise ValueError(f"{m.name}: no weight qparams (see Exporter.check)")
     out, inn = m.out_features, m.in_features
     gs = s.group_size if s.granularity == "per_group" else inn
     groups = inn // gs
@@ -118,7 +120,7 @@ class _IntExporter(Exporter):
             if m.bias is not None:
                 sd[f"{n}.bias"] = m.bias.detach().to(self.dtype).cpu()
         prefixes = tuple(f"{n}." for n in fq)
-        tied = bool(getattr(model.config, "tie_word_embeddings", False))
+        tied = bool(getattr(cast(Any, model).config, "tie_word_embeddings", False))
         kept = [n for n, mod in model.named_modules() if isinstance(mod, nn.Linear) and not (tied and n == "lm_head")]
         for k, v in model.state_dict().items():
             if k.startswith(prefixes) or (tied and k == "lm_head.weight"):
@@ -128,7 +130,7 @@ class _IntExporter(Exporter):
         # FP linears other than lm_head (mixed precision "skip" rules) must be excluded from quantization
         kept_q = [n for n in kept if n != "lm_head" and re.search(r"layers\.\d+\.", n)]
         qcfg = self._config(fq, kept_q)
-        cfg = model.config.to_dict()
+        cfg = dict(cast(Any, model.config).to_dict())
         cfg["torch_dtype"] = str(self.dtype).replace("torch.", "")
         cfg["quantization_config"] = qcfg
         cfg.pop("_attn_implementation_autoset", None)

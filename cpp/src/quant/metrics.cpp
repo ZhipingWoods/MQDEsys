@@ -63,13 +63,18 @@ Json finite_or_null(double v) { return std::isfinite(v) ? Json(v) : Json(nullptr
 }  // namespace
 
 Json to_json(const ErrorMetrics& m) {
-  return {{"mse", m.mse},       {"rmse", m.rmse},     {"max_abs", m.max_abs},
-          {"sqnr_db", finite_or_null(m.sqnr_db)}, {"cosine", m.cosine}, {"rel_l2", finite_or_null(m.rel_l2)}};
+  return {{"mse", m.mse},         {"rmse", m.rmse},
+          {"max_abs", m.max_abs}, {"sqnr_db", finite_or_null(m.sqnr_db)},
+          {"cosine", m.cosine},   {"rel_l2", finite_or_null(m.rel_l2)}};
 }
 
 Json to_json(const TensorStats& s) {
-  return {{"min", s.min},   {"max", s.max},           {"absmax", s.absmax},
-          {"mean", s.mean}, {"std", s.std},           {"kurtosis", s.kurtosis},
+  return {{"min", s.min},
+          {"max", s.max},
+          {"absmax", s.absmax},
+          {"mean", s.mean},
+          {"std", s.std},
+          {"kurtosis", s.kurtosis},
           {"outlier_ratio", s.outlier_ratio}};
 }
 

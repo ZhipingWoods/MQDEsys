@@ -56,20 +56,24 @@ py::tuple qparams_tuple(const mqde::quant::QParams& qp, int64_t rows) {
 
 namespace pk = mqde::quant::pack;
 
-// (codes [out,in] u8, zeros [out,groups] u8, scales [out,groups] f32) -> (qweight i32, qzeros i32, scales f16)
+// (codes [out,in] u8, zeros [out,groups] u8, scales [out,groups] f32) -> (qweight i32, qzeros i32, scales
+// f16)
 py::tuple packed_tuple(const pk::IntPacked& p) {
   I32Array qw({p.qweight_rows, p.qweight_cols});
   std::memcpy(qw.mutable_data(), p.qweight.data(), p.qweight.size() * 4);
   I32Array qz({p.qzeros_rows, p.qzeros_cols});
   std::memcpy(qz.mutable_data(), p.qzeros.data(), p.qzeros.size() * 4);
-  py::array sc(py::dtype("float16"), {p.qzeros_rows, static_cast<py::ssize_t>(p.scales.size() / p.qzeros_rows)});
+  py::array sc(py::dtype("float16"),
+               {p.qzeros_rows, static_cast<py::ssize_t>(p.scales.size() / p.qzeros_rows)});
   std::memcpy(sc.mutable_data(), p.scales.data(), p.scales.size() * 2);
   return py::make_tuple(qw, qz, sc);
 }
 
 void check_int_inputs(const U8Array& codes, const U8Array& zeros, const FloatArray& scales) {
-  if (codes.ndim() != 2 || zeros.ndim() != 2 || scales.ndim() != 2) throw py::value_error("codes/zeros/scales must be 2-D");
-  if (zeros.shape(0) != codes.shape(0) || scales.shape(0) != codes.shape(0) || scales.shape(1) != zeros.shape(1))
+  if (codes.ndim() != 2 || zeros.ndim() != 2 || scales.ndim() != 2)
+    throw py::value_error("codes/zeros/scales must be 2-D");
+  if (zeros.shape(0) != codes.shape(0) || scales.shape(0) != codes.shape(0) ||
+      scales.shape(1) != zeros.shape(1))
     throw py::value_error("zeros/scales must be [out, groups] matching codes [out, in]");
 }
 
@@ -109,7 +113,8 @@ PYBIND11_MODULE(_core, m) {
         py::tuple t = qparams_tuple(qp, rows);
         return py::make_tuple(out, t[0], t[1]);
       },
-      py::arg("x"), py::arg("spec_json"), "Quantize-dequantize a [rows, cols] float32 matrix. Returns (out, scale, zero).");
+      py::arg("x"), py::arg("spec_json"),
+      "Quantize-dequantize a [rows, cols] float32 matrix. Returns (out, scale, zero).");
 
   m.def(
       "quantize_int",
@@ -141,17 +146,22 @@ PYBIND11_MODULE(_core, m) {
   // ---- bit packing (T-0405): GPTQ / AWQ checkpoint tensors and GGUF blocks ----
   m.def(
       "pack_int",
-      [](const std::string& layout, const U8Array& codes, const U8Array& zeros, const FloatArray& scales, int bits, bool v1) {
+      [](const std::string& layout, const U8Array& codes, const U8Array& zeros, const FloatArray& scales,
+         int bits, bool v1) {
         check_int_inputs(codes, zeros, scales);
         const int64_t out = codes.shape(0), in = codes.shape(1), gs = in / zeros.shape(1);
-        auto p = layout == "gptq" ? pk::pack_gptq(codes.data(), zeros.data(), scales.data(), out, in, gs, bits, v1)
-               : layout == "awq"  ? pk::pack_awq(codes.data(), zeros.data(), scales.data(), out, in, gs, bits)
-                                  : std::unexpected(mqde::Error{mqde::Errc::kInvalidArgument, "layout must be gptq | awq"});
+        auto p =
+            layout == "gptq" ? pk::pack_gptq(codes.data(), zeros.data(), scales.data(), out, in, gs, bits, v1)
+            : layout == "awq"
+                ? pk::pack_awq(codes.data(), zeros.data(), scales.data(), out, in, gs, bits)
+                : std::unexpected(mqde::Error{mqde::Errc::kInvalidArgument, "layout must be gptq | awq"});
         if (!p) raise(p.error());
         return packed_tuple(*p);
       },
-      py::arg("layout"), py::arg("codes"), py::arg("zeros"), py::arg("scales"), py::arg("bits"), py::arg("v1") = true,
-      "Pack unsigned codes into GPTQ/AWQ tensors. Returns (qweight int32, qzeros int32, scales float16 [groups, out]).");
+      py::arg("layout"), py::arg("codes"), py::arg("zeros"), py::arg("scales"), py::arg("bits"),
+      py::arg("v1") = true,
+      "Pack unsigned codes into GPTQ/AWQ tensors. Returns (qweight int32, qzeros int32, scales float16 "
+      "[groups, out]).");
 
   m.def(
       "unpack_int",
@@ -160,9 +170,12 @@ PYBIND11_MODULE(_core, m) {
         const auto p = packed_from(qweight, qzeros);
         U8Array codes({out, in});
         U8Array zeros({out, in / group_size});
-        auto r = layout == "gptq" ? pk::unpack_gptq(p, out, in, group_size, bits, v1, codes.mutable_data(), zeros.mutable_data())
-               : layout == "awq"  ? pk::unpack_awq(p, out, in, group_size, bits, codes.mutable_data(), zeros.mutable_data())
-                                  : std::unexpected(mqde::Error{mqde::Errc::kInvalidArgument, "layout must be gptq | awq"});
+        auto r =
+            layout == "gptq" ? pk::unpack_gptq(p, out, in, group_size, bits, v1, codes.mutable_data(),
+                                               zeros.mutable_data())
+            : layout == "awq"
+                ? pk::unpack_awq(p, out, in, group_size, bits, codes.mutable_data(), zeros.mutable_data())
+                : std::unexpected(mqde::Error{mqde::Errc::kInvalidArgument, "layout must be gptq | awq"});
         if (!r) raise(r.error());
         return py::make_tuple(codes, zeros);
       },
@@ -212,7 +225,10 @@ PYBIND11_MODULE(_core, m) {
       py::arg("ref"), py::arg("approx"));
 
   m.def(
-      "tensor_stats", [](const FloatArray& x) { return mqde::quant::to_json(mqde::quant::tensor_stats(x.data(), x.size())).dump(); },
+      "tensor_stats",
+      [](const FloatArray& x) {
+        return mqde::quant::to_json(mqde::quant::tensor_stats(x.data(), x.size())).dump();
+      },
       py::arg("x"));
 
   m.def(
@@ -226,8 +242,8 @@ PYBIND11_MODULE(_core, m) {
 
   m.def(
       "estimate",
-      [](const std::string& model_path, const std::string& recipe, const std::string& hw, const std::string& backend,
-         const std::string& runtime_json) {
+      [](const std::string& model_path, const std::string& recipe, const std::string& hw,
+         const std::string& backend, const std::string& runtime_json) {
         auto spec = mqde::modelspec::inspect_local(model_path);
         if (!spec) raise(spec.error());
         auto r = mqde::estimator::load_recipe(recipe);
@@ -248,9 +264,10 @@ PYBIND11_MODULE(_core, m) {
         auto e = mqde::estimator::estimate(*spec, *r, *h, *b, rt);
         Json j = mqde::estimator::to_json(e);
         j["recipe_detail"] = mqde::estimator::to_json(*r);
-        j["curves"] = {
-            {"concurrency", mqde::estimator::to_json(mqde::estimator::memory_vs_concurrency(*spec, *r, *h, *b, rt, {1, 2, 4, 8, 16, 32, 64}))},
-            {"images", mqde::estimator::to_json(mqde::estimator::memory_vs_images(*spec, *r, *h, *b, rt, {1, 2, 4, 8, 16, 30, 60}))}};
+        j["curves"] = {{"concurrency", mqde::estimator::to_json(mqde::estimator::memory_vs_concurrency(
+                                           *spec, *r, *h, *b, rt, {1, 2, 4, 8, 16, 32, 64}))},
+                       {"images", mqde::estimator::to_json(mqde::estimator::memory_vs_images(
+                                      *spec, *r, *h, *b, rt, {1, 2, 4, 8, 16, 30, 60}))}};
         return j.dump();
       },
       py::arg("model_path"), py::arg("recipe"), py::arg("hardware") = "nvidia/rtx4090",

@@ -25,12 +25,12 @@ const std::vector<std::string>& kept_keys() {
   static const std::vector<std::string> k = {
       "model_type", "architectures", "num_hidden_layers", "hidden_size", "intermediate_size",
       "num_attention_heads", "num_key_value_heads", "head_dim", "vocab_size", "max_position_embeddings",
-      "max_sequence_length", "seq_length", "n_positions", "tie_word_embeddings", "torch_dtype",
-      "num_experts", "n_routed_experts", "num_local_experts", "num_experts_per_tok", "moe_topk",
-      "moe_intermediate_size", "shared_expert_intermediate_size", "n_shared_experts", "layer_types",
-      "sliding_window", "linear_num_key_heads", "linear_num_value_heads", "linear_key_head_dim",
-      "linear_value_head_dim", "linear_conv_kernel_dim", "kv_lora_rank", "q_lora_rank", "qk_rope_head_dim",
-      "qk_nope_head_dim", "v_head_dim", "n_layer", "n_embd", "n_head", "n_ctx", "n_inner", "d_model",
+      "max_sequence_length", "seq_length", "n_positions", "tie_word_embeddings", "torch_dtype", "num_experts",
+      "n_routed_experts", "num_local_experts", "num_experts_per_tok", "moe_topk", "moe_intermediate_size",
+      "shared_expert_intermediate_size", "n_shared_experts", "layer_types", "sliding_window",
+      "linear_num_key_heads", "linear_num_value_heads", "linear_key_head_dim", "linear_value_head_dim",
+      "linear_conv_kernel_dim", "kv_lora_rank", "q_lora_rank", "qk_rope_head_dim", "qk_nope_head_dim",
+      "v_head_dim", "n_layer", "n_embd", "n_head", "n_ctx", "n_inner", "d_model",
       // vision
       "depth", "embed_dim", "patch_size", "image_size", "num_layers"};
   return k;
@@ -114,8 +114,9 @@ void apply_hygiene(CatalogEntry& e) {
     return demote("missing model dimensions");
   if (auto np = name_params(e.name)) {
     const double r = static_cast<double>(e.parameters_raw) / *np;
-    if (r > 2.0 || r < 0.5) return demote(fmt::format("name says {} but weights hold {}", human_params(static_cast<int64_t>(*np)),
-                                                     human_params(e.parameters_raw)));
+    if (r > 2.0 || r < 0.5)
+      return demote(fmt::format("name says {} but weights hold {}", human_params(static_cast<int64_t>(*np)),
+                                human_params(e.parameters_raw)));
   }
 }
 
@@ -129,10 +130,13 @@ CatalogEntry entry_from_hub(const Json& info, const Json& config) {
   e.release_date = info.value("createdAt", "").substr(0, 10);
   if (info.contains("cardData") && info["cardData"].is_object()) {
     const auto& lic = info["cardData"].value("license", Json());
-    e.license = lic.is_string() ? lic.get<std::string>() : lic.is_array() && !lic.empty() && lic[0].is_string() ? lic[0].get<std::string>() : "";
+    e.license = lic.is_string()                                        ? lic.get<std::string>()
+                : lic.is_array() && !lic.empty() && lic[0].is_string() ? lic[0].get<std::string>()
+                                                                       : "";
   }
   e.config = subset(config);
-  if (config.contains("architectures") && config["architectures"].is_array() && !config["architectures"].empty())
+  if (config.contains("architectures") && config["architectures"].is_array() &&
+      !config["architectures"].empty())
     e.architecture = config["architectures"][0].get<std::string>();
   // Parameters and storage dtype from the safetensors summary.
   std::string dominant;
@@ -148,14 +152,20 @@ CatalogEntry entry_from_hub(const Json& info, const Json& config) {
   const std::string qm = config.contains("quantization_config") && config["quantization_config"].is_object()
                              ? lower(config["quantization_config"].value("quant_method", ""))
                              : "";
-  if (qm == "fp8" || dominant.starts_with("F8")) e.quantization = "FP8";
+  if (qm == "fp8" || dominant.starts_with("F8"))
+    e.quantization = "FP8";
   else if (!qm.empty() || dominant == "I32" || dominant == "U8" || dominant == "I8") {
-    const int bits = config["quantization_config"].is_object() ? config["quantization_config"].value("bits", 4) : 4;
+    const int bits =
+        config["quantization_config"].is_object() ? config["quantization_config"].value("bits", 4) : 4;
     e.quantization = fmt::format("INT{}", bits);
-  } else if (dominant == "U32") e.quantization = "INT4";  // MLX packed
-  else if (dominant == "F32") e.quantization = "F32";
-  else if (dominant == "F16") e.quantization = "F16";
-  else e.quantization = "BF16";
+  } else if (dominant == "U32")
+    e.quantization = "INT4";  // MLX packed
+  else if (dominant == "F32")
+    e.quantization = "F32";
+  else if (dominant == "F16")
+    e.quantization = "F16";
+  else
+    e.quantization = "BF16";
   // Packed INT / MLX checkpoints (I32/U32/U8 containers) report packed element counts, not logical
   // parameters. When the repo name states a size and the raw count is well below it, trust the name.
   if (e.quantization.starts_with("INT") || dominant == "U32" || dominant == "I32" || dominant == "U8") {
@@ -165,11 +175,15 @@ CatalogEntry entry_from_hub(const Json& info, const Json& config) {
     }
   }
   e.parameter_count = human_params(e.parameters_raw);
-  e.context_length = cfg_int(config, {"max_position_embeddings", "max_sequence_length", "seq_length", "n_positions"});
-  // Capabilities (llmfit capabilities[]): text always; vision for VLM pipelines / vision towers; MoE from config.
+  e.context_length =
+      cfg_int(config, {"max_position_embeddings", "max_sequence_length", "seq_length", "n_positions"});
+  // Capabilities (llmfit capabilities[]): text always; vision for VLM pipelines / vision towers; MoE from
+  // config.
   e.capabilities.push_back("text");
-  if (e.pipeline_tag == "image-text-to-text" || config.contains("vision_config")) e.capabilities.push_back("vision");
-  if (cfg_int(config, {"num_experts", "n_routed_experts", "num_local_experts"}) > 0) e.capabilities.push_back("moe");
+  if (e.pipeline_tag == "image-text-to-text" || config.contains("vision_config"))
+    e.capabilities.push_back("vision");
+  if (cfg_int(config, {"num_experts", "n_routed_experts", "num_local_experts"}) > 0)
+    e.capabilities.push_back("moe");
   e.use_case = e.pipeline_tag == "image-text-to-text" ? "multimodal" : "general";
   apply_hygiene(e);
   return e;
@@ -245,15 +259,18 @@ Result<void> save_catalog(const Catalog& c, const fs::path& p) {
   {
     std::ofstream out(tmp);
     if (!out) return make_error(Errc::kIo, "cannot write {}", tmp.string());
-    out << Json{{"updated_at", c.updated_at}, {"source", "huggingface.co/api/models"}, {"entries", arr}}.dump(1) << "\n";
+    out << Json{{"updated_at", c.updated_at}, {"source", "huggingface.co/api/models"}, {"entries", arr}}.dump(
+               1)
+        << "\n";
   }
   fs::rename(tmp, p, ec);
   if (ec) return make_error(Errc::kIo, "rename {}: {}", p.string(), ec.message());
   return {};
 }
 
-std::vector<const CatalogEntry*> search(const Catalog& c, const std::string& query, const std::string& provider,
-                                        const std::string& capability, size_t limit, bool include_demoted) {
+std::vector<const CatalogEntry*> search(const Catalog& c, const std::string& query,
+                                        const std::string& provider, const std::string& capability,
+                                        size_t limit, bool include_demoted) {
   const std::string q = lower(query), pv = lower(provider), cap = lower(capability);
   std::vector<const CatalogEntry*> out;
   for (const auto& e : c.entries) {
@@ -263,12 +280,16 @@ std::vector<const CatalogEntry*> search(const Catalog& c, const std::string& que
     if (!cap.empty()) {
       bool has_cap = false;
       for (const auto& c : e.capabilities)
-        if (lower(c) == cap) { has_cap = true; break; }
+        if (lower(c) == cap) {
+          has_cap = true;
+          break;
+        }
       if (!has_cap) continue;
     }
     out.push_back(&e);
   }
-  std::stable_sort(out.begin(), out.end(), [](auto* a, auto* b) { return a->hf_downloads > b->hf_downloads; });
+  std::stable_sort(out.begin(), out.end(),
+                   [](auto* a, auto* b) { return a->hf_downloads > b->hf_downloads; });
   if (limit > 0 && out.size() > limit) out.resize(limit);
   return out;
 }
@@ -281,13 +302,18 @@ const CatalogEntry* find(const Catalog& c, const std::string& name) {
 }
 
 Result<modelspec::ModelSpec> to_spec(const CatalogEntry& e) {
-  if (e.parameters_raw <= 0) return make_error(Errc::kInvalidArgument, "catalog entry {} has no parameter count", e.name);
+  if (e.parameters_raw <= 0)
+    return make_error(Errc::kInvalidArgument, "catalog entry {} has no parameter count", e.name);
   Json cfg = e.config;
   // GPT-2 style names -> the HF-standard keys model_spec.cpp reads.
-  for (const auto& [from, to] : std::initializer_list<std::pair<const char*, const char*>>{
-           {"n_layer", "num_hidden_layers"}, {"n_embd", "hidden_size"}, {"d_model", "hidden_size"},
-           {"n_head", "num_attention_heads"}, {"n_inner", "intermediate_size"}, {"n_positions", "max_position_embeddings"},
-           {"n_ctx", "max_position_embeddings"}})
+  for (const auto& [from, to] :
+       std::initializer_list<std::pair<const char*, const char*>>{{"n_layer", "num_hidden_layers"},
+                                                                  {"n_embd", "hidden_size"},
+                                                                  {"d_model", "hidden_size"},
+                                                                  {"n_head", "num_attention_heads"},
+                                                                  {"n_inner", "intermediate_size"},
+                                                                  {"n_positions", "max_position_embeddings"},
+                                                                  {"n_ctx", "max_position_embeddings"}})
     if (cfg.contains(from) && !cfg.contains(to) && !cfg[from].is_null()) cfg[to] = cfg[from];
   if (!cfg.contains("intermediate_size") && cfg.contains("hidden_size"))
     cfg["intermediate_size"] = 4 * cfg["hidden_size"].get<int64_t>();
@@ -295,8 +321,10 @@ Result<modelspec::ModelSpec> to_spec(const CatalogEntry& e) {
   MQDE_ASSIGN_OR_RETURN(auto fam, modelspec::find_model_family(mt));
   // Synthesize tensors whose totals match the Hub's safetensors summary. MoE models get a routed-expert
   // tensor sized from the config so active-parameter math works; the rest is one dense tensor.
-  const std::string dtype = e.quantization == "FP8" ? "F8_E4M3" : e.quantization == "F32" ? "F32"
-                            : e.quantization == "F16" ? "F16" : "BF16";
+  const std::string dtype = e.quantization == "FP8"   ? "F8_E4M3"
+                            : e.quantization == "F32" ? "F32"
+                            : e.quantization == "F16" ? "F16"
+                                                      : "BF16";
   // Pre-quantized (INT) checkpoints are described by their logical BF16 weights: the fit path re-quantizes
   // from logical parameters for every recipe, exactly as it does for local pre-quantized checkpoints.
   const double bpp = e.quantization == "FP8" ? 1.0 : e.quantization == "F32" ? 4.0 : 2.0;
@@ -311,8 +339,13 @@ Result<modelspec::ModelSpec> to_spec(const CatalogEntry& e) {
   auto add = [&](std::string name, int64_t numel) {
     if (numel <= 0) return;
     const int64_t cols = std::max<int64_t>(1, numel / hidden);
-    t.push_back({std::move(name), dtype, {hidden, cols}, hidden * cols,
-                 static_cast<uint64_t>(static_cast<double>(hidden * cols) * bpp), "catalog", 0});
+    t.push_back({std::move(name),
+                 dtype,
+                 {hidden, cols},
+                 hidden * cols,
+                 static_cast<uint64_t>(static_cast<double>(hidden * cols) * bpp),
+                 "catalog",
+                 0});
   };
   add("model.layers.0.mlp.up_proj.weight", dense);
   add("model.layers.0.mlp.experts.0.up_proj.weight", expert);
@@ -330,14 +363,16 @@ Result<Catalog> update_catalog(const HfOptions& o, const UpdateOptions& u, Catal
   std::vector<std::string> sorts;
   if (u.downloads) sorts.push_back("downloads");
   if (u.trending) sorts.push_back("trendingScore");
-  if (sorts.empty()) return make_error(Errc::kInvalidArgument, "catalog update: enable --trending and/or --downloads");
+  if (sorts.empty())
+    return make_error(Errc::kInvalidArgument, "catalog update: enable --trending and/or --downloads");
   // Over-fetch: gated repos and repos without config.json are skipped, so the list must be longer than limit.
   const size_t per = std::max<size_t>(20, u.limit * 2 / sorts.size());
   std::vector<std::vector<Json>> lists;
   for (const auto& s : sorts)
     for (const char* tag : {"text-generation", "image-text-to-text"}) {
-      MQDE_ASSIGN_OR_RETURN(Json l, list_models(o, fmt::format("sort={}&direction=-1&limit={}&pipeline_tag={}{}", s,
-                                                               per, tag, expand)));
+      MQDE_ASSIGN_OR_RETURN(
+          Json l, list_models(o, fmt::format("sort={}&direction=-1&limit={}&pipeline_tag={}{}", s, per, tag,
+                                             expand)));
       lists.emplace_back(l.begin(), l.end());
     }
   // Round-robin merge so downloads and trending, text and vision, all get represented.
