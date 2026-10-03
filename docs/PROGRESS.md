@@ -173,6 +173,45 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-01 · Claude · llama-server 适配与闭环负载测试（T-0705）
+
+- **状态**：PARTIAL（T-0705 仍缺 Metal；T-0405 仍缺 Marlin）
+- **本次完成**：
+  1. **llama-server 适配器**（`python/mqde/backend/llamacpp_server.py`，新增）：
+     - `LlamaServer` 类：进程生命周期（启动、健康轮询、日志采集、优雅关闭）
+     - `diagnose()`：从日志识别常见失败（缺文件、架构不支持、OOM、端口占用）
+     - `smoke()`：单次 `/v1/chat/completions` 请求验证
+     - `serve_bench()`：闭环负载测试（固定并发数、定长 prompt、SSE 流式解析），测量 TTFT / TPOT / E2E p50/p90/p99、吞吐 tok/s、req/s
+  2. **集成进 LLM 作业**（`llm_job.py`）：
+     - `llamacpp_serve` spec 字段（dict 或 None，默认 `{"concurrency": 4, "requests": 16, "prompt_len": 256, "n_predict": 64}`）
+     - `--llamacpp-serve` CLI 参数（JSON 配置或 `'off'` 禁用）
+     - 每个 GGUF 类型 perplexity/bench 后自动启动服务、冒烟、压测，结果写入 `llamacpp.results.<type>.serve`
+  3. **单元测试**（`python/tests/backend/test_llamacpp_server.py` + `fake_llama_server.py`）：
+     - 假服务器（固定 TTFT=100ms、TPOT=20ms）验证适配器的 SSE 解析与计时
+     - 真实二进制测试（`MQDE_TEST_GGUF` 环境变量提供 GGUF 路径）
+     - 生命周期、失败诊断、计时精度：7 个测试全部通过
+  4. **上游 llama.cpp 构建**：开发机的 omni fork 删掉了 llama-server 目标，克隆上游 llama.cpp（提交 81ff93e）到 `/cache/wuzhiping/llama.cpp-upstream`，out-of-tree 构建到 `build/llamacpp-server`（CPU only，OpenSSL ON，CURL OFF，不影响现有 perplexity/bench）。二进制约 3.4 MB，依赖 5 个 `.so`。
+- **校验结果**：
+  - `pytest python/tests -q`：88 passed（新增 7 个 backend 测试 + 1 个真实二进制测试）
+  - `scripts/check_all.sh` 全绿（ctest 98/98，pytest 78 passed 1 skipped，ruff/mypy clean）
+  - **端到端验证**（Qwen2.5-0.5B + W4A16，CPU 48 线程，`--llamacpp q8_0,q4_k,iq4_nl`）：
+    - 全部 4 种 GGUF（F16 + 3 种量化）成功部署 llama-server
+    - smoke 测试 16/16 成功（"What is the capital of France?" → "Paris"）
+    - 负载测试 4 并发 × 16 请求全部完成，无错误
+
+| 类型 | PPL | serve 启动 | TTFT p50 | TPOT p50 | 吞吐 tok/s |
+|------|----:|----------:|---------:|---------:|-----------:|
+| F16 | 13.89 | 1.02s | 858 ms | 40.8 ms | 74.6 |
+| Q8_0 | 13.94 | 1.01s | 737 ms | 30.0 ms | 97.5 |
+| Q4_K | 14.75 | 1.01s | 730 ms | 23.1 ms | 113.3 |
+| IQ4_NL | 15.08 | 1.04s | 594 ms | 26.1 ms | 115.9 |
+
+  IQ4_NL 的 TTFT 比 Q4_K 快 136ms，吞吐略高（同尺寸下 PPL 低 0.33）。
+- **未完成**：
+  - Metal 适配（需要 Apple Silicon 机器，`GGML_METAL=ON` 构建）
+  - 前端展示（`serve` 字段已写入报告，前端表格暂未加列）
+- **下一步**：前端 `JobLLM.tsx` llama.cpp 卡片加 TTFT / 吞吐列；Marlin 布局（T-0405）；vLLM 冒烟（T-0701，等 GPU 2/3 空出）。
+
 ### 2026-09-30（晚） · Claude · GGUF Q5_0 / IQ4_NL 与 llama-quantize 回退对齐（T-0405/T-0705）
 
 - **状态**：PARTIAL（T-0405 仍缺 Marlin；T-0705 仍缺 llama-server / Metal）

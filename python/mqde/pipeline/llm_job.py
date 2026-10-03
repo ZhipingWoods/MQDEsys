@@ -56,6 +56,9 @@ class LLMJobSpec:
     mixed_precision: dict[str, Any] | None = None
     export: list[str] = field(default_factory=list)  # gptq | awq: real checkpoints + fake/real check (S09/S10)
     llamacpp: list[str] = field(default_factory=list)  # GGUF types to deploy on llama.cpp (CPU): q8_0 q5_0 q4_0 iq4_nl q4_k q2_k
+    # llama-server per GGUF type: smoke request + closed-loop load (TTFT/TPOT); skipped when the binary is missing
+    llamacpp_serve: dict[str, Any] | None = field(default_factory=lambda: {"concurrency": 4, "requests": 16,
+                                                                           "prompt_len": 256, "n_predict": 64})
     sensitivity: str | None = None  # block | type: per-group FP fallback ranking + mixed-precision suggestion
     sensitivity_windows: int = 8
     suggest_target: float = 0.5  # share of the PPL degradation the suggested rules should win back
@@ -83,6 +86,8 @@ class LLMJobSpec:
             mixed_precision=q.get("mixed_precision"),
             export=list(d.get("export", {}).get("formats", [])),
             llamacpp=list((dep.get("llamacpp") or {}).get("types", [])),
+            llamacpp_serve=(dep.get("llamacpp") or {}).get("serve", {"concurrency": 4, "requests": 16,
+                                                                    "prompt_len": 256, "n_predict": 64}),
             sensitivity=(d.get("analysis") or {}).get("sensitivity"),
             sensitivity_windows=int((d.get("analysis") or {}).get("sensitivity_windows", 8)),
             output_dir=d.get("output_dir", "runs"),
@@ -194,7 +199,44 @@ class LLMJob:
             b = bench(path, pp=s.eval_seq_len, tg=64, threads=threads, reps=2)
             out["results"][ty] = {**info, **p, **{k: v for k, v in b.items() if k.endswith("per_s")}, "path": str(path)}
             self.ev.emit("metric", name=f"llamacpp.{ty}.ppl", value=p["ppl"], msg=f"llama.cpp {ty}")
+            if s.llamacpp_serve:
+                out["results"][ty]["serve"] = self._llamacpp_serve(path, ty, threads)
+                self._save()
         return out
+
+    def _llamacpp_serve(self, path: Path, ty: str, threads: int) -> dict[str, Any]:
+        """llama-server on 127.0.0.1: startup, one chat smoke request, closed-loop streaming load."""
+        from mqde.backend.llamacpp_server import LlamaServer, serve_bench, server_bin, smoke
+
+        cfg = dict(self.spec.llamacpp_serve or {})
+        try:
+            server_bin()
+        except FileNotFoundError as e:
+            self.ev.log(f"llama-server {ty}: skipped ({e})")
+            return {"status": "skipped", "reason": str(e)}
+        conc = int(cfg.get("concurrency", 4))
+        n_predict = int(cfg.get("n_predict", 64))
+        prompt_len = int(cfg.get("prompt_len", 256))
+        ctx = int(cfg.get("ctx", conc * (prompt_len + n_predict + 64)))
+        srv = LlamaServer(path, self.out / "export" / "gguf" / f"server-{ty}.log", threads=threads, ctx=ctx, parallel=conc)
+        self.ev.log(f"llama-server {ty}: starting on {srv.port} (ctx {ctx}, {conc} slots)")
+        try:
+            with srv:
+                sm = smoke(srv.port)
+                self.ev.log(f"llama-server {ty}: smoke -> {sm['text']!r}")
+                load = serve_bench(srv.port, concurrency=conc, requests=int(cfg.get("requests", 16)),
+                                   prompt_len=prompt_len, n_predict=n_predict)
+                props = srv.props()
+        except Exception as e:
+            from mqde.backend.llamacpp_server import diagnose
+
+            self.ev.log(f"llama-server {ty}: failed: {e}")
+            return {"status": "failed", "error": str(e)[:1500], "diagnosis": diagnose(srv.log())}
+        if load.get("ok"):
+            self.ev.emit("metric", name=f"llamacpp.{ty}.serve_tps", value=load["output_tokens_per_s"],
+                         msg=f"llama-server {ty} @ {conc}")
+        return {"status": "succeeded" if sm["ok"] and load.get("ok") == load["requests"] else "degraded",
+                "startup_s": srv.startup_s, "args": srv.args, "props": props, "smoke": sm, "load": load}
 
     def _export(self, ad: HFCausalLM, ids: torch.Tensor, recipe: str, fake_ppl: float) -> dict[str, Any]:
         from mqde.export import get_exporter
@@ -308,6 +350,7 @@ def main() -> None:
     ap.add_argument("--export", help="comma separated: gptq,awq")
     ap.add_argument("--sensitivity", choices=["block", "type"])
     ap.add_argument("--llamacpp", help="GGUF types to deploy on llama.cpp, e.g. q8_0,q4_k")
+    ap.add_argument("--llamacpp-serve", help="llama-server load test as JSON, e.g. '{\"concurrency\": 8}'; 'off' disables")
     ap.add_argument("--sensitivity-windows", type=int)
     ap.add_argument("--job-dir")
     ap.add_argument("--job-id", help="server-assigned id; output goes to <output_dir>/<job-id>")
@@ -329,6 +372,8 @@ def main() -> None:
         spec.sensitivity = a.sensitivity
     if a.llamacpp:
         spec.llamacpp = a.llamacpp.split(",")
+    if a.llamacpp_serve:
+        spec.llamacpp_serve = None if a.llamacpp_serve == "off" else json.loads(a.llamacpp_serve)
     if a.sensitivity_windows:
         spec.sensitivity_windows = a.sensitivity_windows
     if a.mixed_precision:
