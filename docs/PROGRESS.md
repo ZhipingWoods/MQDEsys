@@ -173,6 +173,13 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-05 · Claude · compressed-tensors 导出（T-0701）
+
+- 新增 `export/compressed_tensors.py`，注册为 `compressed-tensors`：整数权重 4/8 bit 走 `pack-quantized`（`weight_packed` / `weight_scale` / `weight_shape`，非对称时带打包的 `weight_zero_point`）；FP8 E4M3 走 `float-quantized`（逐通道或逐张量 scale，激活动态 per-token，或静态 per-tensor 的 `input_scale`）。
+- 混合精度：按层覆盖写成额外的 `config_groups`（`re:^name$`），保留 FP 的层与 `lm_head` 写入 `ignore`。
+- 测试 `tests/export/test_compressed_tensors.py`（CPU）：打包往返与位序、W4A16 / FP8 布局与反量化一致、混合精度分组、不可导出层的检查。4090 上 export 测试 27 passed, 1 skipped，ruff、mypy 通过。
+- 未完成：与 `compressed_tensors` 库 `pack_to_int32` 的逐字节比对（测试已写，未安装时 skip）；`vllm serve` 加载 smoke 等 vLLM 环境装完再做。W4A8 / W8A8-int 暂不支持导出，`check` 会明确报错。
+
 ### 2026-10-05 · Claude · Marlin 打包（T-0405）
 
 - 新增 `pack_marlin` / `unpack_marlin`（C++ + pybind + `mqde.core`），4/8 bit、16 位激活，可选零点（awq_marlin 风格）；布局移植自 vLLM v0.30.0 的 `marlin_utils_test.py` / `marlin_utils.py`。
