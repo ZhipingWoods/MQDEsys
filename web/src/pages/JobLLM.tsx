@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api, fmt, fmtBytes, LlamaCppDeploy, llamaSpeed, LLMJobReport, LLMRecipeReport, Sensitivity } from "../api";
+import { api, fmt, fmtBytes, LlamaCppDeploy, LlamaServe, llamaSpeed, LLMJobReport, LLMRecipeReport, Sensitivity } from "../api";
 import { baseOption, Chart, series, token } from "../charts";
 import { Tile } from "./Estimate";
 import { LayerAnalysis } from "./LayerAnalysis";
@@ -160,12 +160,52 @@ function Overview({ rep, rs }: { rep: LLMJobReport; rs: LLMRecipeReport[] }) {
   );
 }
 
+/** "Metal 全部卸载" / "CPU 32 线程" etc. from the run's -ngl setting and llama-bench backend string. */
+function deviceLabel(d: LlamaCppDeploy): string {
+  const gpu = (d.backend ?? "").split(",").find((b) => b && b !== "CPU" && b !== "BLAS");
+  if (d.gpu_layers && d.gpu_layers > 0 && gpu) {
+    const name = gpu === "MTL" ? "Metal" : gpu;
+    return d.gpu_layers >= 99 ? `${name} 全部层卸载` : `${name} 卸载 ${d.gpu_layers} 层`;
+  }
+  return `CPU ${d.threads} 线程`;
+}
+
+function ServeCells({ s }: { s?: LlamaServe }) {
+  if (!s || s.status === "skipped") {
+    return (
+      <td className="muted small" colSpan={3} title={s?.reason}>
+        未运行
+      </td>
+    );
+  }
+  if (s.status === "failed" || !s.load) {
+    return (
+      <td className="small" colSpan={3} title={s.error}>
+        启动失败{s.diagnosis ? `：${s.diagnosis}` : ""}
+      </td>
+    );
+  }
+  const l = s.load;
+  return (
+    <>
+      <td className="num" title={`${l.ok}/${l.requests} 请求成功`}>
+        {fmt(l.output_tokens_per_s, 0)}
+        {l.ok < l.requests && <span className="muted small"> ({l.ok}/{l.requests})</span>}
+      </td>
+      <td className="num">{l.ttft_ms?.p50 !== undefined ? `${fmt(l.ttft_ms.p50, 0)} ms` : "–"}</td>
+      <td className="num">{l.tpot_ms?.p50 !== undefined ? `${fmt(l.tpot_ms.p50, 1)} ms` : "–"}</td>
+    </>
+  );
+}
+
 function LlamaCppCard({ d }: { d: LlamaCppDeploy }) {
   const rows = Object.values(d.results);
   const f16 = d.results.f16;
+  const hasServe = rows.some((r) => r.serve);
+  const conc = rows.find((r) => r.serve?.load)?.serve?.load?.concurrency;
   return (
     <div className="card">
-      <h2>llama.cpp 部署实测（CPU {d.threads} 线程，GGUF）</h2>
+      <h2>llama.cpp 部署实测（{deviceLabel(d)}，GGUF）</h2>
       <div className="grid-2">
         <Chart
           height={260}
@@ -198,6 +238,9 @@ function LlamaCppCard({ d }: { d: LlamaCppDeploy }) {
                 <th className="num">相对 F16</th>
                 <th className="num">预填充</th>
                 <th className="num">解码</th>
+                {hasServe && <th className="num">服务 tok/s</th>}
+                {hasServe && <th className="num">TTFT p50</th>}
+                {hasServe && <th className="num">TPOT p50</th>}
               </tr>
             </thead>
             <tbody>
@@ -212,6 +255,7 @@ function LlamaCppCard({ d }: { d: LlamaCppDeploy }) {
                   <td className="num">{f16 && r !== f16 ? pct(100 * (r.ppl / f16.ppl - 1)) : "–"}</td>
                   <td className="num">{fmt(llamaSpeed(r).pp, 0)}</td>
                   <td className="num">{fmt(llamaSpeed(r).tg, 1)}</td>
+                  {hasServe && <ServeCells s={r.serve} />}
                 </tr>
               ))}
             </tbody>
@@ -219,7 +263,8 @@ function LlamaCppCard({ d }: { d: LlamaCppDeploy }) {
         </div>
       </div>
       <p className="note">
-        {d.protocol}（与上方 PPL 协议不同，只在本表内比较）。GGUF 用 llama.cpp 自己的块量化（与 ggml 参考实现逐字节一致）量化原始权重，与配方/算法无关；行长不是 256 的倍数的层回退到 Q4_0。
+        {d.protocol}（与上方 PPL 协议不同，只在本表内比较）。GGUF 用 llama.cpp 自己的块量化（与 ggml 参考实现逐字节一致）量化原始权重，与配方/算法无关；行长不是 256 的倍数的层按 llama-quantize 的规则回退（Q4_K→Q5_0，Q2_K→Q4_0，仍不整除则 F16）。
+        {hasServe && ` 服务列为 llama-server 闭环流式压测（${conc ?? "?"} 并发）的输出吞吐与 TTFT / TPOT 中位数。`}
       </p>
     </div>
   );

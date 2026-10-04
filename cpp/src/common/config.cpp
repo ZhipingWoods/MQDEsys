@@ -69,14 +69,16 @@ Result<std::filesystem::path> resolve_data_file(std::string_view sub, std::strin
   std::filesystem::path direct(name);
   if (std::filesystem::is_regular_file(direct)) return direct;
   const auto dir = data_dir() / sub;
-  for (const char* ext : {".yaml", ".yml", ".json"}) {
-    auto p = dir / (std::string(name) + ext);
-    if (std::filesystem::is_regular_file(p)) return p;
-  }
-  // Allow case-insensitive recipe names like "W4A16".
+  // Data files are stored lower-case; try that spelling first so "W4A16" resolves to w4a16.yaml on both
+  // case-sensitive (Linux) and case-insensitive (macOS default APFS) filesystems.
   std::string lower(name);
   for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  if (lower != name) return resolve_data_file(sub, lower);
+  for (const std::string& stem : {lower, std::string(name)}) {
+    for (const char* ext : {".yaml", ".yml", ".json"}) {
+      auto p = dir / (stem + ext);
+      if (std::filesystem::is_regular_file(p)) return p;
+    }
+  }
   return make_error(Errc::kNotFound, "'{}' not found under {}", name, dir.string());
 }
 

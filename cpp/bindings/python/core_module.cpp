@@ -63,8 +63,9 @@ py::tuple packed_tuple(const pk::IntPacked& p) {
   std::memcpy(qw.mutable_data(), p.qweight.data(), p.qweight.size() * 4);
   I32Array qz({p.qzeros_rows, p.qzeros_cols});
   std::memcpy(qz.mutable_data(), p.qzeros.data(), p.qzeros.size() * 4);
-  py::array sc(py::dtype("float16"),
-               {p.qzeros_rows, static_cast<py::ssize_t>(p.scales.size() / p.qzeros_rows)});
+  // int64_t is long long on macOS but py::ssize_t is long, so both extents need the explicit cast.
+  py::array sc(py::dtype("float16"), {static_cast<py::ssize_t>(p.qzeros_rows),
+                                      static_cast<py::ssize_t>(p.scales.size() / p.qzeros_rows)});
   std::memcpy(sc.mutable_data(), p.scales.data(), p.scales.size() * 2);
   return py::make_tuple(qw, qz, sc);
 }

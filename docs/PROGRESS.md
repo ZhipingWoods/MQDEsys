@@ -173,6 +173,20 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-05 · Claude · T-0705 收尾：验收脚本、前端 serve 列、macOS 构建
+
+- **状态**：DONE
+- **本次完成**：
+  1. `tests/integration/deploy_llamacpp_cpu.sh` + `deploy_llamacpp.py`：tiny 随机 Qwen2（2 层，hidden 256，真实 tokenizer）→ F16 GGUF → Q4_K → llama-perplexity / llama-bench / llama-server（固定 8 token 冒烟 + 2 并发 4 请求压测）；`GPU_LAYERS=99` 走 Metal/CUDA 卸载。
+  2. 前端 llama.cpp 卡片：标题按 `gpu_layers` + backend 显示设备，新增服务 tok/s、TTFT p50、TPOT p50 列（skipped / failed 显示原因）；回退说明更正为 llama-quantize 规则。
+  3. macOS（clang + Homebrew 依赖）构建修复：`probe.c` 的 `trim` 仅 Linux 使用，加 `#if`；`core_module.cpp` 中 int64_t（macOS 为 long long）显式转 `py::ssize_t`；`resolve_data_file` 先试小写文件名（APFS 大小写不敏感时原逻辑返回 `W4A16.yaml`）。
+- **校验结果**：
+  - 验收脚本：4090 CPU、Mac CPU（-ngl 0）、Mac Metal（-ngl 99）均 `DEPLOY OK`（Q4_K 14 个张量，无回退）。
+  - Mac：`cmake -B build/mac`（Homebrew 依赖）构建通过，ctest 98/98；pytest 打包/GGUF/后端 30 passed, 2 skipped（无本地 GGUF 夹具、无 GPTQModel）。
+  - 4090：`scripts/check_all.sh` all checks passed；新脚本 ruff / ruff format / mypy 通过（门禁的 ruff 只覆盖 `python/`）。
+- **未覆盖**：llama.cpp CUDA 构建未测（GPU 被占用，且 CPU/Metal 已满足验收）。
+- **下一步**：T-0405 Marlin 布局；T-0701 vLLM 冒烟（等 GPU）。
+
 ### 2026-10-04 · Claude · llama.cpp Metal 验证（T-0705）
 
 - **状态**：PARTIAL（剩前端 serve 列）

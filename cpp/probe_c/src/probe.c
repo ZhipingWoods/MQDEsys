@@ -25,10 +25,12 @@ static void copy_str(char* dst, size_t cap, const char* src) {
   snprintf(dst, cap, "%s", src);
 }
 
+#if defined(__linux__)
 static void trim(char* s) {
   size_t n = strlen(s);
   while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == ' ' || s[n - 1] == '\t')) s[--n] = '\0';
 }
+#endif
 
 static void probe_cpu(mqde_device_info* d) {
   memset(d, 0, sizeof(*d));

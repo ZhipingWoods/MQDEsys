@@ -251,12 +251,37 @@ export interface LlamaCppRun {
   ppl_err: number;
   tensor_types?: Record<string, number>;
   fallback?: string[];
+  serve?: LlamaServe;
   [k: string]: unknown; // pp<N>_tokens_per_s / tg<N>_tokens_per_s
+}
+
+type Pcts = { p50?: number; p90?: number; p99?: number };
+
+/** llama-server stage: startup, one chat smoke request and a closed-loop streaming load test. */
+export interface LlamaServe {
+  status: "succeeded" | "degraded" | "failed" | "skipped";
+  reason?: string;
+  error?: string;
+  diagnosis?: string | null;
+  startup_s?: number;
+  smoke?: { ok: boolean; text?: string };
+  load?: {
+    concurrency: number;
+    requests: number;
+    ok: number;
+    ttft_ms?: Pcts;
+    tpot_ms?: Pcts;
+    e2e_ms?: Pcts;
+    output_tokens_per_s?: number;
+    requests_per_s?: number;
+  };
 }
 
 export interface LlamaCppDeploy {
   protocol: string;
   threads: number;
+  gpu_layers?: number | null;
+  backend?: string | null;
   results: Record<string, LlamaCppRun>;
 }
 
