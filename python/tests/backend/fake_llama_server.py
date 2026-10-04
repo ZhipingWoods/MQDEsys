@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,6 +18,11 @@ from pathlib import Path
 
 TTFT = 0.10
 TPOT = 0.02
+
+
+def _sleep_until(deadline: float) -> None:
+    while (left := deadline - time.perf_counter()) > 0:
+        time.sleep(min(left, 0.005))
 
 
 def main() -> None:
@@ -66,14 +72,16 @@ def main() -> None:
                 self.send_error(404)
                 return
             n = int(body["n_predict"])
+            # token i is due at t0 + TTFT + i * TPOT; sleeping to absolute deadlines keeps per-call oversleep
+            # (a few ms per sleep on macOS) from accumulating, and TCP_NODELAY stops Nagle batching small events
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            t0 = time.perf_counter()
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Connection", "close")
             self.end_headers()
-            time.sleep(TTFT)
             for i in range(n):
-                if i:
-                    time.sleep(TPOT)
+                _sleep_until(t0 + TTFT + i * TPOT)
                 self.wfile.write(b"data: " + json.dumps({"content": "x", "tokens": [7], "stop": False}).encode() + b"\n\n")
                 self.wfile.flush()
             self.wfile.write(b"data: " + json.dumps({"content": "", "tokens": [], "stop": True}).encode() + b"\n\n")

@@ -55,7 +55,9 @@ class LLMJobSpec:
     kv_override: dict[str, Any] | None = None  # e.g. {format: int, bits: 8}
     mixed_precision: dict[str, Any] | None = None
     export: list[str] = field(default_factory=list)  # gptq | awq: real checkpoints + fake/real check (S09/S10)
-    llamacpp: list[str] = field(default_factory=list)  # GGUF types to deploy on llama.cpp (CPU): q8_0 q5_0 q4_0 iq4_nl q4_k q2_k
+    llamacpp: list[str] = field(default_factory=list)  # GGUF types to deploy on llama.cpp: q8_0 q5_0 q4_0 iq4_nl q4_k q2_k
+    # llama.cpp -ngl: None keeps llama.cpp's default, 0 forces CPU, 99 offloads every layer (Metal / CUDA build)
+    llamacpp_gpu_layers: int | None = None
     # llama-server per GGUF type: smoke request + closed-loop load (TTFT/TPOT); skipped when the binary is missing
     llamacpp_serve: dict[str, Any] | None = field(default_factory=lambda: {"concurrency": 4, "requests": 16,
                                                                            "prompt_len": 256, "n_predict": 64})
@@ -86,6 +88,7 @@ class LLMJobSpec:
             mixed_precision=q.get("mixed_precision"),
             export=list(d.get("export", {}).get("formats", [])),
             llamacpp=list((dep.get("llamacpp") or {}).get("types", [])),
+            llamacpp_gpu_layers=(dep.get("llamacpp") or {}).get("gpu_layers"),
             llamacpp_serve=(dep.get("llamacpp") or {}).get("serve", {"concurrency": 4, "requests": 16,
                                                                     "prompt_len": 256, "n_predict": 64}),
             sensitivity=(d.get("analysis") or {}).get("sensitivity"),
@@ -190,13 +193,15 @@ class LLMJob:
         threads = torch.get_num_threads()
         f16 = convert_f16(s.model_path, d / "model-f16.gguf")
         protocol = f"llama-perplexity ctx {s.eval_seq_len}, {s.eval_windows} chunks, scores the second half of each chunk"
-        out: dict[str, Any] = {"protocol": protocol, "threads": threads, "results": {}}
+        ngl = s.llamacpp_gpu_layers
+        out: dict[str, Any] = {"protocol": protocol, "threads": threads, "gpu_layers": ngl, "results": {}}
         for ty in ["f16", *s.llamacpp]:
             path = f16 if ty == "f16" else d / f"model-{ty}.gguf"
             info = {"type": ty, "bytes": path.stat().st_size} if ty == "f16" else requantize(f16, path, ty)
             self.ev.log(f"llama.cpp {ty}: perplexity + bench")
-            p = perplexity(path, text, ctx=s.eval_seq_len, chunks=s.eval_windows, threads=threads)
-            b = bench(path, pp=s.eval_seq_len, tg=64, threads=threads, reps=2)
+            p = perplexity(path, text, ctx=s.eval_seq_len, chunks=s.eval_windows, threads=threads, gpu_layers=ngl)
+            b = bench(path, pp=s.eval_seq_len, tg=64, threads=threads, reps=2, gpu_layers=ngl)
+            out.setdefault("backend", b.get("backend"))
             out["results"][ty] = {**info, **p, **{k: v for k, v in b.items() if k.endswith("per_s")}, "path": str(path)}
             self.ev.emit("metric", name=f"llamacpp.{ty}.ppl", value=p["ppl"], msg=f"llama.cpp {ty}")
             if s.llamacpp_serve:
@@ -218,7 +223,8 @@ class LLMJob:
         n_predict = int(cfg.get("n_predict", 64))
         prompt_len = int(cfg.get("prompt_len", 256))
         ctx = int(cfg.get("ctx", conc * (prompt_len + n_predict + 64)))
-        srv = LlamaServer(path, self.out / "export" / "gguf" / f"server-{ty}.log", threads=threads, ctx=ctx, parallel=conc)
+        srv = LlamaServer(path, self.out / "export" / "gguf" / f"server-{ty}.log", threads=threads, ctx=ctx, parallel=conc,
+                          gpu_layers=self.spec.llamacpp_gpu_layers)
         self.ev.log(f"llama-server {ty}: starting on {srv.port} (ctx {ctx}, {conc} slots)")
         try:
             with srv:
@@ -350,6 +356,7 @@ def main() -> None:
     ap.add_argument("--export", help="comma separated: gptq,awq")
     ap.add_argument("--sensitivity", choices=["block", "type"])
     ap.add_argument("--llamacpp", help="GGUF types to deploy on llama.cpp, e.g. q8_0,q4_k")
+    ap.add_argument("--llamacpp-gpu-layers", type=int, help="llama.cpp -ngl (0 = CPU, 99 = offload all on Metal/CUDA)")
     ap.add_argument("--llamacpp-serve", help="llama-server load test as JSON, e.g. '{\"concurrency\": 8}'; 'off' disables")
     ap.add_argument("--sensitivity-windows", type=int)
     ap.add_argument("--job-dir")
@@ -372,6 +379,8 @@ def main() -> None:
         spec.sensitivity = a.sensitivity
     if a.llamacpp:
         spec.llamacpp = a.llamacpp.split(",")
+    if a.llamacpp_gpu_layers is not None:
+        spec.llamacpp_gpu_layers = a.llamacpp_gpu_layers
     if a.llamacpp_serve:
         spec.llamacpp_serve = None if a.llamacpp_serve == "off" else json.loads(a.llamacpp_serve)
     if a.sensitivity_windows:

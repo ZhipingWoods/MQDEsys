@@ -173,6 +173,29 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-04 · Claude · llama.cpp Metal 验证（T-0705）
+
+- **状态**：PARTIAL（剩前端 serve 列）
+- **本次完成**：
+  1. `perplexity` / `bench` / `LlamaServer` 增加 `gpu_layers`（映射 `-ngl`；None 保持 llama.cpp 默认），并设置 `DYLD_LIBRARY_PATH`；二进制查找增加 `build/llamacpp-metal`。
+  2. 作业配置 `deploy.llamacpp.gpu_layers` / CLI `--llamacpp-gpu-layers`；报告记录 `gpu_layers` 与 `backend`。
+  3. 假服务器改为按绝对时间点发 token 并开 TCP_NODELAY（macOS 上 sleep 累积误差使 TPOT 断言偶发失败）。
+- **Mac（Apple M5，16 GB）构建**：上游 llama.cpp 81ff93e（从 4090 拷源码，Mac 无法直连 GitHub），`cmake -S ../llama.cpp-upstream -B build/llamacpp-metal -G Ninja -DGGML_METAL=ON -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF`，目标 llama-server / llama-perplexity / llama-bench。
+- **校验结果**（Qwen2.5-0.5B，4 线程，wikitext ctx 512 × 40 chunks）：
+
+  | 类型 | PPL Metal | PPL CPU | pp512 Metal / CPU tok/s | tg64 Metal / CPU tok/s | serve@4 tok/s | TTFT p50 |
+  |---|---|---|---|---|---|---|
+  | f16 | 13.889 | 13.889 | 8633 / 1478 | 121 / 82 | 327 | 118 ms |
+  | q8_0 | 13.904 | 13.923 | 8718 / 1224 | 170 / 122 | 412 | 117 ms |
+  | q4_k | 14.718 | 14.742 | 8225 / 1237 | 194 / 137 | 401 | 123 ms |
+  | iq4_nl | 15.082 | 15.073 | 8713 / 1005 | 200 / 163 | 423 | 116 ms |
+
+  - 卸载确认：`-ngl 99` 日志 `offloaded 25/25 layers to GPU`、权重在 `MTL0_Mapped`；`-ngl 0` 为 0/25、全部 CPU。
+  - PPL 与 4090 CPU 结果一致（差值在误差范围内），llama-server 每种类型 16/16 请求成功。
+  - Mac：`pytest python/tests/backend`（MQDE_TEST_NGL=99，真实 Metal 二进制）8 passed，连续 3 次。4090：`scripts/check_all.sh` all checks passed（pytest 79 passed, 1 skipped）。
+- **下一步**：前端 llama.cpp 卡片加 serve 列（TTFT/TPOT/tok/s）；T-0405 Marlin；T-0701 vLLM 冒烟（等 GPU 2/3）。
+- **说明**：仓库仍无远端，提交只在 4090 本地 main。
+
 ### 2026-10-01 · Claude · llama-server 适配与闭环负载测试（T-0705）
 
 - **状态**：PARTIAL（T-0705 仍缺 Metal；T-0405 仍缺 Marlin）

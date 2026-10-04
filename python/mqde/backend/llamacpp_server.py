@@ -42,7 +42,8 @@ DIAGNOSES: list[tuple[str, str]] = [
 
 
 def server_bin() -> Path:
-    for c in [os.environ.get("MQDE_LLAMA_SERVER_BIN", ""), str(REPO / "build/llamacpp-server/bin/llama-server")]:
+    for c in [os.environ.get("MQDE_LLAMA_SERVER_BIN", ""), str(REPO / "build/llamacpp-server/bin/llama-server"),
+              str(REPO / "build/llamacpp-metal/bin/llama-server")]:
         if c and Path(c).is_file():
             return Path(c)
     raise FileNotFoundError(
@@ -83,15 +84,18 @@ class LlamaServer:
 
     def __init__(self, model: str | Path, log_path: str | Path, *, threads: int = 16, ctx: int = 4096,
                  parallel: int = 4, port: int | None = None, extra: list[str] | None = None,
-                 binary: str | Path | None = None, startup_timeout: float = 300) -> None:
+                 binary: str | Path | None = None, startup_timeout: float = 300,
+                 gpu_layers: int | None = None) -> None:
         self.model = Path(model)
         self.log_path = Path(log_path)
         self.port = port or free_port()
         self.startup_timeout = startup_timeout
         b = Path(binary) if binary else server_bin()
         self.args = [str(b), "-m", str(self.model), "--host", HOST, "--port", str(self.port), "-t", str(threads),
-                     "-c", str(ctx), "-np", str(parallel), "--metrics", "--no-webui", *(extra or [])]
-        self._env = {**os.environ, "LD_LIBRARY_PATH": f"{b.parent}:{os.environ.get('LD_LIBRARY_PATH', '')}"}
+                     "-c", str(ctx), "-np", str(parallel), "--metrics", "--no-webui",
+                     *([] if gpu_layers is None else ["-ngl", str(gpu_layers)]), *(extra or [])]
+        self._env = {**os.environ, "LD_LIBRARY_PATH": f"{b.parent}:{os.environ.get('LD_LIBRARY_PATH', '')}",
+                     "DYLD_LIBRARY_PATH": f"{b.parent}:{os.environ.get('DYLD_LIBRARY_PATH', '')}"}
         self.proc: subprocess.Popen[bytes] | None = None
         self.startup_s: float | None = None
 

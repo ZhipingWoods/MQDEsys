@@ -47,6 +47,14 @@ def test_lifecycle_smoke_and_timing(fake_bin: Path, tmp_path: Path) -> None:
     assert r["output_tokens_per_s"] > 0 and r["requests_per_s"] > 0
 
 
+def test_gpu_layers_flag(fake_bin: Path, tmp_path: Path) -> None:
+    default = ls.LlamaServer(tmp_path / "m.gguf", tmp_path / "a.log", binary=fake_bin)
+    assert "-ngl" not in default.args  # None keeps llama.cpp's own default
+    metal = ls.LlamaServer(tmp_path / "m.gguf", tmp_path / "b.log", binary=fake_bin, gpu_layers=99)
+    assert metal.args[metal.args.index("-ngl") + 1] == "99"
+    assert str(fake_bin.parent) in metal._env["DYLD_LIBRARY_PATH"]
+
+
 def test_load_failure_is_diagnosed(fake_bin: Path, tmp_path: Path) -> None:
     srv = ls.LlamaServer(tmp_path / "missing.gguf", tmp_path / "server.log", binary=fake_bin, startup_timeout=20)
     with pytest.raises(RuntimeError, match="model file not found"):
@@ -70,14 +78,16 @@ def _real() -> tuple[str, str] | None:
         b = str(ls.server_bin())
     except FileNotFoundError:
         return None
-    m = os.environ.get("MQDE_TEST_GGUF") or next(iter(sorted(glob.glob("runs/*/export/gguf/model-q4_k.gguf"))), None)
+    m = os.environ.get("MQDE_TEST_GGUF") or next(iter(sorted(
+        glob.glob("runs/*/export/gguf/model-q4_k.gguf") + glob.glob("runs/*/model-q4_k.gguf"))), None)
     return (b, m) if m and Path(m).is_file() else None
 
 
 @pytest.mark.skipif(_real() is None, reason="llama-server or a GGUF (MQDE_TEST_GGUF) not available")
 def test_real_llama_server(tmp_path: Path) -> None:
     b, m = _real()  # type: ignore[misc]
-    with ls.LlamaServer(m, tmp_path / "server.log", threads=16, ctx=2048, parallel=2, binary=b) as srv:
+    ngl = int(os.environ["MQDE_TEST_NGL"]) if os.environ.get("MQDE_TEST_NGL") else None
+    with ls.LlamaServer(m, tmp_path / "server.log", threads=4, ctx=2048, parallel=2, binary=b, gpu_layers=ngl) as srv:
         assert ls.smoke(srv.port, max_tokens=4)["ok"]
         r = ls.serve_bench(srv.port, concurrency=2, requests=2, prompt_len=32, n_predict=8)
     assert r["ok"] == 2 and r["tpot_ms"]["p50"] > 0

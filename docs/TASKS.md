@@ -129,7 +129,7 @@
 | T-0702 | Fake/Real 一致性检查（S10） | P7 | T-0701 | L1 | DONE (2026-09-29, 0 code mismatches; real PPL +0.0005% vs fake) |
 | T-0703 | 部署后端接口 + vLLM 适配器（S11） | P7 | T-0701,T-0504 | L2 | TODO |
 | T-0704 | SGLang 导出与适配 | P7 | T-0703 | L1 | TODO |
-| T-0705 | llama.cpp（GGUF）导出与适配 | P7 | T-0703,T-0405 | L1 | PARTIAL (2026-10-01, deploy_llamacpp stage + llama-server (startup/smoke/load); llama-quantize shape fallbacks (Q5_0/F16) byte-identical; Metal pending) |
+| T-0705 | llama.cpp（GGUF）导出与适配 | P7 | T-0703,T-0405 | L1 | PARTIAL (2026-10-04, deploy_llamacpp stage + llama-server (startup/smoke/load); llama-quantize shape fallbacks (Q5_0/F16) byte-identical; Metal (-ngl) verified on Apple M5; UI serve columns pending) |
 | T-0706 | TensorRT-LLM 导出与适配（扩展） | P7 | T-0703 | L1 | TODO |
 | T-0801 | 精度评测：lm-eval-harness / evalscope / 自定义 | P8 | T-0510 | L3 | TODO |
 | T-0802 | 部署后精度评测（S12） | P8 | T-0801,T-0703 | L1 | TODO |
