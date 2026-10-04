@@ -125,7 +125,7 @@
 | T-0608 | 混合精度与 keep_fp 策略 | P6 | T-0509 | L1 | DONE (2026-09-29, regex/block rules, skip; exported as GPTQModel dynamic) |
 | T-0609 | 外部算法适配器（GPTQModel / llm-compressor） | P6 | T-0508 | L3 | TODO |
 | T-0610 | 算法组合（AWQ+GPTQ）与 QuaRot（扩展） | P6 | T-0601,T-0602 | L1 | PARTIAL (2026-09-29, awq+gptq / smoothquant+gptq; no QuaRot) |
-| T-0701 | Exporter 接口 + vLLM 导出 | P7 | T-0405,T-0602 | L2 | PARTIAL (2026-09-29, GPTQ/AWQ checkpoints; 2026-10-05 compressed-tensors W4A16/W8A16 pack-quantized + FP8 float-quantized, CPU format tests; vLLM load smoke + byte-exact vs compressed_tensors lib pending) |
+| T-0701 | Exporter 接口 + vLLM 导出 | P7 | T-0405,T-0602 | L2 | PARTIAL (2026-10-05: compressed-tensors W4A16 + FP8 CPU format tests; AWQ + CT vLLM 0.30.0 load smoke PASS; GPTQ smoke FAIL (sym=False rejected by vLLM 0.30.0 validator, not export bug); Marlin byte-exact vs vLLM ref; 7B smoke pending GPU) |
 | T-0702 | Fake/Real 一致性检查（S10） | P7 | T-0701 | L1 | DONE (2026-09-29, 0 code mismatches; real PPL +0.0005% vs fake) |
 | T-0703 | 部署后端接口 + vLLM 适配器（S11） | P7 | T-0701,T-0504 | L2 | TODO |
 | T-0704 | SGLang 导出与适配 | P7 | T-0703 | L1 | TODO |

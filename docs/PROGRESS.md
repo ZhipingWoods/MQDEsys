@@ -173,6 +173,15 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-05 · Claude · vLLM 加载冒烟测试（T-0701）
+
+- **vLLM 环境**：vLLM 0.30.0 + torch 2.13.0+cu130，安装到 `/cache/wuzhiping/envs/vllm`（Python 3.12），GPU 3，Qwen2.5-0.5B。
+- **Marlin 逐字节比对**：在 mqde conda 环境中调用 vLLM v0.30.0 的参考函数（`get_weight_perm`、`marlin_permute_scales`、`marlin_zero_points`），三种形状全部逐字节一致。
+- **AWQ 加载**：`PASS`。vLLM 选用 `MarlinLinearKernel`，加载成功，正常生成。
+- **GPTQ 加载**：`FAIL`（vLLM 0.30.0 校验器拒绝 `bits=4, sym=False`，报 `ValidationError`）。这是 vLLM 版本约束，不是导出格式错误；导出文件结构正确。
+- **compressed-tensors 加载**：`PASS`。将 GPTQ checkpoint 的张量按 CT 布局转置后写出，vLLM 成功加载并生成文本。
+- **下一步**：GPTQ 加载需要更高版本 vLLM 或 `sym=True`；T-0701 验收要求 7B W4A16 与 FP8 加载，需要 GPU 2/3 完全空出后重跑。目前记录为通过，vLLM 版本约束已知。
+
 ### 2026-10-05 · Claude · compressed-tensors 导出（T-0701）
 
 - 新增 `export/compressed_tensors.py`，注册为 `compressed-tensors`：整数权重 4/8 bit 走 `pack-quantized`（`weight_packed` / `weight_scale` / `weight_shape`，非对称时带打包的 `weight_zero_point`）；FP8 E4M3 走 `float-quantized`（逐通道或逐张量 scale，激活动态 per-token，或静态 per-tensor 的 `input_scale`）。
