@@ -20,6 +20,7 @@ using mqde::Json;
 using FloatArray = py::array_t<float, py::array::c_style | py::array::forcecast>;
 using U8Array = py::array_t<uint8_t, py::array::c_style | py::array::forcecast>;
 using I32Array = py::array_t<int32_t, py::array::c_style | py::array::forcecast>;
+using U16Array = py::array_t<uint16_t, py::array::c_style | py::array::forcecast>;
 
 namespace {
 
@@ -182,6 +183,63 @@ PYBIND11_MODULE(_core, m) {
       },
       py::arg("layout"), py::arg("qweight"), py::arg("qzeros"), py::arg("out"), py::arg("in_features"),
       py::arg("group_size"), py::arg("bits"), py::arg("v1") = true);
+
+  // ---- Marlin (vLLM gptq_marlin / awq_marlin) ----
+  m.def(
+      "pack_marlin",
+      [](const U8Array& codes, const U8Array& zeros, const FloatArray& scales, int bits, bool with_zeros) {
+        check_int_inputs(codes, zeros, scales);
+        const int64_t out = codes.shape(0), in = codes.shape(1), groups = zeros.shape(1), gs = in / groups;
+        auto p = pk::pack_marlin(codes.data(), zeros.data(), scales.data(), out, in, gs, bits, with_zeros);
+        if (!p) raise(p.error());
+        I32Array qw({static_cast<py::ssize_t>(p->qweight_rows), static_cast<py::ssize_t>(p->qweight_cols)});
+        std::memcpy(qw.mutable_data(), p->qweight.data(), p->qweight.size() * 4);
+        py::array sc(py::dtype("float16"), {static_cast<py::ssize_t>(groups), static_cast<py::ssize_t>(out)});
+        std::memcpy(sc.mutable_data(), p->scales.data(), p->scales.size() * 2);
+        py::object qz = py::none();
+        if (with_zeros) {
+          I32Array z({static_cast<py::ssize_t>(groups), static_cast<py::ssize_t>(p->qzeros_cols)});
+          std::memcpy(z.mutable_data(), p->qzeros.data(), p->qzeros.size() * 4);
+          qz = z;
+        }
+        return py::make_tuple(qw, qz, sc);
+      },
+      py::arg("codes"), py::arg("zeros"), py::arg("scales"), py::arg("bits"), py::arg("with_zeros"),
+      "codes [out, in] / zeros, scales [out, groups] -> Marlin (qweight int32 [in/16, out*16*bits/32], "
+      "qzeros int32 [groups, out*bits/32] or None, scales float16 [groups, out]).");
+
+  m.def(
+      "unpack_marlin",
+      // scales_bits: the fp16 scales viewed as uint16 (numpy .view(np.uint16)), [groups, out]
+      [](const I32Array& qweight, const py::object& qzeros, const U16Array& scales_bits, int64_t out,
+         int64_t in, int64_t group_size, int bits) {
+        if (qweight.ndim() != 2) throw py::value_error("qweight must be 2-D");
+        pk::MarlinPacked p;
+        p.qweight_rows = qweight.shape(0);
+        p.qweight_cols = qweight.shape(1);
+        p.qweight.assign(qweight.data(), qweight.data() + qweight.size());
+        p.scales.assign(scales_bits.data(), scales_bits.data() + scales_bits.size());
+        const bool has_z = !qzeros.is_none();
+        if (has_z) {
+          const auto z = qzeros.cast<I32Array>();
+          if (z.ndim() != 2) throw py::value_error("qzeros must be 2-D");
+          p.qzeros_cols = z.shape(1);
+          p.qzeros.assign(z.data(), z.data() + z.size());
+        }
+        const int64_t groups = group_size > 0 ? in / group_size : 0;
+        p.groups = groups;
+        U8Array codes({static_cast<py::ssize_t>(out), static_cast<py::ssize_t>(in)});
+        U8Array zeros({static_cast<py::ssize_t>(out), static_cast<py::ssize_t>(groups)});
+        FloatArray scales({static_cast<py::ssize_t>(out), static_cast<py::ssize_t>(groups)});
+        auto r = pk::unpack_marlin(p, out, in, group_size, bits, codes.mutable_data(),
+                                   has_z ? zeros.mutable_data() : nullptr, scales.mutable_data());
+        if (!r) raise(r.error());
+        return py::make_tuple(codes, has_z ? py::object(zeros) : py::object(py::none()), scales);
+      },
+      py::arg("qweight"), py::arg("qzeros"), py::arg("scales_bits"), py::arg("out"), py::arg("in_features"),
+      py::arg("group_size"), py::arg("bits"),
+      "Marlin tensors -> (codes uint8 [out, in], zeros uint8 [out, groups] or None, scales float32 [out, "
+      "groups]).");
 
   m.def(
       "gguf_quantize",

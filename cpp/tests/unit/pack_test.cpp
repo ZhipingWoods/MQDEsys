@@ -107,6 +107,45 @@ TEST(QuantPack, AwqInterleavedOrderAndRoundTrip) {
   EXPECT_EQ(z2, zeros);
 }
 
+TEST(QuantPack, MarlinRoundTrip) {
+  struct Case {
+    int64_t out, in, gs;
+    int bits;
+    bool zeros;
+  };
+  for (const Case& c :
+       {Case{128, 256, 128, 4, false}, Case{64, 128, 128, 4, true}, Case{192, 256, 64, 4, true},
+        Case{128, 256, 256, 4, false}, Case{128, 256, 128, 8, false}, Case{64, 256, 32, 8, true}}) {
+    const int64_t groups = c.in / c.gs;
+    const auto codes = rand_codes(c.out * c.in, c.bits, 7);
+    const auto zeros = rand_codes(c.out * groups, c.bits, 8);
+    auto s = randn(c.out * groups, 9);
+    for (auto& x : s) x = fp16_to_fp32(fp32_to_fp16(std::fabs(x) + 1e-3f));
+    auto p = pack_marlin(codes.data(), zeros.data(), s.data(), c.out, c.in, c.gs, c.bits, c.zeros);
+    ASSERT_TRUE(p) << p.error().to_string();
+    EXPECT_EQ(p->qweight_rows, c.in / 16);
+    EXPECT_EQ(p->qweight_cols, c.out * 16 * c.bits / 32);
+    EXPECT_EQ(static_cast<int64_t>(p->qzeros.size()), c.zeros ? groups * c.out * c.bits / 32 : 0);
+    std::vector<uint8_t> c2(codes.size()), z2(zeros.size());
+    std::vector<float> s2(s.size());
+    ASSERT_TRUE(
+        unpack_marlin(*p, c.out, c.in, c.gs, c.bits, c2.data(), c.zeros ? z2.data() : nullptr, s2.data()));
+    EXPECT_EQ(c2, codes);
+    EXPECT_EQ(s2, s);
+    if (c.zeros) {
+      EXPECT_EQ(z2, zeros);
+    }
+  }
+}
+
+TEST(QuantPack, MarlinRejectsBadShapes) {
+  std::vector<uint8_t> codes(32 * 128), zeros(32);
+  std::vector<float> s(32, 1.0f);
+  EXPECT_FALSE(pack_marlin(codes.data(), zeros.data(), s.data(), 32, 128, 128, 4, false));  // out % 64
+  EXPECT_FALSE(pack_marlin(codes.data(), zeros.data(), s.data(), 64, 64, 64, 3, false));    // 3 bit
+  EXPECT_FALSE(pack_marlin(codes.data(), nullptr, s.data(), 64, 64, 64, 4, true));          // zeros missing
+}
+
 TEST(QuantPack, RejectsBadShapes) {
   std::vector<uint8_t> c(10 * 30), z(10);
   std::vector<float> s(10, 1.f);

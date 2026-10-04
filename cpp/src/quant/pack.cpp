@@ -232,6 +232,172 @@ Result<void> unpack_awq(const IntPacked& p, int64_t out, int64_t in, int64_t gro
   return {};
 }
 
+// ------------------------------------------------------------------ Marlin (vLLM v0.30 marlin_utils*)
+namespace {
+constexpr int64_t kMarlinTile = 16;
+constexpr int64_t kMarlinPermLen = 1024;
+
+// marlin_utils_test.get_weight_perm(num_bits, is_a_8bit=False)
+std::vector<int> marlin_weight_perm(int bits) {
+  std::vector<int> perm;
+  perm.reserve(kMarlinPermLen);
+  for (int i = 0; i < 32; ++i) {
+    std::vector<int> perm1;
+    const int col = i / 4;
+    for (int block = 0; block < 2; ++block) {
+      for (int row : {2 * (i % 4), 2 * (i % 4) + 1, 2 * (i % 4 + 4), 2 * (i % 4 + 4) + 1})
+        perm1.push_back(16 * row + col + 8 * block);
+    }
+    for (int j = 0; j < 4; ++j)
+      for (int p : perm1) perm.push_back(p + 256 * j);
+  }
+  const std::vector<int> il =
+      bits == 4 ? std::vector<int>{0, 2, 4, 6, 1, 3, 5, 7} : std::vector<int>{0, 2, 1, 3};
+  std::vector<int> out(perm.size());
+  const size_t L = il.size();
+  for (size_t b = 0; b < perm.size() / L; ++b)
+    for (size_t k = 0; k < L; ++k) out[b * L + k] = perm[b * L + il[k]];
+  return out;
+}
+
+// marlin_utils.get_scale_perms(): (64-wide grouped perm, 32-wide per-channel perm)
+const std::vector<int>& scale_perm(bool single) {
+  static const std::vector<int> grouped = [] {
+    std::vector<int> v;
+    for (int i = 0; i < 8; ++i)
+      for (int j = 0; j < 8; ++j) v.push_back(i + 8 * j);
+    return v;
+  }();
+  static const std::vector<int> per_channel = [] {
+    std::vector<int> v;
+    for (int i = 0; i < 4; ++i)
+      for (int j : {0, 1, 8, 9, 16, 17, 24, 25}) v.push_back(2 * i + j);
+    return v;
+  }();
+  return single ? per_channel : grouped;
+}
+
+// y[c*W + j] = x[c*W + perm[j]] over consecutive W-wide chunks (numpy reshape(-1, W)[:, perm]).
+template <typename T>
+void permute_chunks(std::vector<T>& x, const std::vector<int>& perm, bool inverse) {
+  const size_t W = perm.size();
+  std::vector<T> y(x.size());
+  for (size_t c = 0; c < x.size() / W; ++c)
+    for (size_t j = 0; j < W; ++j) {
+      if (inverse)
+        y[c * W + perm[j]] = x[c * W + j];
+      else
+        y[c * W + j] = x[c * W + perm[j]];
+    }
+  x.swap(y);
+}
+
+std::vector<int> zp_interleave(int bits) {
+  return bits == 4 ? std::vector<int>{0, 2, 4, 6, 1, 3, 5, 7} : std::vector<int>{0, 2, 1, 3};
+}
+
+Result<void> check_marlin(int64_t out, int64_t in, int64_t group_size, int bits) {
+  if (bits != 4 && bits != 8)
+    return make_error(Errc::kInvalidArgument, "Marlin supports 4 or 8 bit, got {}", bits);
+  if (auto ok = check_int(out, in, group_size, bits); !ok) return ok;
+  if (in % kMarlinTile != 0 || out % 64 != 0)
+    return make_error(Errc::kInvalidArgument, "Marlin needs in % 16 == 0 and out % 64 == 0 (got [{}, {}])",
+                      out, in);
+  return {};
+}
+}  // namespace
+
+Result<MarlinPacked> pack_marlin(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out,
+                                 int64_t in, int64_t group_size, int bits, bool with_zeros) {
+  if (auto ok = check_marlin(out, in, group_size, bits); !ok) return std::unexpected(ok.error());
+  if (with_zeros && !zeros) return make_error(Errc::kInvalidArgument, "with_zeros needs a zeros array");
+  const int64_t groups = in / group_size;
+  const int64_t ktiles = in / kMarlinTile, ntiles = out / kMarlinTile;
+  const int64_t row_len = out * kMarlinTile;  // codes per k-tile row
+  const auto perm = marlin_weight_perm(bits);
+  MarlinPacked p;
+  p.groups = groups;
+  p.qweight_rows = ktiles;
+  p.qweight_cols = row_len * bits / 32;
+  p.qweight.resize(ktiles * p.qweight_cols);
+  std::vector<uint8_t> row(row_len);
+  for (int64_t kt = 0; kt < ktiles; ++kt) {
+    // (K/16, 16, N/16, 16) -> permute(0, 2, 1, 3): position nt*256 + kk*16 + nn holds W[kt*16+kk, nt*16+nn]
+    for (int64_t nt = 0; nt < ntiles; ++nt)
+      for (int64_t kk = 0; kk < kMarlinTile; ++kk)
+        for (int64_t nn = 0; nn < kMarlinTile; ++nn)
+          row[nt * 256 + kk * 16 + nn] = codes[(nt * 16 + nn) * in + kt * 16 + kk];
+    permute_chunks(row, perm, false);
+    const auto w = pack_bits(row, bits);
+    for (int64_t c = 0; c < p.qweight_cols; ++c)
+      p.qweight[kt * p.qweight_cols + c] = static_cast<int32_t>(w[c]);
+  }
+  // scales [groups, out] (vLLM's s layout), then the column permutation
+  std::vector<uint16_t> s(groups * out);
+  for (int64_t g = 0; g < groups; ++g)
+    for (int64_t o = 0; o < out; ++o) s[g * out + o] = fp32_to_fp16(scales[o * groups + g]);
+  permute_chunks(s, scale_perm(groups == 1), false);
+  p.scales = std::move(s);
+  if (with_zeros) {
+    std::vector<uint8_t> z(groups * out);
+    for (int64_t g = 0; g < groups; ++g)
+      for (int64_t o = 0; o < out; ++o) z[g * out + o] = zeros[o * groups + g];
+    permute_chunks(z, scale_perm(false), false);  // zero points always take the 64-wide perm
+    permute_chunks(z, zp_interleave(bits), false);
+    p.qzeros_cols = out * bits / 32;
+    p.qzeros.resize(groups * p.qzeros_cols);
+    for (int64_t g = 0; g < groups; ++g) {
+      const auto w = pack_bits({z.data() + g * out, static_cast<size_t>(out)}, bits);
+      for (int64_t c = 0; c < p.qzeros_cols; ++c)
+        p.qzeros[g * p.qzeros_cols + c] = static_cast<int32_t>(w[c]);
+    }
+  }
+  return p;
+}
+
+Result<void> unpack_marlin(const MarlinPacked& p, int64_t out, int64_t in, int64_t group_size, int bits,
+                           uint8_t* codes, uint8_t* zeros, float* scales) {
+  if (auto ok = check_marlin(out, in, group_size, bits); !ok) return ok;
+  const int64_t groups = in / group_size;
+  const int64_t ktiles = in / kMarlinTile, ntiles = out / kMarlinTile;
+  const int64_t row_len = out * kMarlinTile;
+  if (p.qweight_rows != ktiles || p.qweight_cols != row_len * bits / 32 ||
+      static_cast<int64_t>(p.scales.size()) != groups * out)
+    return make_error(Errc::kInvalidArgument, "Marlin tensor shapes do not match [{}, {}] g{} {}bit", out, in,
+                      group_size, bits);
+  const auto perm = marlin_weight_perm(bits);
+  for (int64_t kt = 0; kt < ktiles; ++kt) {
+    const auto* w = reinterpret_cast<const uint32_t*>(p.qweight.data() + kt * p.qweight_cols);
+    auto row = unpack_bits({w, static_cast<size_t>(p.qweight_cols)}, bits, row_len);
+    permute_chunks(row, perm, true);
+    for (int64_t nt = 0; nt < ntiles; ++nt)
+      for (int64_t kk = 0; kk < kMarlinTile; ++kk)
+        for (int64_t nn = 0; nn < kMarlinTile; ++nn)
+          codes[(nt * 16 + nn) * in + kt * 16 + kk] = row[nt * 256 + kk * 16 + nn];
+  }
+  if (scales) {
+    auto s = p.scales;
+    permute_chunks(s, scale_perm(groups == 1), true);
+    for (int64_t g = 0; g < groups; ++g)
+      for (int64_t o = 0; o < out; ++o) scales[o * groups + g] = fp16_to_fp32(s[g * out + o]);
+  }
+  if (zeros) {
+    if (p.qzeros_cols != out * bits / 32 || static_cast<int64_t>(p.qzeros.size()) != groups * p.qzeros_cols)
+      return make_error(Errc::kInvalidArgument, "Marlin checkpoint has no zero points");
+    std::vector<uint8_t> z(groups * out);
+    for (int64_t g = 0; g < groups; ++g) {
+      const auto* w = reinterpret_cast<const uint32_t*>(p.qzeros.data() + g * p.qzeros_cols);
+      const auto r = unpack_bits({w, static_cast<size_t>(p.qzeros_cols)}, bits, out);
+      std::copy(r.begin(), r.end(), z.begin() + g * out);
+    }
+    permute_chunks(z, zp_interleave(bits), true);
+    permute_chunks(z, scale_perm(false), true);
+    for (int64_t g = 0; g < groups; ++g)
+      for (int64_t o = 0; o < out; ++o) zeros[o * groups + g] = z[g * out + o];
+  }
+  return {};
+}
+
 // ------------------------------------------------------------------ GGUF (ports of ggml-quants.c *_ref)
 namespace {
 constexpr int kQK = 32;    // QK4_0 / QK8_0

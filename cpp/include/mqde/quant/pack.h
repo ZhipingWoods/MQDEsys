@@ -52,6 +52,25 @@ Result<IntPacked> pack_awq(const uint8_t* codes, const uint8_t* zeros, const flo
 Result<void> unpack_awq(const IntPacked& p, int64_t out, int64_t in, int64_t group_size, int bits,
                         uint8_t* codes, uint8_t* zeros);
 
+// Marlin (vLLM gptq_marlin / awq_marlin with 16-bit activations), 4 or 8 bit, desc_act=False. Ports of
+// vllm marlin_utils_test.marlin_weights / marlin_utils.marlin_permute_scales / marlin_zero_points (v0.30):
+//   qweight [in/16, out*16*bits/32]  16x16 tiles of the [in, out] code matrix, each 1024-element run
+//                                    permuted for the tensor-core fragment order, then LSB-first packed
+//   scales  [groups, out] fp16       column-permuted (64-wide perm when grouped, 32-wide when per-channel)
+//   qzeros  [groups, out*bits/32]    awq_marlin only (with_zeros): raw zero, 64-wide perm + interleave
+// Symmetric GPTQ (uint4b8 / uint8b128) carries no zeros: codes already hold the 2^(b-1) offset.
+// Layout needs in % 16 == 0 and out % 64 == 0; the vLLM kernel additionally needs in % 128 == 0.
+struct MarlinPacked {
+  std::vector<int32_t> qweight, qzeros;
+  std::vector<uint16_t> scales;
+  int64_t qweight_rows = 0, qweight_cols = 0, groups = 0, qzeros_cols = 0;
+};
+Result<MarlinPacked> pack_marlin(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out,
+                                 int64_t in, int64_t group_size, int bits, bool with_zeros);
+// zeros / scales may be null; scales come back as fp32 [out, groups].
+Result<void> unpack_marlin(const MarlinPacked& p, int64_t out, int64_t in, int64_t group_size, int bits,
+                           uint8_t* codes, uint8_t* zeros, float* scales);
+
 // ggml_type ids, so tensors can be written into GGUF files unchanged.
 enum class GgufType : uint32_t { kQ4_0 = 2, kQ5_0 = 6, kQ8_0 = 8, kQ2_K = 10, kQ4_K = 12, kIQ4_NL = 20 };
 

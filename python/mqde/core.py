@@ -82,6 +82,31 @@ def unpack_int(
     )
 
 
+def pack_marlin(
+    codes: np.ndarray, zeros: np.ndarray, scales: np.ndarray, bits: int, with_zeros: bool
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray]:
+    """codes [out, in] / zeros, scales [out, groups] -> vLLM Marlin (qweight, qzeros or None, scales fp16 [groups, out])."""
+    return _core.pack_marlin(
+        np.ascontiguousarray(codes, dtype=np.uint8),
+        np.ascontiguousarray(zeros, dtype=np.uint8),
+        np.ascontiguousarray(scales, dtype=np.float32),
+        bits,
+        with_zeros,
+    )
+
+
+def unpack_marlin(
+    qweight: np.ndarray, qzeros: np.ndarray | None, scales: np.ndarray, out: int, in_features: int, group_size: int, bits: int
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray]:
+    """Inverse of pack_marlin: (codes [out, in], zeros [out, groups] or None, scales fp32 [out, groups])."""
+    return _core.unpack_marlin(
+        np.ascontiguousarray(qweight, dtype=np.int32),
+        None if qzeros is None else np.ascontiguousarray(qzeros, dtype=np.int32),
+        np.ascontiguousarray(scales, dtype=np.float16).view(np.uint16),
+        out, in_features, group_size, bits,
+    )
+
+
 def gguf_quantize(x: np.ndarray, type_: str) -> np.ndarray:
     return _core.gguf_quantize(np.ascontiguousarray(x, dtype=np.float32).reshape(-1), type_)
 

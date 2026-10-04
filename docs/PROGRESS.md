@@ -173,6 +173,12 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-05 · Claude · Marlin 打包（T-0405）
+
+- 新增 `pack_marlin` / `unpack_marlin`（C++ + pybind + `mqde.core`），4/8 bit、16 位激活，可选零点（awq_marlin 风格）；布局移植自 vLLM v0.30.0 的 `marlin_utils_test.py` / `marlin_utils.py`。
+- 测试：C++ `QuantPack.MarlinRoundTrip`，Python `test_marlin.py`（往返 + 与 vLLM 参考逻辑的 numpy 移植逐字节比对）。Mac 与 4090 均通过；4090 全门禁通过（pytest 90 passed, 2 skipped）。
+- 未完成：与已安装 vLLM 的 `gptq_marlin_repack` 逐字节比对（测试已写好，vLLM 未装完时自动 skip）；vLLM 环境 `/cache/wuzhiping/envs/vllm` 的 pip 安装仍在进行。
+
 ### 2026-10-05 · Claude · T-0705 收尾：验收脚本、前端 serve 列、macOS 构建
 
 - **状态**：DONE
