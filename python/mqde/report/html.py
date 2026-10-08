@@ -29,6 +29,15 @@ T: dict[str, dict[str, str]] = {
     "ppl": {"zh": "PPL", "en": "PPL"},
     "delta": {"zh": "相对基线", "en": "vs baseline"},
     "kv": {"zh": "含 KV 量化", "en": "with KV quant"},
+    "logits": {"zh": "输出分布与原模型的差异", "en": "Output distribution versus the unquantized model"},
+    "kl": {"zh": "KL（nats，越小越好）", "en": "KL (nats, lower is better)"},
+    "top1": {"zh": "Top-1 一致率", "en": "Top-1 agreement"},
+    "top1drop": {"zh": "原 Top-1 概率下降", "en": "Drop in the reference's top-1 probability"},
+    "kl_lower_bound": {"zh": "KL 为下界：只精确计算原模型每个位置概率最高的 {k} 个 token，其余 token 合并为一项；合并只会让 KL 变小。"
+                              "在 Qwen2.5-0.5B 上实测约低估 11%（k=256）。Top-1 一致率不受影响。",
+                       "en": "KL is a lower bound: only the reference's {k} most likely tokens per position are compared one by "
+                             "one and the rest are merged into one bucket, which can only lower a KL divergence. Measured about "
+                             "11% low on Qwen2.5-0.5B (k=256). Top-1 agreement is not affected."},
     "stages": {"zh": "执行阶段", "en": "Stages"},
     "stage": {"zh": "阶段", "en": "Stage"},
     "status": {"zh": "状态", "en": "Status"},
@@ -202,6 +211,18 @@ def recipes_section(r: dict[str, Any], lang: str) -> str:
     return f'<div class="card"><h2>{e(T["recipes"][lang])}</h2>{chart}{table(head, rows)}</div>'
 
 
+def logits_section(r: dict[str, Any], lang: str) -> str:
+    probe = r.get("logits_probe")
+    rows = [[f"<b>{e(n)}</b>", fmt(rec["logits"].get("kl"), 4), fmt(100 * rec["logits"].get("top1_agreement", float("nan")), 1) + "%",
+             fmt(rec["logits"].get("ref_top1_prob_drop"), 4)] for n, rec in r.get("recipes", {}).items() if rec.get("logits")]
+    if not probe or not rows:
+        return ""
+    head = [(T["recipe"][lang], False), (T["kl"][lang], True), (T["top1"][lang], True), (T["top1drop"][lang], True)]
+    scope = f'{probe.get("windows")} × {probe.get("seq_len")} tokens'
+    note = "" if probe.get("exact") else f'<p class="note">{e(T["kl_lower_bound"][lang].format(k=probe.get("k")))}</p>'
+    return f'<div class="card"><h2>{e(T["logits"][lang])}</h2><p class="note">{e(scope)}</p>{table(head, rows)}{note}</div>'
+
+
 def stages_section(r: dict[str, Any], lang: str) -> str:
     st = r.get("stages") or []
     if not st:
@@ -324,7 +345,7 @@ def render_html(report: dict[str, Any], lang: str = "en") -> str:
         raise ValueError("lang must be 'zh' or 'en'")
     if report.get("kind") not in (None, "llm"):
         raise ValueError(f"only LLM job reports are supported (kind={report.get('kind')!r})")
-    body = "".join(f(report, lang) for f in (overview, recipes_section, layers_section, export_section, vllm_section,
+    body = "".join(f(report, lang) for f in (overview, recipes_section, logits_section, layers_section, export_section, vllm_section,
                                               gguf_section, sensitivity_section, stages_section))
     title = f'{T["title"][lang]} · {report.get("job_id", "")}'
     return (f'<!doctype html><html lang="{lang}"><head><meta charset="utf-8">'

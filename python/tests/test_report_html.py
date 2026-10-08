@@ -146,3 +146,18 @@ def test_command_line(tmp_path: Path) -> None:
         sys.argv = old
     out = tmp_path / "report.zh.html"
     assert out.is_file() and "量化评估报告" in out.read_text(encoding="utf-8")
+
+
+def test_logits_section_appears_only_with_data_and_says_when_kl_is_a_lower_bound() -> None:
+    r = load("vllm")
+    assert "Output distribution" not in render_html(r, "en")  # real fixtures predate the probe: nothing is faked
+    r["logits_probe"] = {"windows": 8, "seq_len": 512, "k": 256, "exact": False, "reference_mib": 12.0}
+    r["recipes"]["W4A16"]["logits"] = {"kl": 0.13277, "top1_agreement": 0.7998, "ref_top1_prob_drop": 0.0268}
+    en = render_html(r, "en")
+    assert "Output distribution versus the unquantized model" in en and "0.1328" in en and "80.0%" in en and "0.0268" in en
+    assert "KL is a lower bound" in en and "256 most likely tokens" in en and "8 × 512 tokens" in en
+    assert "KL 为下界" in render_html(r, "zh")
+    r["logits_probe"]["exact"] = True  # exact KL needs no caveat
+    assert "lower bound" not in render_html(r, "en")
+    del r["recipes"]["W4A16"]["logits"]
+    assert "Output distribution" not in render_html(r, "en")

@@ -83,3 +83,32 @@ def test_job_without_export_has_a_report_page_with_no_export_section(job_env: No
     LLMJob(spec(tmp_path), job_dir=tmp_path / "j").run()
     html = (tmp_path / "j" / "report.en.html").read_text(encoding="utf-8")
     assert "Recipes" in html and "Export and fake/real" not in html and "vLLM deployment" not in html
+
+
+def test_logits_probe_is_off_by_default_and_reported_when_on(job_env: None, tmp_path: Path) -> None:
+    off = LLMJob(spec(tmp_path), job_dir=tmp_path / "off").run()
+    assert "logits_probe" not in off and "logits" not in off["recipes"]["W4A16"]
+    on = LLMJob(spec(tmp_path, logits_probe={"windows": 2, "k": 16}), job_dir=tmp_path / "on").run()
+    got = on["logits_probe"]
+    assert got == {"windows": 2, "seq_len": 64, "k": 16, "exact": False, "reference_mib": got["reference_mib"]}
+    m = on["recipes"]["W4A16"]["logits"]
+    assert m["positions"] == 2 * 64 and m["k"] == 16 and m["exact"] is False
+    assert 0 < m["kl"] < 5 and 0.0 <= m["top1_agreement"] <= 1.0
+    stages = [s["stage"] for s in on["stages"]]
+    assert stages.index("logits_reference") < stages.index("quantize") < stages.index("eval_logits")  # reference BEFORE quantization
+
+
+def test_the_reference_is_captured_from_the_unquantized_model(job_env: None, tmp_path: Path) -> None:
+    """If it were taken after quantization the KL of a recipe against itself would be ~0; it must not be."""
+    s = spec(tmp_path, recipes=["w4a16", "w8a16"], logits_probe={"windows": 2, "k": 32, "exact": True})
+    rep = LLMJob(s, job_dir=tmp_path / "j").run()
+    kl4, kl8 = (rep["recipes"][r]["logits"]["kl"] for r in ("W4A16", "W8A16"))
+    assert kl4 > 1e-4 and kl8 > 0
+    assert kl4 > kl8  # more bits, closer to the unquantized distribution: both recipes compare against the same reference
+
+
+def test_logits_probe_yaml_forms() -> None:
+    from mqde.pipeline.llm_job import _opt_dict
+
+    assert _opt_dict(None) is None and _opt_dict(False) is None
+    assert _opt_dict(True) == {} and _opt_dict({"k": 8}) == {"k": 8}

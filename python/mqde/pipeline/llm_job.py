@@ -28,6 +28,7 @@ import torch
 import yaml
 
 from mqde.data.text import calib_batches, eval_ids
+from mqde.eval.logits_probe import capture_reference, compare_to_reference, split_windows
 from mqde.eval.ppl import perplexity
 from mqde.models.hf_llm import HFCausalLM
 from mqde.pipeline.events import EventSink
@@ -36,6 +37,11 @@ from mqde.quant.blockwise import BlockwiseQuantizer, MixedPrecisionPolicy
 from mqde.quant.engine import RecipeSpec
 from mqde.quant.modules import replace_module
 from mqde.quant.numerics import QuantSpec
+
+
+def _opt_dict(v: Any) -> dict[str, Any] | None:
+    """YAML option that is either a mapping (settings), a truthy flag (defaults) or absent / false (off)."""
+    return dict(v) if isinstance(v, dict) else ({} if v else None)
 
 
 @dataclass
@@ -64,6 +70,10 @@ class LLMJobSpec:
     # S11/S12 on vLLM per exported checkpoint (needs a CUDA device and a vLLM binary, else skipped): {} for defaults, or
     # max_model_len, gpu_memory_utilization, enforce_eager, concurrency, requests, prompt_len, n_predict, ppl_windows
     vllm: dict[str, Any] | None = None
+    # Output-distribution check next to PPL (eval/logits_probe.py): KL and Top-1 agreement against the unquantized model.
+    # {} turns it on with defaults, or {windows: 8, k: 256, exact: false}; None = off. top-k KL is a lower bound of the exact KL
+    # (about 11% low on Qwen2.5-0.5B at k=256), exact: true keeps every logit (about 1.2 GiB per 8 windows of 512).
+    logits_probe: dict[str, Any] | None = None
     sensitivity: str | None = None  # block | type: per-group FP fallback ranking + mixed-precision suggestion
     sensitivity_windows: int = 8
     suggest_target: float = 0.5  # share of the PPL degradation the suggested rules should win back
@@ -95,6 +105,7 @@ class LLMJobSpec:
             llamacpp_serve=(dep.get("llamacpp") or {}).get("serve", {"concurrency": 4, "requests": 16,
                                                                     "prompt_len": 256, "n_predict": 64}),
             vllm=(dep.get("vllm") if isinstance(dep.get("vllm"), dict) else ({} if dep.get("vllm") else None)),
+            logits_probe=_opt_dict((d.get("analysis") or {}).get("logits_probe")),
             sensitivity=(d.get("analysis") or {}).get("sensitivity"),
             sensitivity_windows=int((d.get("analysis") or {}).get("sensitivity_windows", 8)),
             output_dir=d.get("output_dir", "runs"),
@@ -343,6 +354,14 @@ class LLMJob:
         self.report["data"] = {"calib": {"dataset": "wikitext-2 train", "n": len(cal), "seq_len": s.calib_seq_len},
                                "eval": {"dataset": "wikitext-2 test", "windows": s.eval_windows, "seq_len": s.eval_seq_len}}
         base = self._stage("eval_baseline", lambda: self._ppl(ad, ids, "pretrain"))
+        probe_windows, probe_ref = None, None
+        if s.logits_probe is not None:
+            pc = s.logits_probe
+            probe_windows = split_windows(ids, s.eval_seq_len, int(pc.get("windows", 8)))
+            probe_ref = self._stage("logits_reference", lambda: capture_reference(
+                ad.logits, probe_windows, k=int(pc.get("k", 256)), exact=bool(pc.get("exact", False))), "pretrain")
+            self.report["logits_probe"] = {"windows": int(probe_windows.shape[0]), "seq_len": s.eval_seq_len, "k": probe_ref.k,
+                                           "exact": probe_ref.exact, "reference_mib": probe_ref.nbytes() / 2**20}
         self.report["baseline"] = base
         self._save()
         policy = MixedPrecisionPolicy.from_dict(s.mixed_precision)
@@ -360,6 +379,10 @@ class LLMJob:
             rep["quantize_seconds"] = res.seconds
             wo = self._stage("eval_fake_wo_kv", lambda: self._ppl(ad, ids, f"{recipe.name}.fake_quant_wo_kv"), recipe.name)
             rep["eval"] = {"fake_quant_wo_kv": wo}
+            if probe_ref is not None:
+                assert probe_windows is not None
+                rep["logits"] = self._stage("eval_logits", lambda: compare_to_reference(ad.logits, probe_windows, probe_ref), recipe.name)
+                self.ev.emit("metric", name=f"{recipe.name}.kl", value=round(rep["logits"]["kl"], 5), msg=recipe.name)
             if s.sensitivity:
                 rep["sensitivity"] = self._stage("sensitivity", lambda: self._sensitivity(ad, ids, q, recipe.name), recipe.name)
             kv_spec = QuantSpec.from_dict(s.kv_override) if s.kv_override else QuantSpec()
@@ -414,6 +437,8 @@ def main() -> None:
     ap.add_argument("--mixed-precision", help="inline JSON or a YAML/JSON file: {rules: [{match, bits, skip}]}")
     ap.add_argument("--export", help="comma separated: gptq, awq, compressed-tensors")
     ap.add_argument("--sensitivity", choices=["block", "type"])
+    ap.add_argument("--logits-probe", nargs="?", const="{}", help="KL / Top-1 agreement against the unquantized model; "
+                    "optional JSON, e.g. '{\"windows\": 8, \"k\": 256, \"exact\": true}'")
     ap.add_argument("--llamacpp", help="GGUF types to deploy on llama.cpp, e.g. q8_0,q4_k")
     ap.add_argument("--vllm", nargs="?", const="{}", help="serve each exported checkpoint with vLLM (S11) and score it (S12); "
                     "optional JSON, e.g. '{\"gpu_memory_utilization\": 0.4}'")
@@ -442,6 +467,8 @@ def main() -> None:
         spec.llamacpp = a.llamacpp.split(",")
     if a.vllm is not None:
         spec.vllm = json.loads(a.vllm)
+    if a.logits_probe is not None:
+        spec.logits_probe = json.loads(a.logits_probe)
     if a.llamacpp_gpu_layers is not None:
         spec.llamacpp_gpu_layers = a.llamacpp_gpu_layers
     if a.llamacpp_serve:
