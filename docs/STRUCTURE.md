@@ -42,7 +42,8 @@ MQDEsys/
 ├── README.md                     [L1] 项目介绍、快速开始
 ├── CMakeLists.txt                [L2] 顶层 CMake：选项、子目录、全局编译标志
 ├── CMakePresets.json             [L2] dev / release 等预设
-├── .gitignore                    [L2] 忽略规则（含 3rdpart/、build/、runs/）
+├── .gitignore                    [L2] 忽略规则（含 build/、runs/、模型权重、*.gguf）
+├── .gitmodules                   [L3] 第三方参考库的上游地址（子模块）
 ├── cpp/                          C++ 后端（系统主干）
 ├── data/                         [L1/L2] 数据驱动的知识库
 ├── python/                       Python 执行器（mqde 包）
@@ -50,7 +51,7 @@ MQDEsys/
 ├── docs/                         文档
 ├── examples/                     [L0] 示例 JobSpec
 ├── tests/                        跨语言测试夹具
-└── 3rdpart/                      [L3] 参考源码只读副本（git 忽略，仅开发机）
+└── 3rdpart/                      [L3] 参考源码（git 子模块：只存上游链接与提交，源码不入库）
 ```
 
 ---
@@ -186,9 +187,10 @@ MQDEsys/
 
 ---
 
-## 8. `3rdpart/` —— 参考源码（仅开发机，git 忽略）
+## 8. `3rdpart/` —— 参考源码（git 子模块，源码不入库）
 
-位置：开发机 `/cache/wuzhiping/MQDEsys/3rdpart/`
+每个目录是一个子模块：仓库里只有「上游地址 + 固定提交」（见 `.gitmodules`），GitHub 上点击目录会跳转到上游仓库的对应提交。
+开发机 `/cache/wuzhiping/MQDEsys/3rdpart/` 已检出源码；其他机器按需 `git submodule update --init <目录>`。
 
 | 目录 | 参考对象 | 许可证 |
 |------|---------|-------|
@@ -197,6 +199,7 @@ MQDEsys/
 | `unsloth/` | 动态量化思想 | Apache-2.0 |
 | `netron/` | 模型结构可视化 | MIT |
 | `evalscope/` | 评测与压测框架 | Apache-2.0 |
+| `lm-evaluation-harness/` | 精度评测（lm-eval） | MIT |
 | `FlagTree/` | 多硬件后端插件 | MIT |
 
 **规则**：只读。不得修改、不得被产品代码 import/include。需要复用代码时按许可证单独引入并走 L3 流程（写 ADR）。

@@ -26,7 +26,15 @@ rsync -a --exclude .git --exclude build --exclude __pycache__ --exclude '*.so' \
       ./ 4090:/cache/wuzhiping/MQDEsys/
 ```
 
-`3rdpart/` 只存在于开发机，不要同步、不要提交（已在 `.gitignore`）。
+`3rdpart/` 里的第三方参考库是 **git 子模块**：仓库只记录上游地址和固定提交，GitHub 上点击目录会跳转到对应上游仓库。
+源码只在开发机检出，不要同步、不要把源码提交进本仓库。`runs/`、`build/`、模型权重和 `*.gguf` 同样不进 git（见 `.gitignore`）。
+
+需要在新机器上拉取参考源码时：
+
+```bash
+git submodule update --init 3rdpart/llmfit          # 只拉需要的一个
+git submodule update --init --depth 1 --recursive   # 或全部浅克隆
+```
 
 ---
 

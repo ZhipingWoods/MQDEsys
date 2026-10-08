@@ -1,0 +1,21 @@
+[submodule "3rdpart/evalscope"]
+	path = 3rdpart/evalscope
+	url = https://github.com/modelscope/evalscope.git
+[submodule "3rdpart/FlagTree"]
+	path = 3rdpart/FlagTree
+	url = https://github.com/flagos-ai/FlagTree.git
+[submodule "3rdpart/GPTQModel"]
+	path = 3rdpart/GPTQModel
+	url = https://github.com/ModelCloud/GPTQModel.git
+[submodule "3rdpart/llmfit"]
+	path = 3rdpart/llmfit
+	url = https://github.com/AlexsJones/llmfit.git
+[submodule "3rdpart/lm-evaluation-harness"]
+	path = 3rdpart/lm-evaluation-harness
+	url = https://github.com/EleutherAI/lm-evaluation-harness.git
+[submodule "3rdpart/netron"]
+	path = 3rdpart/netron
+	url = https://github.com/lutzroeder/netron.git
+[submodule "3rdpart/unsloth"]
+	path = 3rdpart/unsloth
+	url = https://github.com/unslothai/unsloth.git
