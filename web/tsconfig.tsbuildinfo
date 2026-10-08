@@ -1,1 +1,0 @@
-{"root":["./src/api.ts","./src/charts.tsx","./src/hooks.ts","./src/main.tsx","./src/pages/Catalog.tsx","./src/pages/Compare.tsx","./src/pages/Estimate.tsx","./src/pages/Fit.tsx","./src/pages/Graph.tsx","./src/pages/Hardware.tsx","./src/pages/Job.tsx","./src/pages/JobLLM.tsx","./src/pages/Jobs.tsx","./src/pages/LayerAnalysis.tsx","./src/pages/NewJob.tsx"],"version":"5.9.3"}
