@@ -49,3 +49,10 @@ build/dev/bin/mqde serve --repo $PWD --runs $PWD/runs --web $PWD/web/dist \
 | `web/` | React + ECharts 前端 |
 | `examples/jobs/` | 作业示例 |
 | `docs/` | 架构、目录职责、任务清单、进度 |
+
+`3rdpart/` 里的第三方参考库是 git 子模块（GitHub 上点击目录会跳转到上游仓库对应提交），源码不随本仓库分发。
+`runs/`、`build/`、模型权重和 `*.gguf` 体积大，不入库。
+
+## 许可证
+
+MIT，见 [LICENSE](LICENSE)。
