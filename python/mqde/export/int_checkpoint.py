@@ -45,7 +45,7 @@ def layer_codes(m: FakeQuantLinear) -> tuple[np.ndarray, np.ndarray, np.ndarray,
     off = (1 << (s.bits - 1)) if s.symmetric else 0
     codes = (q + off).to(torch.int64)
     zeros = (zero + off).to(torch.int64)
-    return codes.numpy().astype(np.uint8), zeros.numpy().astype(np.uint8), scale.numpy(), gs
+    return codes.cpu().numpy().astype(np.uint8), zeros.cpu().numpy().astype(np.uint8), scale.cpu().numpy(), gs
 
 
 class _IntExporter(Exporter):

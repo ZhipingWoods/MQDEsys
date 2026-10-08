@@ -25,6 +25,7 @@ from torch import nn
 
 from mqde import core
 from mqde.export.base import fake_linears
+from mqde.export.compressed_tensors import dequant_ct, fake_ct_codes, load_ct
 from mqde.export.int_checkpoint import layer_codes
 
 
@@ -41,6 +42,8 @@ def load_real(export_dir: str | Path) -> tuple[dict[str, Any], dict[str, dict[st
 
     d = Path(export_dir)
     cfg = json.loads((d / "config.json").read_text())["quantization_config"]
+    if cfg["quant_method"] == "compressed-tensors":
+        return cfg, load_ct(d)
     sd = load_file(str(d / "model.safetensors"))
     layers: dict[str, dict[str, np.ndarray]] = {}
     for k in sd:
@@ -55,6 +58,8 @@ def load_real(export_dir: str | Path) -> tuple[dict[str, Any], dict[str, dict[st
 def dequant_real(cfg: dict[str, Any], name: str, t: dict[str, np.ndarray], out: int, inn: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(real weight float32 [out, in], codes, zeros) exactly as a kernel would dequantize them."""
     layout = cfg["quant_method"]
+    if layout == "compressed-tensors":
+        return dequant_ct(cfg, name, t, out, inn)
     bits, gs = _layer_spec(cfg, name)
     gs = inn if gs == -1 else gs
     codes, zeros = core.unpack_int(layout, t["qweight"], t["qzeros"], out, inn, gs, bits, v1=layout == "gptq")
@@ -74,7 +79,10 @@ def real_check(model: nn.Module, export_dir: str | Path) -> dict[str, Any]:
             rows.append({"name": n, "missing": True})
             continue
         w_real, codes, zeros = dequant_real(cfg, n, real[n], m.out_features, m.in_features)
-        c_f, z_f, _, _ = layer_codes(m)
+        if cfg["quant_method"] == "compressed-tensors":
+            c_f, z_f = fake_ct_codes(m)
+        else:
+            c_f, z_f, _, _ = layer_codes(m)
         w_fake = m.weight.detach().to(torch.float32).cpu().numpy()
         diff = np.abs(w_real - w_fake)
         rows.append({

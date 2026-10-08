@@ -196,3 +196,69 @@ class CompressedTensorsExporter(Exporter):
         files = sorted(p.name for p in out.iterdir())
         return ExportResult(format=self.name, out_dir=str(out), files=files, quantized=sorted(fq), kept_fp=kept_q,
                             quantization_config=qcfg, bytes=sum(p.stat().st_size for p in out.iterdir()))
+
+
+# ---------------------------------------------------------------- read-back (S10 fake/real check)
+def load_ct(export_dir: str | Path) -> dict[str, dict[str, np.ndarray]]:
+    """Per-layer arrays of a compressed-tensors checkpoint.
+
+    pack-quantized layers: weight_packed, weight_scale, weight_shape and optionally weight_zero_point.
+    float-quantized layers: ``fp8`` (float32 values of the stored FP8), ``fp8_bits`` (raw bytes), weight_scale."""
+    from safetensors.torch import load_file
+
+    sd = load_file(str(Path(export_dir) / "model.safetensors"))
+    layers: dict[str, dict[str, np.ndarray]] = {}
+    for k, v in sd.items():
+        if k.endswith(".weight_packed"):
+            n = k[: -len(".weight_packed")]
+            layers[n] = {f: sd[f"{n}.{f}"].numpy() for f in ("weight_packed", "weight_scale", "weight_shape", "weight_zero_point")
+                         if f"{n}.{f}" in sd}
+        elif k.endswith(".weight") and v.dtype == torch.float8_e4m3fn:
+            n = k[: -len(".weight")]
+            layers[n] = {"fp8": v.float().numpy(), "fp8_bits": v.view(torch.uint8).numpy(),
+                         "weight_scale": sd[f"{n}.weight_scale"].float().numpy()}
+    return layers
+
+
+def layer_weights_cfg(cfg: dict[str, Any], name: str) -> dict[str, Any]:
+    """The ``weights`` scheme that applies to ``name``: an explicit ``re:`` target wins over the base group."""
+    groups = cfg["config_groups"]
+    for gname, g in groups.items():
+        if gname != "group_0" and any(t.startswith("re:") and re.search(t[3:], name) for t in g["targets"]):
+            return cast(dict[str, Any], g["weights"])
+    return cast(dict[str, Any], groups["group_0"]["weights"])
+
+
+def dequant_ct(cfg: dict[str, Any], name: str, t: dict[str, np.ndarray], out: int, inn: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(weight float32 [out, in], codes, zeros) as a kernel would dequantize the checkpoint.
+
+    For FP8 layers ``codes`` are the raw FP8 bytes and ``zeros`` an empty [out, 1] placeholder."""
+    if "fp8" in t:
+        sc = t["weight_scale"].reshape(-1, 1)
+        return t["fp8"] * sc, t["fp8_bits"], np.zeros((out, 1), np.uint8)
+    w = layer_weights_cfg(cfg, name)
+    bits = int(w["num_bits"])
+    gs = int(w["group_size"]) if w.get("group_size") else inn
+    codes = unpack_int32(t["weight_packed"], bits, 1)[:, :inn]
+    groups = inn // gs
+    if "weight_zero_point" in t:
+        zeros = unpack_int32(t["weight_zero_point"], bits, 0)[:out, :groups]
+    else:
+        zeros = np.full((out, groups), 1 << (bits - 1), np.uint8)  # symmetric: codes carry the 2^(b-1) offset
+    scales = t["weight_scale"].astype(np.float32)  # [out, groups]
+    g = np.arange(inn) // gs
+    return scales[:, g] * (codes.astype(np.float32) - zeros[:, g].astype(np.float32)), codes, zeros
+
+
+def fake_ct_codes(m: FakeQuantLinear) -> tuple[np.ndarray, np.ndarray]:
+    """What the exporter should have stored for ``m``: (codes, zeros) in the same convention as ``dequant_ct``."""
+    if m.w_spec.format == "int":
+        c, z, _, _ = layer_codes(m)
+        if m.w_spec.symmetric:  # no zero points are stored; the reader assumes the 2^(b-1) offset
+            z = np.full_like(z, 1 << (m.w_spec.bits - 1))
+        return c, z
+    assert m.w_scale is not None
+    rows = 1 if m.w_spec.granularity == "per_tensor" else m.out_features
+    sc = m.w_scale.detach().to(torch.float32).reshape(rows, 1)
+    q = torch.clamp(m.weight.detach().to(torch.float32) / sc, -FP8_MAX["fp8_e4m3"], FP8_MAX["fp8_e4m3"])
+    return q.to(torch.float8_e4m3fn).view(torch.uint8).cpu().numpy(), np.zeros((m.out_features, 1), np.uint8)

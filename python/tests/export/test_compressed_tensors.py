@@ -127,3 +127,45 @@ def test_matches_compressed_tensors_library(tmp_path: Path) -> None:
         for dim in (0, 1):
             ref = pack_to_int32(signed, bits, packed_dim=dim)
             assert np.array_equal(pack_int32(v, bits, dim), ref.numpy()), (ct.__version__, bits, dim)
+
+
+# ---------------------------------------------------------------- fake/real consistency (S10) for this format
+@pytest.mark.parametrize(("recipe", "algo"), [("w4a16", "rtn"), ("w4a16", "gptq"), ("w8a16", "rtn"), ("fp8", "rtn")])
+def test_real_check_codes_identical(recipe: str, algo: str, tmp_path: Path) -> None:
+    from mqde.export.real_check import real_check
+
+    ad = tiny()
+    BlockwiseQuantizer(ad, RecipeSpec.load(recipe), algo).run(calib())
+    get_exporter("compressed-tensors").export(ad.model, tmp_path)
+    chk = real_check(ad.model, tmp_path)
+    assert chk["format"] == "compressed-tensors" and chk["layers"] == 14 and not chk["missing"]
+    assert chk["codes_identical"] and chk["code_mismatch"] == 0 and chk["zero_mismatch"] == 0
+    # only the fp16 / fp32 scale storage separates the checkpoint's weights from the fake-quant ones
+    assert chk["w_rel_l2_mean"] < 1e-3
+
+
+def test_real_weights_reproduce_the_fake_model(tmp_path: Path) -> None:
+    from mqde.export.real_check import use_real_weights
+
+    ad = tiny()
+    BlockwiseQuantizer(ad, RecipeSpec.load("w4a16"), "rtn").run(calib())
+    ids = calib(1, 32)[0]
+    with torch.no_grad():
+        fake = ad.model(ids).logits.clone()
+    get_exporter("compressed-tensors").export(ad.model, tmp_path)
+    with use_real_weights(ad.model, tmp_path), torch.no_grad():
+        real = ad.model(ids).logits
+    assert (real - fake).abs().max() < 5e-3 * fake.abs().max()
+    with torch.no_grad():
+        assert torch.equal(ad.model(ids).logits, fake)  # the swap is undone on exit
+
+
+def test_mixed_precision_real_check(tmp_path: Path) -> None:
+    from mqde.export.real_check import real_check
+
+    ad = tiny()
+    pol = MixedPrecisionPolicy.from_dict({"rules": [{"match": "block:-1", "bits": 8}]})
+    BlockwiseQuantizer(ad, RecipeSpec.load("w4a16"), "rtn", policy=pol).run(calib())
+    get_exporter("compressed-tensors").export(ad.model, tmp_path)
+    chk = real_check(ad.model, tmp_path)  # 8-bit layers are read with their own scheme from the extra config group
+    assert chk["codes_identical"] and chk["layers"] == 14
