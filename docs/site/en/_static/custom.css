@@ -1,0 +1,3 @@
+.lang-switch { padding: 0.4rem 1rem; text-align: right; }
+.lang-switch a { font-weight: 600; border: 1px solid var(--color-foreground-border); border-radius: 4px; padding: 0.1rem 0.6rem; }
+.status-done { color: #1a7f37; }
