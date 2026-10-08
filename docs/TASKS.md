@@ -109,7 +109,7 @@
 | T-0507 | 校准数据与首块捕获 | P5 | T-0506 | L1 | DONE (2026-09-24, LeRobot v3 + synthetic) |
 | T-0508 | Blockwise 引擎 + Fake/Real 模块包装 + RTN | P5 | T-0507,T-0408 | L2 | DONE (2026-09-29, quant/blockwise.py sequential blocks; real = export + use_real_weights) |
 | T-0509 | 误差追踪 trace（逐层/逐块） | P5 | T-0508,T-0404 | L1 | DONE (2026-09-24) |
-| T-0510 | 评测：PPL + logits 探针 | P5 | T-0506 | L1 | PARTIAL (2026-09-29, wikitext-2 PPL 3 positions; logits probe only in tests) |
+| T-0510 | 评测：PPL + logits 探针 | P5 | T-0506 | L1 | PARTIAL (2026-10-08, eval/logits_probe.py wired into llm_job (`--logits-probe`, YAML analysis.logits_probe) and the HTML report: KL / Top-1 agreement / drop of the reference's top-1 probability against the unquantized model, reference captured before quantization; top-k reference (default k=256) gives a KL LOWER BOUND, measured 10.8% / 10.6% low on Qwen2.5-0.5B W4A16 RTN / GPTQ vs the exact KL, Top-1 agreement unaffected; `exact` option keeps all logits (1199 MiB per 8x512 vs 12 MiB). Spec items not done: fixed 128-prompt set, saving top-k logits to disk, `eval.run` handler, and the acceptance (PPL within 1% of public / lm-eval values: not compared)) |
 | T-0511 | 阶段实现 S00–S08 + S14 并串通 | P5 | T-0504,T-0505,T-0509,T-0510 | L1 | PARTIAL (2026-09-24, VLA stages S00-S08,S14) |
 | T-0512 | server：作业端点 + WebSocket 事件流 | P5 | T-0511,T-0301 | L2 | PARTIAL (2026-09-29, SSE; model.type vla/llm, CPU slot) |
 | T-0513 | 前端：作业执行页（DAG + 日志 + 资源） | P5 | T-0512,T-0303 | L1 | PARTIAL (2026-09-24) |
@@ -119,7 +119,7 @@
 | T-0602 | 算法：GPTQ | P6 | T-0508 | L1 | DONE (2026-09-29, b2248e4; per-layer OBS on FP inputs, not sequential-block) |
 | T-0603 | 算法：SmoothQuant（等效变换 + transformed 位点） | P6 | T-0508 | L1 | PARTIAL (2026-09-30, per-group scales folded into the previous op (FP-exact, exportable); transformed eval position not yet) |
 | T-0604 | 激活量化（动态/静态）→ W4A8、W2A8 | P6 | T-0603 | L1 | DONE (2026-09-29, dynamic per-token + static per-tensor minmax/ema/percentile) |
-| T-0605 | FP8 配方（E4M3/E5M2，per_channel/per_block） | P6 | T-0508 | L1 | PARTIAL (2026-09-24, FP8 E4M3/E5M2 per-channel/per-tensor fake-quant; no per-block) |
+| T-0605 | FP8 配方（E4M3/E5M2，per_channel/per_block） | P6 | T-0508 | L1 | PARTIAL (2026-09-24, FP8 E4M3/E5M2 per-channel/per-tensor fake-quant; 2026-10-08 added reading block-wise FP8 checkpoints as plain float weights: models/fp8_dequant.py, `W = fp8 * weight_scale_inv` (multiply, fixed from the real 27B checkpoint: product has weight-sized magnitude, divide gives ~6e5), 12 tests, magnitudes checked on 9 layers of the real checkpoint; NOT done: per-block *quantization* (needs a Granularity enum value in the public header quant_spec.h, L2), wiring the reader into HFCausalLM, and the acceptance run (FP8 7B PPL degradation <= 1%, no 7B FP8 checkpoint available and the 27B does not fit a 24 GB card)) |
 | T-0606 | 2bit 配方（W2A16/W2A8）与 HQQ | P6 | T-0602,T-0604 | L1 | PARTIAL (2026-09-24, W2A16/W2A8 fake-quant via RTN-MSE; no GPTQ/HQQ) |
 | T-0607 | KV Cache 量化（KV_REGISTRY） | P6 | T-0508 | L1 | DONE (2026-09-29, naive/KIVI; INT8 KIVI -0.03% PPL on Qwen2.5-0.5B) |
 | T-0608 | 混合精度与 keep_fp 策略 | P6 | T-0509 | L1 | DONE (2026-09-29, regex/block rules, skip; exported as GPTQModel dynamic) |
