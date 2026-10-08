@@ -91,6 +91,18 @@ export default function JobPage() {
             取消
           </button>
         )}
+        {isLLM && state === "SUCCEEDED" && (
+          <span style={{ marginLeft: 12 }}>
+            独立报告页（可离线打开）：{" "}
+            <a href={`/api/v1/jobs/${id}/report.zh.html`} target="_blank" rel="noreferrer">
+              中文
+            </a>{" "}
+            ·{" "}
+            <a href={`/api/v1/jobs/${id}/report.en.html`} target="_blank" rel="noreferrer">
+              English
+            </a>
+          </span>
+        )}
       </p>
       {err && <div className="error-box">{err}</div>}
       {rep?.error && <div className="error-box">{rep.error}</div>}

@@ -1005,6 +1005,21 @@ Result<void> serve(const ServerOptions& o) {
     res.set_content(s, "text/plain");
   });
 
+  // Self-contained HTML report written by the job (report.en.html / report.zh.html). Only these two fixed
+  // file names are served, so no part of the request becomes a path.
+  svr.Get(R"(/api/v1/jobs/([A-Za-z0-9_\-]+)/report\.(en|zh)\.html)",
+          [&](const httplib::Request& req, httplib::Response& res) {
+            const auto id = req.matches[1].str();
+            const auto lang = req.matches[2].str();
+            std::ifstream in(o.runs_dir / id / ("report." + lang + ".html"), std::ios::binary);
+            if (!in) return send_error(res, 404, "not_found", "this job has no HTML report");
+            std::stringstream ss;
+            ss << in.rdbuf();
+            res.set_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'");
+            res.set_header("X-Content-Type-Options", "nosniff");
+            res.set_content(ss.str(), "text/html; charset=utf-8");
+          });
+
   // Events: replay from `after_seq`, then (stream) follow the file until the job ends.
   auto events_handler = [&](const httplib::Request& req, httplib::Response& res, bool stream) {
     const auto id = req.matches[1].str();

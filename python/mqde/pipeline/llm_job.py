@@ -248,6 +248,16 @@ class LLMJob:
         return {"status": "succeeded" if sm["ok"] and load.get("ok") == load["requests"] else "degraded",
                 "startup_s": srv.startup_s, "args": srv.args, "props": props, "smoke": sm, "load": load}
 
+    def _write_html(self) -> None:
+        """Self-contained report.en.html / report.zh.html next to report.json; a failure here never fails the job."""
+        from mqde.report.html import render_html
+
+        for lang in ("en", "zh"):
+            try:
+                (self.out / f"report.{lang}.html").write_text(render_html(self.report, lang), encoding="utf-8")
+            except Exception as e:  # report rendering is a convenience, not a result
+                self.ev.log(f"report.{lang}.html not written: {type(e).__name__}: {e}", level="warning")
+
     def _export(self, ad: HFCausalLM, ids: torch.Tensor, recipe: str, fake_ppl: float) -> dict[str, Any]:
         from mqde.export import get_exporter
         from mqde.export.real_check import real_check, use_real_weights
@@ -380,6 +390,7 @@ class LLMJob:
             self.report["llamacpp"] = self._stage("deploy_llamacpp", self._llamacpp, ",".join(s.llamacpp))
             self._save()
         self._stage("report", self._save)
+        self._write_html()
 
 
 def _recipe_kv(name: str) -> QuantSpec:
@@ -401,7 +412,7 @@ def main() -> None:
     ap.add_argument("--eval-windows", type=int)
     ap.add_argument("--calib-samples", type=int)
     ap.add_argument("--mixed-precision", help="inline JSON or a YAML/JSON file: {rules: [{match, bits, skip}]}")
-    ap.add_argument("--export", help="comma separated: gptq,awq")
+    ap.add_argument("--export", help="comma separated: gptq, awq, compressed-tensors")
     ap.add_argument("--sensitivity", choices=["block", "type"])
     ap.add_argument("--llamacpp", help="GGUF types to deploy on llama.cpp, e.g. q8_0,q4_k")
     ap.add_argument("--vllm", nargs="?", const="{}", help="serve each exported checkpoint with vLLM (S11) and score it (S12); "
