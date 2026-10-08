@@ -1,0 +1,15 @@
+# Task-level smoke check for deployed chat models (python/mqde/eval/custom.py). Short, unambiguous questions with
+# answers that do not depend on formatting. A model that fails several of these is broken or badly quantized; a model
+# that passes them says nothing about benchmark accuracy.
+{"id": "capital-fr", "prompt": "What is the capital of France? Answer with one word.", "answer": "Paris", "metric": "contains"}
+{"id": "capital-jp", "prompt": "What is the capital of Japan? Answer with one word.", "answer": "Tokyo", "metric": "contains"}
+{"id": "add-small", "prompt": "What is 17 + 25? Reply with just the number.", "answer": "\\b42\\b", "metric": "regex"}
+{"id": "mul-small", "prompt": "What is 6 times 7? Reply with just the number.", "answer": "\\b42\\b", "metric": "regex"}
+{"id": "sub-small", "prompt": "What is 100 minus 37? Reply with just the number.", "answer": "\\b63\\b", "metric": "regex"}
+{"id": "planet-red", "prompt": "Which planet is known as the Red Planet? Answer with one word.", "answer": "Mars", "metric": "contains"}
+{"id": "water-formula", "prompt": "What is the chemical formula of water? Reply with just the formula.", "answer": ["H2O", "H₂O"], "metric": "contains"}
+{"id": "days-week", "prompt": "How many days are in a week? Reply with just the number.", "answer": ["\\b7\\b", "seven"], "metric": "regex"}
+{"id": "opposite-hot", "prompt": "What is the opposite of hot? Answer with one word.", "answer": "cold", "metric": "exact_match"}
+{"id": "color-sky", "prompt": "What color is the sky on a clear day? Answer with one word.", "answer": "blue", "metric": "contains"}
+{"id": "translate-zh", "prompt": "用中文回答：一年有几个月？只回答数字。", "answer": ["12", "十二"], "metric": "contains"}
+{"id": "list-first", "prompt": "Name the first letter of the English alphabet. Reply with just the letter.", "answer": "A", "metric": "exact_match"}
