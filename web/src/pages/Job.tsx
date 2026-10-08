@@ -85,7 +85,7 @@ export default function JobPage() {
         作业 <span className="mono">{id}</span> <StateBadge state={state} />
       </h1>
       <p className="subtitle">
-        {rep?.spec.name ?? ""} · {rep?.spec.model_path ?? ""} · {job?.deploy?.device === "cpu" ? "CPU" : `GPU ${detail?.gpu ?? "–"}`} {live && <span className="status running">实时</span>}
+        {rep?.spec?.name ?? ""} · {rep?.spec?.model_path ?? ""} · {job?.deploy?.device === "cpu" ? "CPU" : `GPU ${detail?.gpu ?? "–"}`} {live && <span className="status running">实时</span>}
         {state === "RUNNING" && (
           <button className="secondary" style={{ marginLeft: 12 }} onClick={() => api.cancel(id)}>
             取消
