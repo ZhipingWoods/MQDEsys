@@ -6,8 +6,10 @@ const card = (c, extra = {}) => ({ card: c, ...extra });
 
 export const scenes = [
   { id: 'title', card: 'title', sentences: [
-    { zh: 'MQDEsys，模型量化与部署评估系统。从预估、量化、评测、真实导出，到 vLLM 和 llama.cpp 的部署压测，一条链路，一个网页。下面用真实跑完的作业演示。',
-      en: 'MQDEsys, the Model Quantization and Deployment Evaluation System: from estimation, quantization and real export to load tests on vLLM and llama.cpp, in one pipeline and one web interface. The demo uses real, finished jobs.' },
+    { zh: 'MQDEsys，模型量化与部署评估系统。从预估、量化、评测、真实导出，到 vLLM 和 llama.cpp 的部署压测，一条链路，一个网页。',
+      en: 'MQDEsys: estimation, quantization, evaluation, real export, and load tests on vLLM and llama.cpp, in one pipeline and one web page.' },
+    { zh: '下面用真实跑完的作业演示。',
+      en: 'Everything shown comes from real, finished jobs.' },
   ]},
   { id: 'estimate', url: '/estimate', wait: 'table', sentences: [
     { zh: '为什么要量化？资源预估页不加载权重，只读配置和权重头。模型是 MiniCPM-RobotManip，1.54 B 参数，硬件是一张 RTX 4090。',
@@ -59,14 +61,14 @@ export const scenes = [
       hl: [card('llama.cpp 部署实测', { row: 'Q4_K' }), card('llama.cpp 部署实测', { row: 'IQ4_NL' })] },
   ]},
   { id: 'layers', url: '/jobs/20260930-190720-c80eda', wait: 'text=W4A16 误差分析', click: 'W4A16 误差分析', sentences: [
-    { zh: '再看误差定位。敏感度分析把某一类层单独恢复成浮点，看能挽回多少 PPL，mlp.down_proj 挽回最多。',
-      en: 'Now error localization. The sensitivity analysis restores one layer type at a time to floating point and shows how much PPL that recovers. mlp.down_proj recovers the most.',
+    { zh: '再看误差定位。这里换了一个带敏感度分析的作业，数字和上一个不同。把某一类层单独恢复成浮点，mlp.down_proj 挽回的 PPL 最多。',
+      en: 'Now error localization, on a different job that includes the sensitivity analysis, so its numbers differ from the last one. Restoring mlp.down_proj to floating point recovers the most PPL.',
       hl: [card('敏感度分析')] },
     { zh: '混合精度建议：把 self_attn.v_proj 和 mlp.down_proj 提到 8 bit，预计 PPL 约 20.923，权重增加 51.19 MiB。预计值要以重新运行为准。',
-      en: 'Mixed-precision suggestion: raise self_attn.v_proj and mlp.down_proj to 8 bit, for an expected PPL of about 20.923 and 51.19 MiB more weights. The real result comes from re-running.',
+      en: 'Suggestion: raise self_attn.v_proj and mlp.down_proj to 8 bit, for an expected PPL of about 20.923 and 51.19 MiB more weights. The real result comes from re-running.',
       hl: [{ text: /建议把/ }] },
     { zh: '逐块误差热力图：横轴是块，纵轴是层类型，颜色是 SQNR，越深越低。前几个块更浅，SQNR 更高。',
-      en: 'The block-wise error heat map: blocks across, layer types down, colored by SQNR in dB, darker meaning lower. The first blocks are lighter, so their SQNR is higher.',
+      en: 'The error heat map: blocks across, layer types down, colored by SQNR in dB, darker is lower. The first blocks are lighter, so their SQNR is higher.',
       hl: [card('逐层量化误差热力图')] },
     { zh: '误差最大的层是 layers.16.self_attn.v_proj，输出 SQNR 21.80 dB，是混合精度的候选。',
       en: 'The worst layer is layers.16.self_attn.v_proj, with an output SQNR of 21.80 dB, a mixed-precision candidate.',

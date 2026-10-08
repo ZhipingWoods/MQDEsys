@@ -121,7 +121,14 @@ page.on('response', r => { if (r.status() >= 400) consoleLog.push(`http ${r.stat
 const events = [];
 async function openScene(sc) {
   await page.evaluate(() => window.__setCap && window.__setCap('')).catch(() => {});
-  if (sc.card) { await page.setContent(cardHtml(cards[sc.card][lang])); await page.evaluate(OVERLAY); await sleep(300); return; }
+  if (sc.card) {
+    // Cards are loaded from a file, not page.setContent(): a setContent page leaves the bottom ~85 px of the recorded
+    // video as flat grey (measured), which is where the caption bar sits. A file:// page records the full frame.
+    const f = path.join(work, `card-${sc.card}-${lang}.html`);
+    fs.writeFileSync(f, cardHtml(cards[sc.card][lang]));
+    await page.goto('file://' + f, { waitUntil: 'load' });
+    await page.evaluate(OVERLAY); await sleep(300); return;
+  }
   await page.goto(BASE + sc.url, { waitUntil: 'load' });
   await page.evaluate(OVERLAY);
   if (sc.wait) await page.locator(sc.wait).first().waitFor({ timeout: 20000 });
