@@ -155,6 +155,7 @@ function Overview({ rep, rs }: { rep: LLMJobReport; rs: LLMRecipeReport[] }) {
         </p>
       </div>
       {rs.some((r) => r.export) && <ExportCard rs={rs} />}
+      {rs.some((r) => Object.values(r.export ?? {}).some((e) => e.vllm)) && <VllmCard rs={rs} />}
       {rep.llamacpp && <LlamaCppCard d={rep.llamacpp} />}
     </>
   );
@@ -311,6 +312,72 @@ function ExportCard({ rs }: { rs: LLMRecipeReport[] }) {
       </table>
       <p className="note">
         检查方式：用参考解包器读回 checkpoint，逐层比较整数码与零点（必须完全一致），再用 fp16 scale 反量化出后端实际使用的权重重新测 PPL。GPTQ/AWQ 格式不含激活量化。AWQ/SmoothQuant 的平滑系数按输入分组共享，并折叠进前一层（norm 或 up_proj/v_proj），因此可以直接导出；GQA 模型的 o_proj 无法折叠，保持不做平滑。
+      </p>
+    </div>
+  );
+}
+
+function VllmCard({ rs }: { rs: LLMRecipeReport[] }) {
+  const rows = rs.flatMap((r) => Object.entries(r.export ?? {}).flatMap(([f, e]) => (e.vllm ? [{ r, f, v: e.vllm }] : [])));
+  const conc = rows.find((x) => x.v.load)?.v.load?.spec.concurrency;
+  return (
+    <div className="card table-wrap">
+      <h2>vLLM 部署（S11）与部署后精度（S12）</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>配方</th>
+            <th>格式</th>
+            <th>状态</th>
+            <th>量化内核</th>
+            <th className="num">启动</th>
+            <th className="num">权重显存</th>
+            <th className="num">KV 容量</th>
+            <th className="num">部署后 PPL</th>
+            <th className="num">相对真实权重</th>
+            <th className="num">服务 tok/s</th>
+            <th className="num">TTFT p50</th>
+            <th className="num">TPOT p50</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ r, f, v }) => (
+            <tr key={r.recipe + f}>
+              <td>
+                <b>{r.recipe}</b>
+              </td>
+              <td>
+                <span className="badge accent">{f}</span>
+              </td>
+              {v.status === "skipped" || v.status === "failed" ? (
+                <td colSpan={10} title={v.error ?? v.reason}>
+                  {v.status === "skipped" ? `未运行：${v.reason ?? ""}` : `失败：${v.diagnosis ?? v.error?.split("\n")[0] ?? ""}`}
+                </td>
+              ) : (
+                <>
+                  <td>{v.status === "succeeded" ? "成功" : "部分成功"}</td>
+                  <td className="mono small">{v.engine?.quant_kernel ?? "–"}</td>
+                  <td className="num">{v.startup_s == null ? "–" : `${fmt(v.startup_s, 0)} s`}</td>
+                  <td className="num">{v.engine?.weights_gib == null ? "–" : `${fmt(v.engine.weights_gib, 2)} GiB`}</td>
+                  <td className="num" title={v.engine?.max_concurrency_len ? `${v.engine.max_concurrency_len} token 请求约 ${fmt(v.engine.max_concurrency_at_len, 0)} 并发` : ""}>
+                    {v.engine?.kv_cache_tokens == null ? "–" : `${fmt(v.engine.kv_cache_tokens / 1000, 0)}k tok`}
+                  </td>
+                  <td className="num">{fmt(v.served_ppl, 3)}</td>
+                  <td className="num">{pct(v.served_vs_real_ppl_pct)}</td>
+                  <td className="num" title={v.load ? `${v.load.ok}/${v.load.spec.requests} 请求成功` : ""}>
+                    {fmt(v.load?.output_tokens_per_s, 0)}
+                  </td>
+                  <td className="num">{v.load?.ttft_ms?.p50 == null ? "–" : `${fmt(v.load.ttft_ms.p50, 0)} ms`}</td>
+                  <td className="num">{v.load?.tpot_ms?.p50 == null ? "–" : `${fmt(v.load.tpot_ms.p50, 1)} ms`}</td>
+                </>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="note">
+        每个导出的 checkpoint 由 <span className="mono">vllm serve</span> 直接加载。部署后 PPL 与上方的伪量化 / 真实权重 PPL 使用同一评测窗口，
+        取自 vLLM 返回的 prompt 对数概率，差异来自后端内核与精度。压测为闭环流式请求{conc ? `（${conc} 并发）` : ""}，TTFT / TPOT 取中位数。
       </p>
     </div>
   );

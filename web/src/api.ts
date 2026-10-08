@@ -228,6 +228,38 @@ export interface LLMExport {
   real_check?: { codes_identical: boolean; code_mismatch: number; zero_mismatch: number; w_max_abs: number; w_rel_l2_mean: number; layers: number };
   real_ppl?: number;
   real_vs_fake_ppl_pct?: number;
+  vllm?: VllmDeploy;
+}
+
+/** S11 + S12 on vLLM: serve the exported checkpoint, load-test it, and score it with its own prompt logprobs. */
+export interface VllmDeploy {
+  status: "succeeded" | "degraded" | "failed" | "skipped";
+  reason?: string;
+  error?: string;
+  diagnosis?: string | null;
+  startup_s?: number;
+  engine?: {
+    kv_cache_tokens?: number;
+    max_concurrency_at_len?: number;
+    max_concurrency_len?: number;
+    weights_gib?: number;
+    kv_cache_gib?: number;
+    quant_kernel?: string;
+    init_s?: number;
+  };
+  smoke?: { ok: boolean; text?: string };
+  load?: {
+    ok: number;
+    failed: number;
+    spec: { concurrency: number; requests: number; prompt_len: number; n_predict: number };
+    ttft_ms?: { p50?: number; p90?: number; p99?: number };
+    tpot_ms?: { p50?: number; p90?: number; p99?: number };
+    output_tokens_per_s?: number;
+    requests_per_s?: number;
+  };
+  served_ppl?: number;
+  served_windows?: number;
+  served_vs_real_ppl_pct?: number;
 }
 
 export interface LLMJobReport {
