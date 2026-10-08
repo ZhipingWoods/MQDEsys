@@ -183,9 +183,25 @@ curl -s -X POST localhost:18080/api/v1/fit -d '{"hardware":"nvidia/rtx4090"}' | 
 
 ## 7. 提交
 
+**提交和推送在 Mac 上做**（Mac 的仓库是主仓库，远端 `origin` 为私有 GitHub 仓库）；4090 只拉取，避免两边分叉。
+
 ```bash
-ssh 4090 'cd /cache/wuzhiping/MQDEsys && git add -A && git status --short && git commit -q -m "..."'
+# Mac：改完并在 4090 上验证通过后
+cd ~/modelbest/MQDEsys/MQDEsys
+git add -A && git status --short            # 确认没有 runs/、权重、*.gguf、内网信息
+git commit -m "..." && git push origin main
+
+# 4090：对齐到远端（不要在 4090 上提交）
+ssh 4090 'cd /cache/wuzhiping/MQDEsys && git pull --ff-only origin main'
 ```
+
+4090 访问 GitHub 使用部署密钥 `~/.ssh/id_rsa_wzp`，只在本仓库配置（不改该账户的 `~/.ssh/config`）：
+
+```bash
+git config core.sshCommand "ssh -i ~/.ssh/id_rsa_wzp -o IdentitiesOnly=yes"
+```
+
+仓库作者统一为 `Zhiping Wu <zhipingwucn@gmail.com>`（Mac 上已在本仓库局部配置）。**提交前确认不含内网地址、同机其他用户的服务信息和未公开的内部检查点名。**
 
 提交信息格式：
 

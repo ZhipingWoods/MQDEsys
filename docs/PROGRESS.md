@@ -87,7 +87,7 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 | D-4 | 2026-09-23 | GPU 验收环境 | 4090 服务器 GPU 2/3（已用） | 部分解决 |
 | D-5 | 2026-09-23 | W4A8 激活用 INT8 还是 FP8 | 目前 INT8 per-token 动态 | 待定 |
 | D-6 | 2026-09-24 | 接受上表 X-1~X-6 偏离？ | 建议接受 X-2~X-6；X-1 可在需要双向交互时再上 WebSocket | 待定 |
-| D-7 | 2026-09-24 | Git 远端 | 推到 github.com/zhipingwoods/MQDEsys？需要服务器上的推送凭证 | 远端为 `git@github.com:ZhipingWoods/MQDEsys.git`（**公开仓库**），Mac 的密钥有写权限（2026-10-08 试推送通过）；4090 没有推送凭证，改为 Mac 提交并推送、4090 用 https 拉取。**尚未推送**，见 2026-10-08 日志 |
+| D-7 | 2026-09-24 | Git 远端 | 推到 github.com/zhipingwoods/MQDEsys？需要服务器上的推送凭证 | 已建立：私有仓库 `git@github.com:ZhipingWoods/MQDEsys.git`；Mac 提交并推送，4090 用部署密钥只拉取（2026-10-08，见日志） |
 | D-8 | 2026-09-24 | VLA 精度指标 | 需要：动作反归一化统计 / 80→7 维映射，或 LIBERO 仿真闭环成功率 | 待定 |
 
 ---
@@ -173,17 +173,21 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
-### 2026-10-08 · Claude · 连接 GitHub 远端；3rdpart 改为子模块
+### 2026-10-08 · Claude · 连接 GitHub 远端；3rdpart 改为子模块；历史脱敏
 
-- **连接**：Mac 的 ed25519 密钥认证通过；`git ls-remote` 与 `git push --dry-run origin main` 均成功（快进 `4b0c10f..06d457b`）。远端原有一个 GitHub 初始化提交（MIT `LICENSE` + 两行 README），已合并进来，README 保留我们的。
-- **仓库位置变化**：Mac `~/modelbest/MQDEsys/MQDEsys` 现在是 git 仓库（历史取自 4090），本仓库本地配置的作者为 `Zhiping Wu <zhipingwucn@gmail.com>`。4090 上的 `main` 比 Mac 少两个提交（子模块之后的清理与合并），推送后在 4090 执行 `git remote add origin https://github.com/ZhipingWoods/MQDEsys.git && git pull --ff-only origin main` 即可对齐。
-- **3rdpart 子模块**：evalscope、FlagTree、GPTQModel、llmfit、lm-evaluation-harness、netron、unsloth 只登记上游 https 地址和固定提交（模式 160000），GitHub 上点击目录跳转到上游对应提交；已确认这些提交都在上游 `origin/main` 中。源码仍只在 4090 检出。`.gitignore` 去掉了 `3rdpart/`，DEVELOPMENT / REFERENCES / STRUCTURE 同步改写。
-- **不入库**：`runs/`、`build/`、`*.safetensors`、`*.gguf` 保持忽略；另把误入库的 `web/tsconfig.tsbuildinfo` 取消跟踪并忽略 `*.tsbuildinfo`。扫描整个历史：没有令牌或私钥，没有超过 1 MB 的文件；待推送内容约 2 MB（压缩后约 600 KB）。
-- **推送前待负责人确认**（仓库是公开的）：
-  1. 历史里有 4 个作者标识：`<本地默认身份已隐去>`（21 个提交）、`<旧邮箱已隐去>`（18）、`zhipingwucn@gmail.com`（2）、`<旧邮箱已隐去>`（1）。推送后这些邮箱会公开。
-  2. `docs/PROGRESS.md` 第 15 行有内网地址 `<内网地址已隐去>`；多处文档写了 `/cache/wuzhiping/...` 路径和同机其他人的服务进程号。
-  3. 19 个文件提到内部模型或检查点名（如 MiniCPM-RobotManip、<内部检查点>、Qwen3.8-27B-FP8），需确认是否可以公开。
-- **状态**：本地已合并并通过试推送，**未执行真正的推送**。
+- **远端**：`git@github.com:ZhipingWoods/MQDEsys.git`，**私有仓库**。Mac 的 ed25519 密钥可读写；4090 使用部署密钥 `~/.ssh/id_rsa_wzp`（只在本仓库的 `core.sshCommand` 里指定，不改该账户的 `~/.ssh/config`）。
+- **仓库位置**：Mac `~/modelbest/MQDEsys/MQDEsys` 现在是 git 仓库，**提交与推送都在 Mac 做**，4090 只 `git pull --ff-only`，避免两边分叉。
+- **3rdpart 子模块**：evalscope、FlagTree、GPTQModel、llmfit、lm-evaluation-harness、netron、unsloth 只登记上游 https 地址和固定提交（模式 160000），GitHub 上点击目录跳转到上游对应提交；固定的提交都在上游 `origin/main` 中。源码仍只在 4090 检出。`.gitignore` 去掉了 `3rdpart/`。
+- **不入库**：`runs/`、`build/`、`*.safetensors`、`*.gguf` 保持忽略；误入库的 `web/tsconfig.tsbuildinfo` 已取消跟踪并忽略 `*.tsbuildinfo`。
+- **历史重写（推送前，远端当时只有 GitHub 的初始提交）**：
+  1. 作者与提交者统一为 `Zhiping Wu <zhipingwucn@gmail.com>`。
+  2. 去掉内网地址，并把同机其他用户服务的进程号和名称改成“其他进程”。
+  3. 去掉内部检查点名及其架构细节（文档表格行、yaml 注释，以及“256 专家、top-8”与模型名的关联）。`MiniCPM-RobotManip`、`Qwen3.8-27B-FP8` 经负责人确认可公开，保留。
+  4. 重写会去掉远端初始提交的 GPG 签名，所以用 `ours` 合并把远端那个提交并回历史，推送是快进，没有强推。
+  5. 重写前的完整历史备份在 Mac `~/modelbest/mqdesys-pre-rewrite-20261008.bundle`（含被去掉的内容，仅本地保存，确认无需回退后可删除）。
+  6. 已对全部 45 个修订做内容与提交信息扫描，上述内容无残留。
+- **仍保留**：开发机路径 `/cache/wuzhiping/...` 与 `ssh 4090` 别名属于使用说明，未改；它们不含地址或凭证。
+- **工作流**：见 `docs/DEVELOPMENT.md` §7。
 
 ### 2026-10-05 · Claude · vLLM 加载冒烟测试（T-0701）
 
