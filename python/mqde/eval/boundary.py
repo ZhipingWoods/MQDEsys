@@ -122,7 +122,8 @@ def main() -> None:
     ap.add_argument("--hi", type=int)
     ap.add_argument("--step", type=int, default=256)
     ap.add_argument("--util", type=float, default=0.3)
-    ap.add_argument("--workdir", default="runs/boundary")
+    # Not under runs/: the server lists every directory there as a job, so probe logs would show up as fake jobs.
+    ap.add_argument("--workdir", default="boundary-runs")
     a = ap.parse_args()
 
     from pathlib import Path

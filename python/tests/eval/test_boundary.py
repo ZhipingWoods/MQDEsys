@@ -146,3 +146,19 @@ def test_host_rss_covers_the_process_tree(tmp_path: Path) -> None:
     finally:
         p.kill()
         p.wait()
+
+
+def test_default_workdir_is_not_a_job_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The server lists every directory under runs/ as a job: probe logs there turn up as fake jobs with state UNKNOWN."""
+    seen: list[str] = []
+
+    def fake_find(make: boundary.BackendFactory, max_len: int, **kw: object) -> dict:
+        seen.append(str(make(1, max_len).log_path))
+        return {"axis": "concurrency", "max_len": max_len, "max": 1, "capped": True, "first_fail": None, "probes": []}
+
+    monkeypatch.setattr(boundary, "find_max_concurrency", fake_find)
+    monkeypatch.setattr(sys, "argv", ["boundary", "vllm", str(tmp_path)])
+    monkeypatch.setenv("MQDE_VLLM_BIN", str(mock_backend.wrapper(tmp_path, "vllm")))
+    boundary.main()
+    (log,) = seen
+    assert Path(log).parts[0] == "boundary-runs" and "runs" not in Path(log).parts

@@ -12,6 +12,7 @@ web/dist/
 compile_commands.json
 # runtime outputs
 runs/
+boundary-runs/
 .mqde/
 # large / sensitive files never go into git
 *.safetensors

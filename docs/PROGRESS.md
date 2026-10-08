@@ -89,7 +89,7 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 | D-6 | 2026-09-24 | 接受上表 X-1~X-6 偏离？ | 建议接受 X-2~X-6；X-1 可在需要双向交互时再上 WebSocket | 待定 |
 | D-7 | 2026-09-24 | Git 远端 | 推到 github.com/zhipingwoods/MQDEsys？需要服务器上的推送凭证 | 已建立：私有仓库 `git@github.com:ZhipingWoods/MQDEsys.git`；Mac 提交并推送，4090 用部署密钥只拉取（2026-10-08，见日志） |
 | D-8 | 2026-09-24 | VLA 精度指标 | 需要：动作反归一化统计 / 80→7 维映射，或 LIBERO 仿真闭环成功率 | 待定 |
-| D-9 | 2026-10-08 | 预估器对 vLLM 这类批处理引擎的最大并发偏低约 7 倍（L2：改 `cpp/include/mqde/estimator/estimator.h`） | 预估器把每个序列的激活内存（Qwen2.5-0.5B 1024 上下文约 77 MB）都计入并发上限，这是 HF 逐序列前向的做法；vLLM 的激活内存由 `max_num_batched_tokens` 决定、不随并发增长，KV 才是并发的瓶颈。实测 Qwen2.5-0.5B FP8、利用率 0.3、上下文 1024：vLLM 报 509 并发，预估 74；权重预估 0.59 GiB 与实测 0.59 GiB 一致。建议给后端画像加 `activation_model`（`per_seq` 或 `batched`） 与 `max_batched_tokens` 两个字段，`data/backends/vllm.yaml` 用 `batched` | 待批准；批准前 `vllm.yaml` 的并发结果只能当保守下限 |
+| D-9 | 2026-10-08 | 预估器对 vLLM 这类批处理引擎的最大并发偏低约 7 倍（L2：改 `cpp/include/mqde/estimator/estimator.h`） | 预估器把每个序列的激活内存（Qwen2.5-0.5B 1024 上下文约 77 MB）都计入并发上限，这是 HF 逐序列前向的做法；vLLM 的激活内存由 `max_num_batched_tokens` 决定、不随并发增长，KV 才是并发的瓶颈。实测 Qwen2.5-0.5B FP8、利用率 0.3、上下文 1024：vLLM 报 509 并发，预估 74；权重预估 0.59 GiB 与实测 0.59 GiB 一致。建议给后端画像加 `activation_model`（`per_seq` 或 `batched`） 与 `max_batched_tokens` 两个字段，`data/backends/vllm.yaml` 用 `batched` | 待批准；批准前 `vllm.yaml` 的并发结果只能当保守下限。**更多证据（2026-10-08，真实 vLLM 启动日志）**：Qwen2.5-0.5B AWQ，利用率 0.3，上下文 1024 时 vLLM 报告可放 547 个并发，预估 76（比值 0.139）；上下文 32768 时 vLLM 17.09，预估 2（比值 0.117）；两处权重预估/实测都是 0.978。权重准、并发偏低，且上下文越长偏得越多，与“每序列都计入激活内存”的解释一致 |
 
 ---
 
@@ -178,6 +178,15 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **下一步**（按顺序）：T-R06→R07→R08（GPTQModel 式量化流程），T-R11→R12→R13（evalscope 式评测），T-R14→R15（FlagTree 式多硬件）。
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
+
+### 2026-10-08（晚） · Claude · 4090 恢复后：门禁、真实 vLLM 边界搜索
+
+- **4090 门禁**：同步到 `177d346` 后完整门禁全绿（clang-tidy 仍因工具链 SKIP），pytest 223 passed、8 skipped。上一轮在 4090 上失败的两项（clang-format、skills 路径测试）已确认修复。服务已用新二进制重启，新接口生效。
+- **真实 vLLM 边界搜索**（Qwen2.5-0.5B AWQ，GPU 3，利用率 0.3）：并发轴 `lo=1, hi=1024, 上下文 1024`：两个探测点都通过，`capped=true`；上下文轴 `并发 4, 1024 到 32768`：两个探测点都通过，`capped=true`。**没有找到真正的显存边界**：vLLM 超过 KV 容量时排队而不是失败，而模型自己把上下文限制在 32768。要找到边界需要更大的模型或更小的利用率，这次没做。
+- **探测点的 KV 容量取决于启动参数**：并发 1 时 564,896 token，`max_num_seqs=1024` 时 486,080 token；所以“容量”不是模型的固有属性。
+- **我造成的一个问题（已修）**：搜索默认把探测日志写在 `runs/boundary-*`，而服务端把 `runs/` 下每个目录都当作作业，列表里多出两个状态 `UNKNOWN` 的假作业。默认目录改为仓库根的 `boundary-runs/`（已加入 `.gitignore`），现有两个目录已移走，并加测试固定该约定。
+- **B-5 没有复现**：重启服务时没有运行中的作业，所以“重启后运行中作业状态停在 RUNNING”这一具体场景没被验证，仍是未复现的推断。
+- **D-9** 增加了真实数据，见决策表。
 
 ### 2026-10-08 · Claude · HTML 报告、任务级评测、ADR-0002、文档站 / demo / skills / 隐私扫描
 
