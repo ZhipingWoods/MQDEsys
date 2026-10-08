@@ -142,9 +142,9 @@
 | T-0901 | 阶段归因（瀑布）数据链路 | P9 | T-0702,T-0802 | L1 | PARTIAL (2026-09-24, modality-level attribution only) |
 | T-0902 | 敏感度分析（逐层回退） | P9 | T-0509 | L1 | PARTIAL (2026-09-29, block/type FP fallback in llm_job; 7B GPU timing pending) |
 | T-0903 | 前端：误差页完整版 | P9 | T-0901,T-0902 | L1 | TODO |
-| T-0904 | 混合精度建议 → 一键生成新作业 | P9 | T-0903,T-0608 | L1 | PARTIAL (2026-09-29, suggest() + UI one-click clone; Playwright spec pending) |
+| T-0904 | 混合精度建议 → 一键生成新作业 | P9 | T-0903,T-0608 | L1 | PARTIAL (2026-10-08, suggest() + UI one-click clone; Playwright-based UI test web/e2e/clone_from_suggestion.mjs, 14/14 on macOS + Chrome, mutation-checked, found and fixed a page crash on a report without `spec`; NOT in the gate: the dev server has no Playwright or Chrome, wiring it in is D-10) |
 | T-0905 | 反馈闭环（S15）：预估自动校准 | P9 | T-0209,T-0804 | L1 | TODO |
-| T-0906 | 误差归因验收（注入测试） | P9 | T-0903 | L1 | TODO |
+| T-0906 | 误差归因验收（注入测试） | P9 | T-0903 | L1 | PARTIAL (2026-10-08, python/tests/test_error_attribution.py: injection via the product's own mixed-precision policy (one layer at 2 bit), the damaged layer is ranked worst by out SQNR in 4 of 4 victims with margins >= 34x the undamaged spread; corrupted packing is the largest fake-to-real error; mutation-checked. The spec's debug.inject_noise / debug.corrupt_pack switches were not added (not needed), A§10.2 acceptance was not available to compare; the FP-fallback sensitivity ranking is NOT asserted because it is noise-dominated on a tiny random model) |
 | T-1001 | 多模态框架：per_modality 配置与 set_modality | P10 | T-0508 | L2 | TODO |
 | T-1002 | VLM 适配（Qwen2-VL / LLaVA） | P10 | T-1001 | L1 | TODO |
 | T-1003 | MoE / MLA 结构支持（DeepSeek 系） | P10 | T-0508,T-0208 | L1 | TODO |

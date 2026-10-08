@@ -90,6 +90,7 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 | D-7 | 2026-09-24 | Git 远端 | 推到 github.com/zhipingwoods/MQDEsys？需要服务器上的推送凭证 | 已建立：私有仓库 `git@github.com:ZhipingWoods/MQDEsys.git`；Mac 提交并推送，4090 用部署密钥只拉取（2026-10-08，见日志） |
 | D-8 | 2026-09-24 | VLA 精度指标 | 需要：动作反归一化统计 / 80→7 维映射，或 LIBERO 仿真闭环成功率 | 待定 |
 | D-9 | 2026-10-08 | 预估器对 vLLM 这类批处理引擎的最大并发偏低约 7 倍（L2：改 `cpp/include/mqde/estimator/estimator.h`） | 预估器把每个序列的激活内存（Qwen2.5-0.5B 1024 上下文约 77 MB）都计入并发上限，这是 HF 逐序列前向的做法；vLLM 的激活内存由 `max_num_batched_tokens` 决定、不随并发增长，KV 才是并发的瓶颈。实测 Qwen2.5-0.5B FP8、利用率 0.3、上下文 1024：vLLM 报 509 并发，预估 74；权重预估 0.59 GiB 与实测 0.59 GiB 一致。建议给后端画像加 `activation_model`（`per_seq` 或 `batched`） 与 `max_batched_tokens` 两个字段，`data/backends/vllm.yaml` 用 `batched` | 待批准；批准前 `vllm.yaml` 的并发结果只能当保守下限。**更多证据（2026-10-08，真实 vLLM 启动日志）**：Qwen2.5-0.5B AWQ，利用率 0.3，上下文 1024 时 vLLM 报告可放 547 个并发，预估 76（比值 0.139）；上下文 32768 时 vLLM 17.09，预估 2（比值 0.117）；两处权重预估/实测都是 0.978。权重准、并发偏低，且上下文越长偏得越多，与“每序列都计入激活内存”的解释一致 |
+| D-10 | 2026-10-08 | 把浏览器测试接入 `scripts/check_all.sh`（L2：门禁属于构建/工具链配置） | `web/e2e/clone_from_suggestion.mjs` 需要 Playwright 与 Chrome，4090 两者都没有，目前只能在 Mac 上运行。建议在门禁里加一组“有 Playwright 和 Chrome 才运行，否则 SKIP 并写原因”，退出码 3 已按此约定；或在开发机装 Playwright 自带的 Chromium | 待批准；批准前这个测试不属于门禁 |
 
 ---
 
@@ -178,6 +179,13 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **下一步**（按顺序）：T-R06→R07→R08（GPTQModel 式量化流程），T-R11→R12→R13（evalscope 式评测），T-R14→R15（FlagTree 式多硬件）。
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
+
+### 2026-10-08（深夜） · Claude · T-0906 注入归因验收、T-0904 浏览器测试
+
+- **T-0906**（`python/tests/test_error_attribution.py`，8 个测试）：把一个线性层在混合精度策略里设成 2 bit、其余 4 bit，经由真实的量化与追踪路径注入误差。4 个受害层每次都在输出 SQNR 排名里最差，差距是未受损模型自然离散（0.115 dB）的至少 34 倍；对照组没有离群层。破坏打包后，被破坏的层是 fake 到 real 误差最大的层。**阈值来自数据而不是拍脑袋**：我最初拍的 5 dB 被 `o_proj` 的 3.96 dB 否决，原因是它的输入激活更平，同样的 2 bit 损伤造成的 dB 更小；改成“按对照组离散的倍数”。**故意破坏两次**（让损伤不生效；让追踪把每层都报成 40 dB），各有 6 个测试变红，还原后 8 个全绿。**没有断言 FP 回退敏感度排名**：在随机小模型上对照组也把 block 0 排第一，指标被噪声主导，断言它没有意义。
+- **T-0904**（`web/e2e/clone_from_suggestion.mjs`）：自带临时 `mqde serve` 与替身执行器（`fake_worker.py`），点击“按建议生成新作业”走真实 REST，但不碰 GPU。14 项检查：跳转、只新增 1 个作业、`-mp` 后缀、只保留所选配方、规则与建议一致、其余设置沿用、另一个配方页给的是它自己的建议。**测试抓到一个真实的前端缺陷**：`Job.tsx` 写成 `rep?.spec.name`，报告缺 `spec` 时整个作业页抛异常（改为 `rep?.spec?.name`）；真实流水线会带 `spec`，所以平时看不到。**故意破坏按钮**（不再收窄配方）后 2 项变红。该测试**不在门禁里**（4090 无 Playwright 与 Chrome），见 D-10。
+- **我一开始的两处过严**：规则用 `JSON.stringify` 逐字符比较，而服务器经 YAML 往返会重排键；改为结构比较。
+- **门禁**：4090 上已全绿（pytest 223 passed、8 skipped）；本批的改动（T-0906 测试、boundary 默认目录、`Job.tsx`）尚未在 4090 上重跑。
 
 ### 2026-10-08（晚） · Claude · 4090 恢复后：门禁、真实 vLLM 边界搜索
 
