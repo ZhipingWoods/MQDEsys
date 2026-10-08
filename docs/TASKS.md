@@ -125,16 +125,16 @@
 | T-0608 | 混合精度与 keep_fp 策略 | P6 | T-0509 | L1 | DONE (2026-09-29, regex/block rules, skip; exported as GPTQModel dynamic) |
 | T-0609 | 外部算法适配器（GPTQModel / llm-compressor） | P6 | T-0508 | L3 | TODO |
 | T-0610 | 算法组合（AWQ+GPTQ）与 QuaRot（扩展） | P6 | T-0601,T-0602 | L1 | PARTIAL (2026-09-29, awq+gptq / smoothquant+gptq; no QuaRot) |
-| T-0701 | Exporter 接口 + vLLM 导出 | P7 | T-0405,T-0602 | L2 | PARTIAL (2026-10-05: compressed-tensors W4A16 + FP8 CPU format tests; AWQ + CT vLLM 0.30.0 load smoke PASS; GPTQ smoke FAIL (sym=False rejected by vLLM 0.30.0 validator, not export bug); Marlin byte-exact vs vLLM ref; 7B smoke pending GPU) |
+| T-0701 | Exporter 接口 + vLLM 导出 | P7 | T-0405,T-0602 | L2 | PARTIAL (2026-10-08: the exporter's own AWQ / compressed-tensors W4A16 / compressed-tensors FP8 checkpoints of Qwen2.5-0.5B load in vLLM 0.30.0 and serve (served PPL within +0.01% / +0.01% / +0.27% of the real-weight PPL); asymmetric GPTQ is rejected by vLLM 0.30.0's validator (not an export bug); Marlin byte-exact vs vLLM ref; 7B W4A16 / FP8 acceptance run pending a 7B checkpoint) |
 | T-0702 | Fake/Real 一致性检查（S10） | P7 | T-0701 | L1 | DONE (2026-09-29, 0 code mismatches; real PPL +0.0005% vs fake) |
-| T-0703 | 部署后端接口 + vLLM 适配器（S11） | P7 | T-0701,T-0504 | L2 | TODO |
+| T-0703 | 部署后端接口 + vLLM 适配器（S11） | P7 | T-0701,T-0504 | L2 | PARTIAL (2026-10-08, Python only: backend/base.py ServerBackend + vllm_server.py (launch, health, log diagnosis, engine_info) + llm_job `deploy_vllm` stage + data/backends/vllm.yaml; verified on real vLLM 0.30.0; C++ `deploy_backend.h` (L2, needs approval) and `ctest -R backend_` not done) |
 | T-0704 | SGLang 导出与适配 | P7 | T-0703 | L1 | TODO |
 | T-0705 | llama.cpp（GGUF）导出与适配 | P7 | T-0703,T-0405 | L1 | DONE (2026-10-05, Q4_K deploy via llama-server on Linux CPU + Apple M5 CPU/Metal; tests/integration/deploy_llamacpp_cpu.sh; UI serve columns; CUDA build not exercised) |
 | T-0706 | TensorRT-LLM 导出与适配（扩展） | P7 | T-0703 | L1 | TODO |
 | T-0801 | 精度评测：lm-eval-harness / evalscope / 自定义 | P8 | T-0510 | L3 | TODO |
-| T-0802 | 部署后精度评测（S12） | P8 | T-0801,T-0703 | L1 | TODO |
-| T-0803 | 性能压测器（S13）：TTFT/TPOT/吞吐 | P8 | T-0703 | L1 | TODO |
-| T-0804 | 显存采样与 OOM 边界搜索 | P8 | T-0803,T-0202 | L1 | TODO |
+| T-0802 | 部署后精度评测（S12） | P8 | T-0801,T-0703 | L1 | PARTIAL (2026-10-08, eval/served_ppl.py: PPL from the backend's own prompt_logprobs, same windows as the fake/real PPL; vLLM only. lm-eval / evalscope adapters wait on T-0801's ADR) |
+| T-0803 | 性能压测器（S13）：TTFT/TPOT/吞吐 | P8 | T-0703 | L1 | PARTIAL (2026-10-08, Python eval/loadtest.py: closed loop + Poisson open loop, exact-length token prompts, TTFT/TPOT/ITL/E2E p50/p90/p99; against the mock (TTFT 100 ms, TPOT 20 ms) error < 2 ms. The spec's C++ implementation is not done) |
+| T-0804 | 显存采样与 OOM 边界搜索 | P8 | T-0803,T-0202 | L1 | PARTIAL (2026-10-08, eval/resources.py 100 ms GPU/host sampler, eval/boundary.py bisection over concurrency / context with a fresh backend per probe; tested on the mock. Not yet run against real vLLM, and not yet in the report next to the estimator) |
 | T-0805 | HAL 微基准（带宽/算力实测） | P8 | T-1101 | L1 | TODO |
 | T-0806 | 报告生成（JSON + HTML） | P8 | T-0802,T-0804 | L1 | TODO |
 | T-0807 | 前端：评估报告页 + 对比页 | P8 | T-0806 | L1 | PARTIAL (2026-09-30, LLM/VLA compare tabs + llama.cpp table; standalone report page pending T-0806) |

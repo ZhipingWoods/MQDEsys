@@ -89,6 +89,7 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 | D-6 | 2026-09-24 | 接受上表 X-1~X-6 偏离？ | 建议接受 X-2~X-6；X-1 可在需要双向交互时再上 WebSocket | 待定 |
 | D-7 | 2026-09-24 | Git 远端 | 推到 github.com/zhipingwoods/MQDEsys？需要服务器上的推送凭证 | 已建立：私有仓库 `git@github.com:ZhipingWoods/MQDEsys.git`；Mac 提交并推送，4090 用部署密钥只拉取（2026-10-08，见日志） |
 | D-8 | 2026-09-24 | VLA 精度指标 | 需要：动作反归一化统计 / 80→7 维映射，或 LIBERO 仿真闭环成功率 | 待定 |
+| D-9 | 2026-10-08 | 预估器对 vLLM 这类批处理引擎的最大并发偏低约 7 倍（L2：改 `cpp/include/mqde/estimator/estimator.h`） | 预估器把每个序列的激活内存（Qwen2.5-0.5B 1024 上下文约 77 MB）都计入并发上限，这是 HF 逐序列前向的做法；vLLM 的激活内存由 `max_num_batched_tokens` 决定、不随并发增长，KV 才是并发的瓶颈。实测 Qwen2.5-0.5B FP8、利用率 0.3、上下文 1024：vLLM 报 509 并发，预估 74；权重预估 0.59 GiB 与实测 0.59 GiB 一致。建议给后端画像加 `activation_model`（`per_seq` 或 `batched`） 与 `max_batched_tokens` 两个字段，`data/backends/vllm.yaml` 用 `batched` | 待批准；批准前 `vllm.yaml` 的并发结果只能当保守下限 |
 
 ---
 
@@ -172,6 +173,35 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **下一步**（按顺序）：T-R06→R07→R08（GPTQModel 式量化流程），T-R11→R12→R13（evalscope 式评测），T-R14→R15（FlagTree 式多硬件）。
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
+
+### 2026-10-08 · Claude · S11 vLLM 部署、S12 部署后 PPL、S13 压测器、T-0804 采样与边界搜索
+
+- **状态**：T-0703 / T-0802 / T-0803 / T-0804 均 PARTIAL（见 TASKS.md 各行的缺口）。
+- **本次完成**（全部 Python，L1 新文件；C++ 头文件部分属 L2，未动）：
+  1. `backend/base.py`：`ServerBackend`（启动、就绪轮询、日志文件、按日志诊断失败、进程组终止）；`LlamaServer` 改为继承它，对外名字不变。
+  2. `backend/vllm_server.py`：`vllm serve` 子进程（二进制取 `MQDE_VLLM_BIN`、PATH、`build/vllm/bin/vllm`），可指定 GPU；识别实测遇到的失败（非对称 GPTQ 不被接受、显存不足、KV 缓存装不下 `max_model_len` 等）；`engine_info()` 读 KV 容量、权重显存、量化内核。
+  3. `eval/loadtest.py`：固定并发与泊松到达两种模式，精确 token 数的输入，OpenAI 流式与 llama 原生两种协议；TTFT / TPOT / ITL / E2E 的 p50/p90/p99、吞吐。对 mock（TTFT 100 ms、TPOT 20 ms）误差 < 2 ms。
+  4. `eval/served_ppl.py`：用 vLLM 的 `prompt_logprobs` 算部署后 PPL，窗口协议与伪量化 / 真实权重 PPL 相同。
+  5. `llm_job`：`--vllm`（或 YAML `deploy.vllm`）对每个导出的 checkpoint 做 `deploy_vllm` 阶段：冒烟、压测、引擎信息、部署后 PPL 与真实权重 PPL 的差。前端「vLLM 部署（S11）与部署后精度（S12）」卡片显示这些。
+  6. `export/compressed_tensors.py` 补齐读回：`real_check` / `use_real_weights` 现在支持 compressed-tensors（整数与 FP8），所以该格式也走完导出、对拍、真实权重 PPL 的链路。
+  7. `eval/resources.py`（100 ms GPU 显存 / 功耗 / 利用率与主机内存采样）与 `eval/boundary.py`（按并发或上下文二分，每个探测点重启后端；失败带诊断）。
+  8. `data/backends/vllm.yaml`：vLLM 后端画像。
+- **修掉的缺陷**（都是端到端运行才暴露的）：
+  - 在 CUDA 上量化后导出 GPTQ / AWQ 会报 `can't convert cuda tensor to numpy`（`layer_codes` 缺 `.cpu()`）。新增 `tests/export/test_cuda_export.py`，有 GPU 时运行；换回旧代码实测 3 个失败。
+  - `run_load` 在服务器不可达且没指定模型名时直接抛异常，现在按失败请求计数。
+  - 日志解析把采样器那行当成量化内核；改为要求以 `Kernel` 结尾，并用真实日志行做测试。
+  - 我的 rsync 把一份旧的 `_core*.so` 盖到了 4090 上（缺 `pack_int`），重新编译修复；之后同步一律 `--exclude '*.so'`。
+- **端到端实测**（4090，GPU 3，Qwen2.5-0.5B，GPTQ 量化，评测窗口 40×512）。导出器自己产出的 checkpoint 直接被 `vllm serve` 加载：
+
+  | 格式 | 量化内核 | 真实权重 PPL | vLLM 部署后 PPL | 差 | 启动 | TTFT p50 | TPOT p50 | 吞吐（4 并发） |
+  |------|----------|-------------:|----------------:|---:|-----:|---------:|---------:|--------------:|
+  | W4A16 AWQ | MarlinLinearKernel | 20.656 | 20.658 | +0.01% | 28 s | 52 ms | 16.2 ms | 240 tok/s |
+  | W4A16 compressed-tensors | MarlinLinearKernel（CompressedTensorsWNA16） | 20.656 | 20.658 | +0.01% | 27 s | 55 ms | 16.9 ms | 225 tok/s |
+  | FP8 compressed-tensors | CutlassFP8ScaledMMLinearKernel | 18.333 | 18.382 | +0.27% | 28 s | 65 ms | 19.6 ms | 199 tok/s |
+
+  纠正：2026-10-05 的「compressed-tensors 加载通过」当时用的是 GPTQ 张量转出来的检查点，不是导出器直接产物；上表才是导出器产物的结果。
+- **预估器对照**（D-9）：权重预估 0.59 GiB = 实测 0.59 GiB；但最大并发预估 74、vLLM 实测 509，原因与建议见 D-9。
+- **未完成**：T-0804 尚未对真实 vLLM 跑边界搜索（每个探测点启动约 30 s）；报告里还没有把边界结果与预估器并排展示；T-0803 的 C++ 实现；T-0701 的 7B 验收（本机没有 7B 检查点）；T-0801 需要 ADR 才能引入 lm-eval / evalscope。
 
 ### 2026-10-08 · Claude · 连接 GitHub 远端；3rdpart 改为子模块；历史脱敏
 
