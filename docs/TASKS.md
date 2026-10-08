@@ -131,13 +131,13 @@
 | T-0704 | SGLang 导出与适配 | P7 | T-0703 | L1 | TODO |
 | T-0705 | llama.cpp（GGUF）导出与适配 | P7 | T-0703,T-0405 | L1 | DONE (2026-10-05, Q4_K deploy via llama-server on Linux CPU + Apple M5 CPU/Metal; tests/integration/deploy_llamacpp_cpu.sh; UI serve columns; CUDA build not exercised) |
 | T-0706 | TensorRT-LLM 导出与适配（扩展） | P7 | T-0703 | L1 | TODO |
-| T-0801 | 精度评测：lm-eval-harness / evalscope / 自定义 | P8 | T-0510 | L3 | TODO |
+| T-0801 | 精度评测：lm-eval-harness / evalscope / 自定义 | P8 | T-0510 | L3 | PARTIAL (2026-10-08, custom JSONL checks done: eval/custom.py + data/datasets/smoke_qa.jsonl; lm-eval / evalscope adapters BLOCKED on ADR-0002 (Proposed, recommends subprocess calls to the official CLIs, no new dependency) awaiting maintainer decision) |
 | T-0802 | 部署后精度评测（S12） | P8 | T-0801,T-0703 | L1 | PARTIAL (2026-10-08, eval/served_ppl.py: PPL from the backend's own prompt_logprobs, same windows as the fake/real PPL; vLLM only. lm-eval / evalscope adapters wait on T-0801's ADR) |
 | T-0803 | 性能压测器（S13）：TTFT/TPOT/吞吐 | P8 | T-0703 | L1 | PARTIAL (2026-10-08, Python eval/loadtest.py: closed loop + Poisson open loop, exact-length token prompts, TTFT/TPOT/ITL/E2E p50/p90/p99; against the mock (TTFT 100 ms, TPOT 20 ms) error < 2 ms. The spec's C++ implementation is not done) |
 | T-0804 | 显存采样与 OOM 边界搜索 | P8 | T-0803,T-0202 | L1 | PARTIAL (2026-10-08, eval/resources.py 100 ms GPU/host sampler, eval/boundary.py bisection over concurrency / context with a fresh backend per probe; tested on the mock. Not yet run against real vLLM, and not yet in the report next to the estimator) |
 | T-0805 | HAL 微基准（带宽/算力实测） | P8 | T-1101 | L1 | TODO |
-| T-0806 | 报告生成（JSON + HTML） | P8 | T-0802,T-0804 | L1 | TODO |
-| T-0807 | 前端：评估报告页 + 对比页 | P8 | T-0806 | L1 | PARTIAL (2026-09-30, LLM/VLA compare tabs + llama.cpp table; standalone report page pending T-0806) |
+| T-0806 | 报告生成（JSON + HTML） | P8 | T-0802,T-0804 | L1 | PARTIAL (2026-10-08, self-contained report.en.html / report.zh.html written by every LLM job and served at /api/v1/jobs/<id>/report.<lang>.html; JSON schema validation, `mqde report` CLI and VLA job reports not done; the spec asks for C++ `ctest -R report_`, this is Python) |
+| T-0807 | 前端：评估报告页 + 对比页 | P8 | T-0806 | L1 | PARTIAL (2026-09-30, LLM/VLA compare tabs + llama.cpp table; standalone report page: job page links to the HTML report from 2026-10-08, VLA jobs not covered) |
 | T-0808 | M4 验收：全配方 × 多后端参考集 | P8 | T-0807,T-0606,T-0705 | L1 | TODO |
 | T-0901 | 阶段归因（瀑布）数据链路 | P9 | T-0702,T-0802 | L1 | PARTIAL (2026-09-24, modality-level attribution only) |
 | T-0902 | 敏感度分析（逐层回退） | P9 | T-0509 | L1 | PARTIAL (2026-09-29, block/type FP fallback in llm_job; 7B GPU timing pending) |
@@ -158,7 +158,7 @@
 | T-1106 | 插件 SDK 文档与 ABI 兼容检查 | P11 | T-1101 | L1 | TODO |
 | T-1201 | Docker 镜像与 compose | P12 | T-0515 | L2 | TODO |
 | T-1202 | pip wheel 打包与发布 | P12 | T-0515 | L2 | TODO |
-| T-1203 | 文档站（GitHub Pages） | P12 | T-0008 | L1 | TODO |
+| T-1203 | 文档站（GitHub Pages） | P12 | T-0008 | L1 | PARTIAL (2026-10-08, docs/site: Sphinx en + zh, -W clean; GitHub Pages deployment needs a workflow under .github/ (L2), kept as docs/site/pages-workflow.proposal.yml awaiting approval) |
 | T-1204 | 安全加固（凭证、路径沙箱、认证） | P12 | T-0512 | L3 | TODO |
 | T-1205 | 可观测性（/metrics、可复现重放） | P12 | T-0511 | L1 | TODO |
 | T-1206 | 夜间 GPU 回归与性能看板 | P12 | T-0808 | L2 | TODO |

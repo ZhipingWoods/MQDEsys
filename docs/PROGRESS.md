@@ -102,6 +102,11 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 | B-3 | 2026-09-24 | 前端 JS bundle 1.2 MB（ECharts 全量） | 首屏慢 | 按需引入 echarts/core |
 | B-4 | 2026-09-24 | 预估的激活项为经验公式；BF16 预估 4.02 GiB vs 实测 torch 峰值 3.65 GiB（未含 CUDA context） | 需 S15 回填校准 | T-0905 |
 | B-5 | 2026-09-24 | server 的 JobRunner 只在内存记录进程；重启后运行中作业状态靠 events.jsonl 推断 | 重启时运行中作业会“失联” | T-0504 |
+| B-6 | 2026-10-08 | AGENTS.md §8 指向 `docs/guides/add-algorithm.md`、`add-model-adapter.md`、`add-backend.md`、`add-hardware-plugin.md`、`add-recipe.md`，五个文件都不存在（只有 quickstart 和 coding-standards） | 新成员按文档找不到入口；`.claude/skills/mqde-extend` 与 `docs/site` 的“扩展”页目前是替代 | 补写这五份指南（L1），或把 AGENTS.md 改指向替代页（L2） |
+| B-7 | 2026-10-08 | AGENTS.md / DEVELOPMENT.md 提到 `pip install -e ".[dev,quant]"`、`pnpm lint/test/e2e`、`scripts/gen_api.sh`、`scripts/contract_test.sh`、`data/golden/`、`tests/integration/test_e2e_tiny.py`、`mqde list recipes\|hardware\|families`：这些都不存在（根目录没有 `pyproject.toml`；`web/package.json` 只有 dev/build/typecheck/preview；子命令是 `mqde recipes`、`mqde hardware`） | 文档里的命令照抄会失败 | 改文档（L2）或补实现 |
+| B-8 | 2026-10-08 | `CMakePresets.json` 只有 `dev`、`asan`，TASKS T-0002 写的是 dev/release/asan/cuda；`dev` 预设依赖 `$CONDA_PREFIX`，macOS 需手动 configure（见 mqde-dev-gate skill）；`check_all.sh` 默认 `BUILD_DIR=build/dev` | 非 conda 环境无法直接用预设 | T-0006 / 构建配置（L2） |
+| B-9 | 2026-10-08 | **待核实**（demo 录制子任务的观察，隧道断开时无法复查）：“模型结构”页面可能显示服务器模型库里的所有检查点名（包括不对外的检查点），录 demo 时跳过了该页；文档站截图已确认只含公开名字 | 任何能打开页面的人都能看到库里的内部名字 | 增加按 `--allow` 之外或配置隐藏的过滤；暂不影响仓库内容 |
+| B-10 | 2026-10-08 | **待核实**（同上，来自 demo 录制）Web UI：作业页不会进入 network idle（持续轮询 / 流）；预估表 notes 列换行过长；llama.cpp 表右侧 TTFT/TPOT 列在 1440 px 宽下被裁；FP8 的量化方案显示为 `fp8_e4m38` | 观感与自动化截图 | 前端（L1） |
 
 ---
 
@@ -173,6 +178,18 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **下一步**（按顺序）：T-R06→R07→R08（GPTQModel 式量化流程），T-R11→R12→R13（evalscope 式评测），T-R14→R15（FlagTree 式多硬件）。
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
+
+### 2026-10-08 · Claude · HTML 报告、任务级评测、ADR-0002、文档站 / demo / skills / 隐私扫描
+
+- **本次提交（已推送前的本地提交）**：`68ad6fe` HTML 报告；`7c98884` 任务级评测与 ADR-0002；`935f6a8` 文档站、demo 管线、skills、推送前隐私扫描。
+- **T-0806 报告页**：每个 LLM 作业写出 `report.en.html` / `report.zh.html`（内联 SVG、无脚本、无外部资源、可离线打开）；服务端 `GET /api/v1/jobs/<id>/report.<en|zh>.html`（只开放这两个固定文件名，带 CSP）；作业页在成功后给出入口。用 3 份真实作业报告（已去路径、裁剪）做夹具；端到端测试用随机小模型跑完整 `LLMJob` 并检查页面写出；接口测试在真实服务器上试了 8 种路径穿越写法，全部非 200。渲染失败只记警告、不使作业失败。
+- **T-0801**：`eval/custom.py`（JSONL，exact_match / contains / regex / rouge_l）与 12 题冒烟集已完成；lm-eval / evalscope 适配器需要 ADR，已写 `docs/adr/0002-…md`（Proposed，建议以子进程调用官方 CLI、不新增依赖），**等负责人决定**。
+- **文档站**（`docs/site`，子任务产出，我重新构建并核对）：en/zh 两套同构 Sphinx，`-W` 构建 0 警告（我注入一个坏链接确认 `-W` 确实会失败），1570 处内部引用全部有效，9 张截图我看了其中的 `graph.png`、`fit.png`，只含公开模型名。Pages 部署的工作流只作为提案 `pages-workflow.proposal.yml`（改 `.github/` 属 L2）。
+- **demo 视频**（子任务产出）：中文 272.9 s、英文 260.6 s，H.264 + AAC，各约 9.5 MB，已被 `.gitignore` 排除。我抽了 6 帧英文版自己看：画面、高亮与字幕对得上。**未达标 / 未核实的点**：① 总长约 4.5 分钟，超过 3 到 4 分钟的目标；② 开场第一句 14 秒，屏幕上只显示到一半（字幕文本完整）；③ 旁白里“W4A8 是 21.933”只能在真实报告里找到 `21.9326…` 这个评估位点，对比页实际显示哪个位点我没能核对（隧道断开）；④ 中文版我只抽了关键帧的文件名，没有逐帧看。
+- **skills**（`.claude/skills`，4 个）与 `python/tests/test_skills.py`：校验 front matter、长度、使用与不使用说明，以及文中提到的每个仓库路径都存在。注意：它们提到 `docs/site/`，所以必须与文档站同一个提交。
+- **推送前隐私扫描** `scripts/privacy_scan.sh` + 15 个测试：能抓私有 IP、令牌格式、二进制与大文件、提交身份，另有一个放在仓库外的私有模式文件。用它扫了重写前的备份包，抓到了旧邮箱、内网地址和内部检查点名，证明规则有效；扫当前历史为 0 失败。中途发现过我自己的一次扫描因为把换行分隔的文件列表当成一个文件名而完全无效，已用“先对已知坏样本自检”修正。
+- **验证**：Mac 上 Python 200 passed、15 skipped，ruff、mypy 通过，C++ 100/100，前端 tsc 通过，clang-format 对整个 C++ 树通过（该工具本机之前没有，已安装）。**4090 上门禁的最后一次运行（gate5）在 clang-format 与一个 skills 路径测试上失败，两处原因都已在 Mac 复现并修复，但修复后没有在 4090 重跑**（4090 又连不上：本机走 192.168.11.x 网关，无到内网地址的路径）。
+- **未完成**：边界搜索未在真实 vLLM 上跑；D-9 预估器问题待批准；T-0801 两个适配器待 ADR；`.github/` 工作流待批准；T-0701 的 7B 验收。
 
 ### 2026-10-08 · Claude · S11 vLLM 部署、S12 部署后 PPL、S13 压测器、T-0804 采样与边界搜索
 
