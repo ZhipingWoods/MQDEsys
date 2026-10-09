@@ -127,18 +127,18 @@ def test_lm_eval_stage_records_results_skips_without_the_binary_and_never_fails_
     ckpt = tmp_path / "ckpt"
     ckpt.mkdir()
     monkeypatch.setenv("MQDE_LM_EVAL_BIN", str(fake_cli(tmp_path, DOC)))
-    ok = job._lm_eval(8123, ckpt, {"tasks": ["gsm8k"], "limit": 10, "num_fewshot": 5}, "the-served-name")
+    ok = job._lm_eval(8123, ckpt, tmp_path / "lm-out", {"tasks": ["gsm8k"], "limit": 10, "num_fewshot": 5}, "the-served-name")
     assert ok["status"] == "succeeded" and ok["tasks"]["gsm8k"]["metrics"]["exact_match,strict-match"]["value"] == 0.5
     argv = json.loads((tmp_path / "argv.json").read_text())
     assert "--limit" in argv and argv[argv.index("--limit") + 1] == "10" and "gsm8k" in argv  # the config reaches the CLI
     # the name the server really serves under, not the directory name
     assert "model=the-served-name," in argv[argv.index("--model_args") + 1]
     monkeypatch.setenv("MQDE_LM_EVAL_BIN", str(fake_cli(tmp_path, None, code=2)))
-    bad = job._lm_eval(8123, ckpt, {}, "n")
+    bad = job._lm_eval(8123, ckpt, tmp_path / "lm-out2", {}, "n")
     assert bad["status"] == "failed" and "exited with 2" in bad["error"]
     monkeypatch.setenv("MQDE_LM_EVAL_BIN", str(tmp_path / "missing"))
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
-    assert job._lm_eval(8123, ckpt, {}, "n")["status"] == "skipped"
+    assert job._lm_eval(8123, ckpt, tmp_path / "lm-out2", {}, "n")["status"] == "skipped"
 
 
 def test_vllm_context_grows_for_lm_eval_only() -> None:
@@ -149,3 +149,11 @@ def test_vllm_context_grows_for_lm_eval_only() -> None:
     assert served_max_len({"lm_eval": {"tasks": ["gsm8k"]}}, 512, 256, 64) == 4096, "5-shot gsm8k needs about 1.4k + 256 tokens"
     assert served_max_len({"lm_eval": {"max_model_len": 8192}}, 512, 256, 64) == 8192
     assert served_max_len({"lm_eval": {"max_model_len": 512}}, 512, 256, 64) == 1024, "never below what the other stages need"
+
+
+def test_baseline_lm_eval_is_on_by_default_and_can_be_switched_off() -> None:
+    from mqde.pipeline.llm_job import wants_lm_eval_baseline
+
+    assert not wants_lm_eval_baseline(None) and not wants_lm_eval_baseline({}) and not wants_lm_eval_baseline({"lm_eval": None})
+    assert wants_lm_eval_baseline({"lm_eval": {"tasks": ["gsm8k"]}})
+    assert not wants_lm_eval_baseline({"lm_eval": {"tasks": ["gsm8k"], "baseline": False}})

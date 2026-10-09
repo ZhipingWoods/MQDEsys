@@ -184,3 +184,9 @@ def test_accuracy_section_shows_values_stderr_samples_and_failures() -> None:
     assert ">0.5000<" in en, "a missing standard error is shown as the value alone"
     assert "RuntimeError: boom" in en and "more" not in en.split("RuntimeError: boom")[1][:20]
     assert "standard error is wide" in en and "标准误" in zh
+    r["baseline_lm_eval"] = copy.deepcopy(ok)
+    r["baseline_lm_eval"]["tasks"]["gsm8k"]["metrics"]["exact_match,strict-match"]["value"] = 0.2468
+    en2 = render_html(r, "en")
+    assert "Unquantized (baseline)" in en2 and "0.2468" in en2
+    assert en2.index("0.2468") < en2.index("0.4321"), "the baseline row comes first, the number everything else is judged against"
+    assert "未量化（基线）" in render_html(r, "zh")

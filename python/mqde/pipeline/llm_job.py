@@ -122,6 +122,12 @@ def served_max_len(cfg: dict[str, Any], eval_seq_len: int, prompt_len: int, n_pr
     return n
 
 
+def wants_lm_eval_baseline(vllm: dict[str, Any] | None) -> bool:
+    """Task accuracy of a quantized model means nothing without the unquantized model's on the same tasks: on by default."""
+    cfg = (vllm or {}).get("lm_eval")
+    return bool(cfg) and bool(cfg.get("baseline", True))
+
+
 class LLMJob:
     def __init__(self, spec: LLMJobSpec, job_dir: str | Path | None = None, job_id: str | None = None) -> None:
         self.spec = spec
@@ -338,7 +344,8 @@ class LLMJob:
                                                    prompt_len=prompt_len, n_predict=n_predict))
                 sp = served_perplexity(srv.port, ids.tolist(), s.eval_seq_len, int(cfg.get("ppl_windows", s.eval_windows)),
                                        concurrency=conc)
-                lm = self._lm_eval(srv.port, ckpt, cfg["lm_eval"], openai_models(srv.port)[0]["id"]) if cfg.get("lm_eval") else None
+                lm = (self._lm_eval(srv.port, ckpt, ckpt.parent / f"lm-eval-{ckpt.name}", cfg["lm_eval"], openai_models(srv.port)[0]["id"])
+                      if cfg.get("lm_eval") else None)
                 props, engine = srv.props(), srv.engine_info()
         except Exception as e:
             self.ev.log(f"vLLM {ckpt.name}: failed: {e}", level="warning")
@@ -351,25 +358,51 @@ class LLMJob:
                 "engine": engine, "smoke": sm, "load": load, "served_ppl": sp["ppl"], "served_windows": sp["windows"],
                 "served_vs_real_ppl_pct": 100.0 * (sp["ppl"] / real_ppl - 1.0), **({"lm_eval": lm} if lm is not None else {})}
 
-    def _lm_eval(self, port: int, ckpt: Path, cfg: dict[str, Any], served_name: str) -> dict[str, Any]:
+    def _lm_eval_baseline(self) -> dict[str, Any]:
+        """The same lm-eval run against the unquantized model, served by vLLM with the same dtype as the exported checkpoints."""
+        from mqde.backend.base import openai_models
+        from mqde.backend.vllm_server import VllmServer, vllm_bin
+
+        s, cfg = self.spec, dict(self.spec.vllm or {})
+        try:
+            vllm_bin()
+        except FileNotFoundError as e:
+            return {"status": "skipped", "reason": str(e)}
+        if not torch.cuda.is_available():
+            return {"status": "skipped", "reason": "no CUDA device"}
+        ckpt = Path(s.model_path)
+        max_len = served_max_len(cfg, s.eval_seq_len, int(cfg.get("prompt_len", 256)), int(cfg.get("n_predict", 64)))
+        srv = VllmServer(ckpt, self.out / "vllm-baseline.log", max_model_len=max_len, dtype="float16",
+                         gpu_memory_utilization=float(cfg.get("gpu_memory_utilization", 0.3)),
+                         enforce_eager=bool(cfg.get("enforce_eager", True)), max_num_seqs=max(int(cfg.get("concurrency", 4)), 8))
+        self.ev.log(f"vLLM baseline {ckpt.name}: starting on {srv.port} (max_model_len {max_len})")
+        try:
+            with srv:
+                res = self._lm_eval(srv.port, ckpt, self.out / "lm-eval-baseline", cfg["lm_eval"], openai_models(srv.port)[0]["id"])
+        except Exception as e:
+            self.ev.log(f"vLLM baseline: failed: {e}", level="warning")
+            return {"status": "failed", "error": str(e)[:1500], "diagnosis": srv.diagnose()}
+        return res
+
+    def _lm_eval(self, port: int, model_dir: Path, out_dir: Path, cfg: dict[str, Any], served_name: str) -> dict[str, Any]:
         """S12 task accuracy: the official lm-eval CLI against the server that is already up (ADR-0002). Never fails the job."""
         from mqde.eval.lm_eval_adapter import run_lm_eval
 
         tasks = [str(t) for t in cfg.get("tasks", ["gsm8k"])]
         try:
-            res = run_lm_eval(port, served_name, ckpt, tasks, ckpt.parent / f"lm-eval-{ckpt.name}", limit=cfg.get("limit", 50),
+            res = run_lm_eval(port, served_name, model_dir, tasks, out_dir, limit=cfg.get("limit", 50),
                               num_fewshot=cfg.get("num_fewshot"), concurrency=int(cfg.get("concurrency", 8)),
                               seed=int(cfg.get("seed", 1234)), max_gen_toks=cfg.get("max_gen_toks"),
                               timeout=float(cfg.get("timeout", 7200)))
         except FileNotFoundError as e:
-            self.ev.log(f"lm-eval {ckpt.name}: skipped ({e})")
+            self.ev.log(f"lm-eval {model_dir.name}: skipped ({e})")
             return {"status": "skipped", "reason": str(e)}
         except Exception as e:
-            self.ev.log(f"lm-eval {ckpt.name}: failed: {e}", level="warning")
+            self.ev.log(f"lm-eval {model_dir.name}: failed: {e}", level="warning")
             return {"status": "failed", "error": str(e)[:1500]}
         for task, t in res["tasks"].items():
             for key, m in t["metrics"].items():
-                self.ev.emit("metric", name=f"lm_eval.{ckpt.name}.{task}.{key}", value=m["value"], msg=f"lm-eval {task}")
+                self.ev.emit("metric", name=f"lm_eval.{model_dir.name}.{task}.{key}", value=m["value"], msg=f"lm-eval {task}")
         return {"status": "succeeded", **res}
 
     def _run(self) -> None:
@@ -386,6 +419,8 @@ class LLMJob:
         self.report["data"] = {"calib": {"dataset": "wikitext-2 train", "n": len(cal), "seq_len": s.calib_seq_len},
                                "eval": {"dataset": "wikitext-2 test", "windows": s.eval_windows, "seq_len": s.eval_seq_len}}
         base = self._stage("eval_baseline", lambda: self._ppl(ad, ids, "pretrain"))
+        if wants_lm_eval_baseline(s.vllm):
+            self.report["baseline_lm_eval"] = self._stage("lm_eval_baseline", self._lm_eval_baseline)
         probe_windows, probe_ref = None, None
         if s.logits_probe is not None:
             pc = s.logits_probe

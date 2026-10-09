@@ -54,6 +54,7 @@ T: dict[str, dict[str, str]] = {
     "vs_fake": {"zh": "相对伪量化", "en": "vs fake-quant"},
     "vllm": {"zh": "vLLM 部署（S11）与部署后精度（S12）", "en": "vLLM deployment (S11) and served accuracy (S12)"},
     "lm_eval": {"zh": "任务精度（lm-eval，部署后的服务）", "en": "Task accuracy (lm-eval against the served model)"},
+    "unquantized": {"zh": "未量化（基线）", "en": "Unquantized (baseline)"},
     "task": {"zh": "任务", "en": "Task"},
     "metric": {"zh": "指标", "en": "Metric"},
     "samples": {"zh": "样本数", "en": "Samples"},
@@ -311,30 +312,33 @@ def vllm_section(r: dict[str, Any], lang: str) -> str:
 
 
 def accuracy_section(r: dict[str, Any], lang: str) -> str:
-    rows, note = [], ""
+    sources: list[tuple[str, str, Any]] = []
+    if r.get("baseline_lm_eval"):
+        sources.append((e(T["unquantized"][lang]), "–", r["baseline_lm_eval"]))
     for n, rec in r.get("recipes", {}).items():
         for f, ex in (rec.get("export") or {}).items():
-            lm = (ex.get("vllm") or {}).get("lm_eval")
-            if not lm:
-                continue
-            if lm.get("status") != "succeeded":
-                why = lm.get("reason") or str(lm.get("error", "")).splitlines()[:1]
-                label = T.get(str(lm.get("status")), {}).get(lang, str(lm.get("status")))
-                rows.append([e(n), f"<code>{e(f)}</code>", "–", f'<span class="bad">{e(label)}</span>', "–", "–", e(why)])
-                continue
-            for task, t in lm["tasks"].items():
-                samples = (t.get("samples") or {}).get("effective")
-                for m in t["metrics"].values():
-                    err = m.get("stderr")
-                    shots = "task default" if lm.get("num_fewshot") is None else f"{lm['num_fewshot']}-shot"
-                    how = f"lm-eval {lm.get('version') or ''} · limit {lm.get('limit')} · {shots}"
-                    rows.append([e(n), f"<code>{e(f)}</code>", e(t.get("alias", task)), f"{e(m['metric'])} ({e(m['filter'])})",
-                                 f"{m['value']:.4f}" + (f" ± {err:.4f}" if err is not None else ""), fmt(samples, 0), e(how)])
-            note = f'<p class="note">{e(T["lm_note"][lang])}</p>'
+            if (ex.get("vllm") or {}).get("lm_eval"):
+                sources.append((e(n), f"<code>{e(f)}</code>", ex["vllm"]["lm_eval"]))
+    rows = []
+    for who, fmt_, lm in sources:
+        if lm.get("status") != "succeeded":
+            why = lm.get("reason") or str(lm.get("error", "")).splitlines()[:1]
+            label = T.get(str(lm.get("status")), {}).get(lang, str(lm.get("status")))
+            rows.append([who, fmt_, "–", f'<span class="bad">{e(label)}</span>', "–", "–", e(why)])
+            continue
+        for task, t in lm["tasks"].items():
+            samples = (t.get("samples") or {}).get("effective")
+            for m in t["metrics"].values():
+                err = m.get("stderr")
+                shots = "task default" if lm.get("num_fewshot") is None else f"{lm['num_fewshot']}-shot"
+                how = f"lm-eval {lm.get('version') or ''} · limit {lm.get('limit')} · {shots}"
+                rows.append([who, fmt_, e(t.get("alias", task)), f"{e(m['metric'])} ({e(m['filter'])})",
+                             f"{m['value']:.4f}" + (f" ± {err:.4f}" if err is not None else ""), fmt(samples, 0), e(how)])
     if not rows:
         return ""
     head = [(T["recipe"][lang], False), (T["format"][lang], False), (T["task"][lang], False), (T["metric"][lang], False),
             ("acc ± se", True), (T["samples"][lang], True), ("", False)]
+    note = f'<p class="note">{e(T["lm_note"][lang])}</p>'
     return f'<div class="card"><h2>{e(T["lm_eval"][lang])}</h2>{table(head, rows)}{note}</div>'
 
 
