@@ -1,7 +1,7 @@
 /* Hardware probe: CPU (Linux / macOS) + NVIDIA GPUs via a dynamically loaded NVML. */
 #define _GNU_SOURCE
-#include "mqde_probe.h"
 #include "mqde/hal/mqde_hal.h"
+#include "mqde_probe.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,10 +23,14 @@ const char* mqde_probe_last_error(void) { return g_last_error; }
 
 const char* mqde_dev_kind_name(mqde_dev_kind kind) {
   switch (kind) {
-    case MQDE_DEV_CPU: return "cpu";
-    case MQDE_DEV_GPU: return "gpu";
-    case MQDE_DEV_NPU: return "npu";
-    default: return "other";
+    case MQDE_DEV_CPU:
+      return "cpu";
+    case MQDE_DEV_GPU:
+      return "gpu";
+    case MQDE_DEV_NPU:
+      return "npu";
+    default:
+      return "other";
   }
 }
 
@@ -169,11 +173,13 @@ static int probe_nvidia(mqde_device_info* out, int max) {
 }
 #endif
 
-/* Plugin devices after the built-in ones. A plugin device that the built-in probe already found (same vendor, name and
- * index, e.g. a CUDA plugin next to NVML) is not listed twice. */
+/* Plugin devices after the built-in ones. A plugin device that the built-in probe already found (same vendor,
+ * name and index, e.g. a CUDA plugin next to NVML) is not listed twice. */
 static int append_plugin_devices(mqde_device_info* out, int have, int max) {
 #if defined(_WIN32)
-  (void)out; (void)have; (void)max;
+  (void)out;
+  (void)have;
+  (void)max;
   return 0;
 #else
   mqde_hal_ensure_loaded();
@@ -183,7 +189,8 @@ static int append_plugin_devices(mqde_device_info* out, int have, int max) {
   for (int i = 0; i < n && w < max; ++i) {
     int dup = 0;
     for (int j = 0; j < have && !dup; ++j)
-      dup = strcmp(out[j].vendor, devs[i].vendor) == 0 && strcmp(out[j].name, devs[i].name) == 0 && out[j].index == devs[i].index;
+      dup = strcmp(out[j].vendor, devs[i].vendor) == 0 && strcmp(out[j].name, devs[i].name) == 0 &&
+            out[j].index == devs[i].index;
     if (dup) continue;
     mqde_device_info* d = &out[w++];
     memset(d, 0, sizeof *d);

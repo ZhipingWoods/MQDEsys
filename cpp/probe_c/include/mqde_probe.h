@@ -27,7 +27,8 @@ typedef struct {
 /* Fills up to max_devices entries; returns 0 on success (even when only the CPU is found). */
 int mqde_probe_all(mqde_device_info* out, int max_devices, int* n_found);
 const char* mqde_probe_last_error(void);
-/* "cpu" | "gpu" | "npu" | "other": the one spelling every consumer (CLI, server, Python, web UI) uses for a device kind. */
+/* "cpu" | "gpu" | "npu" | "other": the one spelling every consumer (CLI, server, Python, web UI) uses for a
+ * device kind. */
 const char* mqde_dev_kind_name(mqde_dev_kind kind);
 
 #ifdef __cplusplus

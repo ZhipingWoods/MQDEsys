@@ -21,8 +21,8 @@
 
 typedef struct {
   mqde_hal_plugin_info info;
-  void* handle;                    /* kept open only for accepted plugins */
-  const mqde_hal_plugin_v1* api;   /* NULL unless LOADED / INACTIVE */
+  void* handle;                  /* kept open only for accepted plugins */
+  const mqde_hal_plugin_v1* api; /* NULL unless LOADED / INACTIVE */
 } slot_t;
 
 static slot_t g_slots[MAX_PLUGINS];
@@ -37,11 +37,19 @@ static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 #define UNLOCK() ((void)0)
 #endif
 
-static void copy(char* dst, size_t cap, const char* src) { snprintf(dst, cap, "%s", src ? src : ""); }
+/* Bounded copy: longer input is cut on purpose (names and reasons are for display), always NUL-terminated. */
+static void copy(char* dst, size_t cap, const char* src) {
+  size_t n = src ? strlen(src) : 0;
+  if (n >= cap) n = cap - 1;
+  if (n) memcpy(dst, src, n);
+  dst[n] = '\0';
+}
 
 static void reject(slot_t* s, const char* fmt, const char* a, const char* b) {
+  char msg[1200];
   s->info.status = MQDE_HAL_REJECTED;
-  snprintf(s->info.reason, sizeof s->info.reason, fmt, a ? a : "", b ? b : "");
+  snprintf(msg, sizeof msg, fmt, a ? a : "", b ? b : "");
+  copy(s->info.reason, sizeof s->info.reason, msg);
 }
 
 /* "a,b" list membership, exact match, case-sensitive */
@@ -83,10 +91,13 @@ static void validate(slot_t* s, const mqde_hal_plugin_v1* api, const char* only,
   if (api->struct_size < sizeof(mqde_hal_plugin_v1)) {
     char v[16];
     snprintf(v, sizeof v, "%u", (unsigned)api->struct_size);
-    return reject(s, "struct_size %s is smaller than the v1 struct (built against a different header)", v, NULL);
+    return reject(s, "struct_size %s is smaller than the v1 struct (built against a different header)", v,
+                  NULL);
   }
   if (!valid_name(api->name))
-    return reject(s, "missing or invalid plugin name (lowercase letters, digits, '_' and '-', at most 63 characters)", NULL, NULL);
+    return reject(
+        s, "missing or invalid plugin name (lowercase letters, digits, '_' and '-', at most 63 characters)",
+        NULL, NULL);
   copy(s->info.name, sizeof s->info.name, api->name);
   copy(s->info.vendor, sizeof s->info.vendor, api->vendor);
   copy(s->info.version, sizeof s->info.version, api->plugin_version);
@@ -146,8 +157,10 @@ static void load_file(const char* path, const char* only, const char* off) {
     return reject(s, "%s returned NULL", "mqde_hal_get_plugin_v1", NULL);
   }
   validate(s, api, only, off);
-  if (s->api) s->handle = h;
-  else dlclose(h);
+  if (s->api)
+    s->handle = h;
+  else
+    dlclose(h);
 }
 
 static int cmp_str(const void* a, const void* b) { return strcmp(*(char* const*)a, *(char* const*)b); }
@@ -162,14 +175,16 @@ static void scan_dir(const char* dir, const char* only, const char* off) {
     const char* nm = e->d_name;
     size_t len = strlen(nm);
     if (nm[0] == '.') continue;
-    int is_lib = (len > 3 && strcmp(nm + len - 3, ".so") == 0) || (len > 6 && strcmp(nm + len - 6, ".dylib") == 0);
+    int is_lib =
+        (len > 3 && strcmp(nm + len - 3, ".so") == 0) || (len > 6 && strcmp(nm + len - 6, ".dylib") == 0);
     if (is_lib) names[n++] = strdup(nm);
   }
   closedir(d);
-  qsort(names, (size_t)n, sizeof(char*), cmp_str); /* deterministic order: the first of two duplicates always wins */
+  qsort(names, (size_t)n, sizeof(char*),
+        cmp_str); /* deterministic order: the first of two duplicates always wins */
   for (int i = 0; i < n; ++i) {
-    char path[1024];
-    snprintf(path, sizeof path, "%s/%s", dir, names[i]);
+    char path[4200];
+    snprintf(path, sizeof path, "%.4090s/%.100s", dir, names[i]);
     free(names[i]);
     load_file(path, only, off);
   }
@@ -185,8 +200,10 @@ static void exe_dir(char* out, size_t cap) {
   if (_NSGetExecutablePath(out, &sz) != 0) out[0] = '\0';
 #endif
   char* slash = strrchr(out, '/');
-  if (slash) *slash = '\0';
-  else out[0] = '\0';
+  if (slash)
+    *slash = '\0';
+  else
+    out[0] = '\0';
 }
 
 int mqde_hal_load_all(void) {
@@ -197,20 +214,21 @@ int mqde_hal_load_all(void) {
   unload_all();
   const char* only = getenv("MQDE_HAL_PLUGINS");
   const char* off = getenv("MQDE_HAL_DISABLE");
-  char dirs[3][1024];
+  char dirs[3][4096];
   int nd = 0;
   const char* env = getenv("MQDE_PLUGIN_DIR");
   if (env && *env) {
     char* copy_env = strdup(env);
-    for (char* tok = strtok(copy_env, ":"); tok && nd < 3; tok = strtok(NULL, ":")) copy(dirs[nd++], sizeof dirs[0], tok);
+    for (char* tok = strtok(copy_env, ":"); tok && nd < 3; tok = strtok(NULL, ":"))
+      copy(dirs[nd++], sizeof dirs[0], tok);
     free(copy_env);
   }
   const char* home = getenv("MQDE_HOME");
-  if (home && *home && nd < 3) snprintf(dirs[nd++], sizeof dirs[0], "%s/plugins", home);
+  if (home && *home && nd < 3) snprintf(dirs[nd++], sizeof dirs[0], "%.4000s/plugins", home);
   if (nd < 3) {
-    char ex[900];
+    char ex[2048];
     exe_dir(ex, sizeof ex);
-    if (ex[0]) snprintf(dirs[nd++], sizeof dirs[0], "%s/plugins", ex);
+    if (ex[0]) snprintf(dirs[nd++], sizeof dirs[0], "%.2040s/plugins", ex);
   }
   for (int i = 0; i < nd; ++i) scan_dir(dirs[i], only, off);
   g_loaded = 1;
@@ -261,7 +279,8 @@ int mqde_hal_devices(mqde_hal_device* out, int max, const char** plugin_names) {
     if (!s->api || s->info.status != MQDE_HAL_LOADED) continue;
     mqde_hal_device tmp[64];
     int n = -1;
-    if (s->api->device_probe(tmp, 64, &n) != 0 || n < 0 || n > 64) continue; /* a plugin that breaks later is skipped */
+    if (s->api->device_probe(tmp, 64, &n) != 0 || n < 0 || n > 64)
+      continue; /* a plugin that breaks later is skipped */
     for (int k = 0; k < n && w < max; ++k) {
       out[w] = tmp[k];
       out[w].vendor[sizeof out[w].vendor - 1] = '\0';
