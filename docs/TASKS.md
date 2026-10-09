@@ -104,7 +104,7 @@
 | T-0502 | Python Worker 进程框架 | P5 | T-0501,T-0003 | L1 | TODO |
 | T-0503 | pipeline：DAG、Stage 接口、状态机 | P5 | T-0104,T-0105 | L2 | PARTIAL (2026-09-24, Python-side stages; C++ DAG pending) |
 | T-0504 | pipeline：队列、调度、设备分配、重试/恢复 | P5 | T-0503,T-0202 | L1 | PARTIAL (2026-09-24, GPU pool + queue; no retry) |
-| T-0505 | 模型下载（fetch_model 阶段） | P5 | T-0204,T-0503 | L1 | TODO |
+| T-0505 | 模型下载（fetch_model 阶段） | P5 | T-0204,T-0503 | L1 | PARTIAL (2026-10-09, hub::download_file now resumes from `<file>.part` with a Range request, starts over when the server ignores Range or answers 416, keeps the partial file on a dropped connection or a cancel, and verifies SHA-256 against X-Linked-ETag when the Hub sends one (own SHA-256, standard vectors tested); the server's /download endpoint gets resume for free and reports bytes_done on its status endpoint. 8 tests `ctest -R hub_download` against a local stub, 3 mutations caught. Not done: concurrent chunked download, fetch_model as a pipeline stage, the Python huggingface_hub fallback for Xet storage (real case seen: hf-mirror returned 401 on Xet files, HF_HUB_DISABLE_XET=1 worked), skipping files that are already complete, ETag check for non-LFS files) |
 | T-0506 | Python 模型抽象层 BaseModel + HFDecoderModel | P5 | T-0502,T-0206 | L2 | DONE (2026-09-24, VLA adapter) |
 | T-0507 | 校准数据与首块捕获 | P5 | T-0506 | L1 | DONE (2026-09-24, LeRobot v3 + synthetic) |
 | T-0508 | Blockwise 引擎 + Fake/Real 模块包装 + RTN | P5 | T-0507,T-0408 | L2 | DONE (2026-09-29, quant/blockwise.py sequential blocks; real = export + use_real_weights) |

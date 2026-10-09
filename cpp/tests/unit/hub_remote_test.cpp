@@ -141,3 +141,202 @@ TEST(hub_remote, retries_transient_errors) {
   EXPECT_EQ(s.flaky.load(), 3);
   EXPECT_EQ(f->at(0).path, "a.bin");
 }
+
+// ---- T-0505: resumable download with checksum verification
+// ---------------------------------------------------------
+
+namespace mqde::hub {
+std::string sha256_hex(const std::string& data);  // defined in hf.cpp, not part of the public header
+}
+
+namespace {
+
+std::string pattern(size_t n) {
+  std::string s(n, '\0');
+  for (size_t i = 0; i < n; ++i) s[i] = static_cast<char>((i * 31 + 7) % 251);
+  return s;
+}
+
+std::string slurp(const std::filesystem::path& p) {
+  std::ifstream in(p, std::ios::binary);
+  return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+
+struct DlStub {
+  httplib::Server svr;
+  std::thread th;
+  int port = 0;
+  std::string blob = pattern(3 * 1024 * 1024 + 123);
+  std::string etag;                 // sent as X-Linked-ETag when not empty
+  bool honor_range = true;          // false: always answer 200 with the full body
+  std::atomic<int> drop_after{-1};  // >= 0: send this many bytes then cut the connection (once)
+  std::atomic<int> requests{0};
+  std::atomic<long long> first_range{-1};
+  std::atomic<uint64_t> bytes_sent{0};
+
+  DlStub() {
+    svr.Get("/org/m/resolve/main/w.bin", [this](const httplib::Request& req, httplib::Response& res) {
+      ++requests;
+      if (!honor_range)
+        const_cast<httplib::Request&>(req).ranges.clear();  // behave like a server without Range support
+      if (!req.ranges.empty()) first_range = static_cast<long long>(req.ranges[0].first);
+      if (!etag.empty()) res.set_header("X-Linked-ETag", "\"" + etag + "\"");
+      const int cut = drop_after.exchange(-1);
+      auto delivered = std::make_shared<size_t>(0);
+      // httplib turns this into 200 or 206 and calls the provider with absolute offsets inside the requested
+      // range
+      res.set_content_provider(blob.size(), "application/octet-stream",
+                               [this, cut, delivered](size_t offset, size_t length, httplib::DataSink& sink) {
+                                 size_t n = std::min<size_t>(length, 64 * 1024);
+                                 if (cut >= 0) {
+                                   if (*delivered >= static_cast<size_t>(cut))
+                                     return false;  // connection dies mid-body
+                                   n = std::min<size_t>(n, static_cast<size_t>(cut) - *delivered);
+                                 }
+                                 sink.write(blob.data() + offset, n);
+                                 *delivered += n;
+                                 bytes_sent += n;
+                                 return true;
+                               });
+    });
+    port = svr.bind_to_any_port("127.0.0.1");
+    th = std::thread([this] { svr.listen_after_bind(); });
+    svr.wait_until_ready();
+  }
+  ~DlStub() {
+    svr.stop();
+    th.join();
+  }
+  HfOptions opts() const {
+    HfOptions o;
+    o.endpoint = fmt::format("http://127.0.0.1:{}", port);
+    o.timeout_s = 5;
+    return o;
+  }
+};
+
+std::filesystem::path tmpdir(const char* name) {
+  auto d = std::filesystem::temp_directory_path() / fmt::format("mqde_dl_{}_{}", name, ::getpid());
+  std::filesystem::remove_all(d);
+  std::filesystem::create_directories(d);
+  return d;
+}
+
+}  // namespace
+
+TEST(hub_download, sha256_matches_the_standard_test_vectors) {
+  EXPECT_EQ(sha256_hex(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  EXPECT_EQ(sha256_hex("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  EXPECT_EQ(sha256_hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");  // two blocks
+  EXPECT_EQ(sha256_hex(std::string(1000000, 'a')),
+            "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+}
+
+TEST(hub_download, plain_download_writes_the_file_and_leaves_no_part_file) {
+  DlStub s;
+  const auto d = tmpdir("plain");
+  uint64_t last_done = 0, last_total = 0;
+  auto n = download_file(s.opts(), "org/m", "w.bin", d / "sub" / "w.bin", [&](uint64_t cur, uint64_t total) {
+    last_done = cur, last_total = total;
+    return true;
+  });
+  ASSERT_TRUE(n) << n.error().message;
+  EXPECT_EQ(*n, s.blob.size());
+  EXPECT_EQ(slurp(d / "sub" / "w.bin"), s.blob);
+  EXPECT_FALSE(std::filesystem::exists(d / "sub" / "w.bin.part"));
+  EXPECT_EQ(last_done, s.blob.size());
+  EXPECT_EQ(last_total, s.blob.size());
+}
+
+TEST(hub_download, an_existing_part_file_is_continued_not_restarted) {
+  DlStub s;
+  const auto d = tmpdir("resume");
+  const size_t have = 1'000'003;
+  std::ofstream(d / "w.bin.part", std::ios::binary) << s.blob.substr(0, have);
+  uint64_t first_progress = 0;
+  auto n = download_file(s.opts(), "org/m", "w.bin", d / "w.bin", [&](uint64_t cur, uint64_t) {
+    if (first_progress == 0) first_progress = cur;
+    return true;
+  });
+  ASSERT_TRUE(n) << n.error().message;
+  EXPECT_EQ(s.first_range.load(), static_cast<long long>(have))
+      << "asked for the bytes after the ones it already had";
+  EXPECT_EQ(s.bytes_sent.load(), s.blob.size() - have) << "only the missing part was transferred";
+  EXPECT_EQ(slurp(d / "w.bin"), s.blob);
+  EXPECT_GT(first_progress, have) << "progress counts the bytes already on disk";
+  EXPECT_EQ(*n, s.blob.size());
+}
+
+TEST(hub_download, a_connection_dropped_mid_body_keeps_the_partial_file_and_the_next_call_finishes) {
+  DlStub s;
+  const auto d = tmpdir("drop");
+  s.drop_after = 700'000;
+  auto first = download_file(s.opts(), "org/m", "w.bin", d / "w.bin");
+  EXPECT_FALSE(first) << "the truncated body is an error, never a finished file";
+  EXPECT_FALSE(std::filesystem::exists(d / "w.bin"));
+  ASSERT_TRUE(std::filesystem::exists(d / "w.bin.part"));
+  const auto kept = std::filesystem::file_size(d / "w.bin.part");
+  EXPECT_GT(kept, 0u);
+  EXPECT_LT(kept, s.blob.size());
+  EXPECT_EQ(slurp(d / "w.bin.part"), s.blob.substr(0, kept)) << "what was kept is a correct prefix";
+  auto second = download_file(s.opts(), "org/m", "w.bin", d / "w.bin");
+  ASSERT_TRUE(second) << second.error().message;
+  EXPECT_EQ(s.first_range.load(), static_cast<long long>(kept));
+  EXPECT_EQ(slurp(d / "w.bin"), s.blob);
+}
+
+TEST(hub_download, a_server_that_ignores_range_makes_it_start_over_with_a_correct_file) {
+  DlStub s;
+  s.honor_range = false;
+  const auto d = tmpdir("norange");
+  std::ofstream(d / "w.bin.part", std::ios::binary) << s.blob.substr(0, 4096);
+  auto n = download_file(s.opts(), "org/m", "w.bin", d / "w.bin");
+  ASSERT_TRUE(n) << n.error().message;
+  EXPECT_EQ(slurp(d / "w.bin"), s.blob) << "no duplicated prefix";
+  EXPECT_EQ(*n, s.blob.size());
+}
+
+TEST(hub_download, checksum_is_verified_when_the_server_sends_one) {
+  DlStub s;
+  s.etag = sha256_hex(s.blob);
+  const auto d = tmpdir("sha_ok");
+  ASSERT_TRUE(download_file(s.opts(), "org/m", "w.bin", d / "w.bin"));
+  s.etag = std::string(64, 'a');  // wrong
+  const auto d2 = tmpdir("sha_bad");
+  auto bad = download_file(s.opts(), "org/m", "w.bin", d2 / "w.bin");
+  ASSERT_FALSE(bad);
+  EXPECT_NE(bad.error().message.find("sha256 mismatch"), std::string::npos) << bad.error().message;
+  EXPECT_FALSE(std::filesystem::exists(d2 / "w.bin")) << "a corrupt file is never published";
+  EXPECT_FALSE(std::filesystem::exists(d2 / "w.bin.part"))
+      << "and the bad partial file is removed so it is not resumed";
+}
+
+TEST(hub_download, a_resumed_download_is_verified_over_the_whole_file) {
+  DlStub s;
+  s.etag = sha256_hex(s.blob);
+  const auto d = tmpdir("resume_sha");
+  std::ofstream(d / "w.bin.part", std::ios::binary) << s.blob.substr(0, 500'000);
+  ASSERT_TRUE(download_file(s.opts(), "org/m", "w.bin", d / "w.bin"));
+  // a part file with corrupted content: the resume succeeds in transferring, but the whole-file hash catches
+  // it
+  const auto d2 = tmpdir("resume_corrupt");
+  std::string wrong = s.blob.substr(0, 500'000);
+  wrong[1000] ^= 0x55;
+  std::ofstream(d2 / "w.bin.part", std::ios::binary) << wrong;
+  auto bad = download_file(s.opts(), "org/m", "w.bin", d2 / "w.bin");
+  ASSERT_FALSE(bad);
+  EXPECT_NE(bad.error().message.find("sha256 mismatch"), std::string::npos);
+  EXPECT_FALSE(std::filesystem::exists(d2 / "w.bin"));
+}
+
+TEST(hub_download, cancelling_keeps_the_partial_file_for_a_later_resume) {
+  DlStub s;
+  const auto d = tmpdir("cancel");
+  auto r = download_file(s.opts(), "org/m", "w.bin", d / "w.bin",
+                         [](uint64_t cur, uint64_t) { return cur < 300'000; });
+  ASSERT_FALSE(r);
+  EXPECT_EQ(r.error().code, Errc::kCancelled);
+  EXPECT_TRUE(std::filesystem::exists(d / "w.bin.part"));
+  EXPECT_FALSE(std::filesystem::exists(d / "w.bin"));
+}
