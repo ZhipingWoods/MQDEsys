@@ -135,12 +135,14 @@ def test_missing_nvidia_smi_disables_the_gpu_part_only() -> None:
 
 
 def test_host_rss_covers_the_process_tree(tmp_path: Path) -> None:
-    (tmp_path / "child.py").write_text("import time\nx = bytearray(b'\\x01') * (150 * 2**20)\ntime.sleep(4)\n")
+    (tmp_path / "child.py").write_text("import time\nx = bytearray(b'\\x01') * (150 * 2**20)\ntime.sleep(30)\n")
     (tmp_path / "parent.py").write_text(
-        f"import subprocess, sys, time\nsubprocess.Popen([sys.executable, {str(tmp_path / 'child.py')!r}])\ntime.sleep(4)\n")
+        f"import subprocess, sys, time\nsubprocess.Popen([sys.executable, {str(tmp_path / 'child.py')!r}])\ntime.sleep(30)\n")
     p = subprocess.Popen([sys.executable, str(tmp_path / "parent.py")])
     try:
-        time.sleep(1.5)
+        deadline = time.time() + 20  # wait for the child to start and touch its memory, however loaded the machine is
+        while tree_rss_mib(p.pid) <= 140 and time.time() < deadline:
+            time.sleep(0.1)
         assert tree_rss_mib(p.pid) > 140  # the parent itself is ~10 MiB; the rest is the child's 150 MiB
         assert tree_rss_mib(2**22 + 12345) == 0.0  # no such process
     finally:
