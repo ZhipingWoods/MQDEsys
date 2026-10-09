@@ -2,9 +2,12 @@
 // cpp/tests/plugins/<case>.c (or the shipped template plugin) and loaded with dlopen: ABI mismatch, missing
 // symbol, NULL mandatory functions, a probe that fails or lies about its count, duplicate names, and the
 // allow / deny lists.
+#include <unistd.h>
 #include <algorithm>
+
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <map>
 #include <string>
 
@@ -652,3 +655,25 @@ TEST_F(hal_metal, errors_name_the_problem) {
   EXPECT_EQ(c.supported, 0);
 }
 #endif
+
+TEST(hal_dirs, the_same_directory_named_twice_or_through_a_symlink_loads_each_plugin_once) {
+  const std::string real = MQDE_HAL_CASE_DIR;
+  const auto link = std::filesystem::temp_directory_path() / ("mqde_hal_link_" + std::to_string(::getpid()));
+  std::filesystem::remove(link);
+  std::filesystem::create_directory_symlink(real, link);
+  Env only("MQDE_HAL_PLUGINS", "good");
+  Env off("MQDE_HAL_DISABLE", nullptr);
+  Env home("MQDE_HOME", nullptr);
+  Env d("MQDE_PLUGIN_DIR", (real + ":" + real + ":" + link.string()).c_str());
+  mqde_hal_load_all();
+  int good = 0, dup = 0;
+  for (int i = 0; i < mqde_hal_plugin_count(); ++i) {
+    mqde_hal_plugin_info p;
+    ASSERT_EQ(mqde_hal_plugin_get(i, &p), 0);
+    good += std::string(p.name) == "good";
+    dup += std::string(p.reason).find("duplicate") != std::string::npos && std::string(p.name) == "good";
+  }
+  std::filesystem::remove(link);
+  EXPECT_EQ(good, 1) << "one entry for the file, however many routes lead to it";
+  EXPECT_EQ(dup, 0) << "and no 'duplicate' failure for it";
+}

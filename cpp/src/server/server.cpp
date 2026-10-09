@@ -18,6 +18,7 @@
 #include "mqde/fit/concurrency.h"
 #include "mqde/fit/fit.h"
 #include "mqde/fit/installed.h"
+#include "mqde/hal/mqde_hal.h"
 #include "mqde/hub/catalog.h"
 #include "mqde/hub/hf.h"
 #include "mqde/quant/metrics.h"
@@ -222,6 +223,78 @@ Result<void> serve(const ServerOptions& o) {
         arr.push_back(d);
       }
     send_json(res, {{"devices", arr}, {"job_gpus", runner.gpu_status()}});
+  });
+  // HAL plugins: what was found, in which state, and why a plugin was rejected or disabled.
+  svr.Get("/api/v1/hardware/plugins", [](const httplib::Request&, httplib::Response& res) {
+    mqde_hal_ensure_loaded();
+    static const char* const kStatus[] = {"loaded", "inactive", "rejected", "disabled"};
+    Json arr = Json::array();
+    for (int i = 0; i < mqde_hal_plugin_count(); ++i) {
+      mqde_hal_plugin_info p;
+      if (mqde_hal_plugin_get(i, &p) != 0) continue;
+      const bool known = p.status >= 0 && p.status < 4;
+      arr.push_back({{"name", p.name},
+                     {"vendor", p.vendor},
+                     {"version", p.version},
+                     {"status", known ? kStatus[p.status] : "unknown"},
+                     {"devices", p.devices},
+                     {"reason", p.reason},
+                     {"has_profile", mqde_hal_plugin_by_name(p.name) != nullptr &&
+                                         mqde_hal_plugin_by_name(p.name)->profile != nullptr}});
+    }
+    send_json(res, arr);
+  });
+  // Micro-benchmark on one device of one plugin: {"plugin","device","kind":"bandwidth|gemm","dtype"?}.
+  // Serialised, because two benchmarks at once would measure each other.
+  svr.Post("/api/v1/hardware/profile", [](const httplib::Request& req, httplib::Response& res) {
+    static std::mutex bench_mu;
+    auto body = parse_body(req, res);
+    if (!body) return;
+    const std::string name = body->value("plugin", "");
+    const std::string kind = body->value("kind", "");
+    const std::string dtype = body->value("dtype", "fp32");
+    if (kind != "bandwidth" && kind != "gemm")
+      return send_error(res, 400, "bad_request", "kind must be 'bandwidth' or 'gemm'");
+    if (dtype.size() >= 16) return send_error(res, 400, "bad_request", "dtype is too long");
+    mqde_hal_ensure_loaded();
+    const auto* api = mqde_hal_plugin_by_name(name.c_str());
+    if (!api) return send_error(res, 404, "not_found", "no loaded plugin named '" + name + "'");
+    if (!api->profile)
+      return send_error(res, 400, "unsupported", "plugin '" + name + "' has no micro-benchmarks");
+    mqde_hal_profile_request r{};
+    r.device = body->value("device", 0);
+    std::snprintf(r.kind, sizeof r.kind, "%s", kind.c_str());
+    std::snprintf(r.dtype, sizeof r.dtype, "%s", dtype.c_str());
+    mqde_hal_profile_result out{};
+    int rc;
+    {
+      std::lock_guard lk(bench_mu);
+      rc = api->profile(r.device, &r, &out);
+    }
+    if (rc != 0)
+      return send_error(res, 422, "profile_failed", api->last_error ? api->last_error() : "benchmark failed");
+    send_json(res, {{"plugin", name},
+                    {"device", r.device},
+                    {"kind", kind},
+                    {"dtype", dtype},
+                    {"value", out.value},
+                    {"unit", out.unit},
+                    {"seconds", out.seconds}});
+  });
+  // Serving-runtime profiles for the estimator (hf_transformers, vllm, ...), with the fields that change the
+  // estimate.
+  svr.Get("/api/v1/backends", [](const httplib::Request&, httplib::Response& res) {
+    auto ids = estimator::list_data_entries("backends");
+    if (!ids) return send_error(res, ids.error());
+    Json arr = Json::array();
+    for (const auto& id : *ids)
+      if (auto b = estimator::load_backend(id))
+        arr.push_back({{"id", id},
+                       {"activation_model", b->activation_model},
+                       {"max_batched_tokens", b->max_batched_tokens},
+                       {"runtime_overhead_bytes", b->runtime_overhead_bytes},
+                       {"allocator_factor", b->allocator_factor}});
+    send_json(res, arr);
   });
   svr.Get("/api/v1/hardware/profiles", [](const httplib::Request&, httplib::Response& res) {
     auto ids = estimator::list_data_entries("hardware_db");

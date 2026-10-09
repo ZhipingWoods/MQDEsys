@@ -14,6 +14,8 @@ const PARTS: { key: keyof Estimate["breakdown"]; label: string }[] = [
 export default function EstimatePage() {
   const [model, setModel] = useState(DEFAULT_MODEL);
   const [hw, setHw] = useState("nvidia/rtx4090");
+  const [backend, setBackend] = useState("hf_transformers");
+  const backends = useAsync(api.backends, []);
   const [picked, setPicked] = useState<string[]>(["bf16", "w8a16", "fp8", "w4a16", "w4a8", "w2a16"]);
   const [rt, setRt] = useState<RuntimeParams>({
     concurrency: 1,
@@ -25,9 +27,9 @@ export default function EstimatePage() {
   });
   const recipes = useAsync(api.recipes, []);
   const profiles = useAsync(api.hardwareProfiles, []);
-  const q = useDebounced({ model, hw, picked, rt }, 300);
+  const q = useDebounced({ model, hw, picked, rt, backend }, 300);
   const spec = useAsync(() => api.inspect(q.model), [q.model]);
-  const est = useAsync(() => api.estimate(q.model, q.hw, q.picked, q.rt), [JSON.stringify(q)]);
+  const est = useAsync(() => api.estimate(q.model, q.hw, q.picked, q.rt, q.backend), [JSON.stringify(q)]);
   const matrix = useAsync(() => api.matrix(q.model, q.rt), [q.model, JSON.stringify(q.rt)]);
   const ests = est.data?.estimates ?? [];
   const cap = ests[0]?.capacity_bytes ?? 0;
@@ -52,6 +54,16 @@ export default function EstimatePage() {
               {profiles.data?.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name} ({fmtBytes(p.mem_bytes)})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label>推理后端画像</label>
+            <select value={backend} onChange={(e) => setBackend(e.target.value)} data-testid="est-backend">
+              {(backends.data ?? [{ id: "hf_transformers", activation_model: "per_seq" }]).map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.id}（{b.activation_model === "batched" ? "按批计激活" : "按序列计激活"}）
                 </option>
               ))}
             </select>

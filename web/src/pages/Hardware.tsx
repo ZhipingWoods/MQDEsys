@@ -1,9 +1,79 @@
-import { api, fmtBytes } from "../api";
+import { useState } from "react";
+import { api, fmtBytes, HalPlugin, ProfileResult } from "../api";
 import { useAsync } from "../hooks";
+
+const STATUS_LABEL: Record<string, string> = { loaded: "已加载", inactive: "未发现设备", rejected: "已拒绝", disabled: "已禁用", unknown: "未知" };
+const STATUS_CLASS: Record<string, string> = { loaded: "good", inactive: "muted", rejected: "bad", disabled: "muted", unknown: "muted" };
+const DTYPES = ["fp32", "fp16", "bf16", "int8"];
+
+/** One plugin row with its micro-benchmark buttons: runs bandwidth or GEMM on a chosen device and shows the measured number. */
+function PluginRow({ p }: { p: HalPlugin }) {
+  const [device, setDevice] = useState(0);
+  const [dtype, setDtype] = useState("fp32");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [results, setResults] = useState<ProfileResult[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const run = async (kind: "bandwidth" | "gemm") => {
+    setBusy(kind);
+    setErr(null);
+    try {
+      const r = await api.profileDevice(p.name, device, kind, dtype);
+      setResults((x) => [r, ...x].slice(0, 6));
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const canRun = p.status === "loaded" && p.has_profile;
+  return (
+    <tr data-testid={`plugin-${p.name}`}>
+      <td className="mono">{p.name}</td>
+      <td>{p.vendor}</td>
+      <td className="mono small">{p.version}</td>
+      <td>
+        <span className={`status ${STATUS_CLASS[p.status]}`} data-testid={`plugin-status-${p.name}`}>{STATUS_LABEL[p.status]}</span>
+        {p.reason && <div className="small muted">{p.reason}</div>}
+      </td>
+      <td className="num">{p.devices}</td>
+      <td>
+        {canRun ? (
+          <div className="form-row" style={{ margin: 0, gap: 6 }}>
+            <input type="number" min={0} value={device} style={{ width: 56 }} onChange={(e) => setDevice(Number(e.target.value))} aria-label="设备序号" />
+            <select value={dtype} onChange={(e) => setDtype(e.target.value)} aria-label="数据类型">
+              {DTYPES.map((d) => (
+                <option key={d}>{d}</option>
+              ))}
+            </select>
+            <button disabled={busy !== null} onClick={() => run("bandwidth")} data-testid={`bench-bw-${p.name}`}>
+              {busy === "bandwidth" ? "测试中…" : "测带宽"}
+            </button>
+            <button disabled={busy !== null} onClick={() => run("gemm")} data-testid={`bench-gemm-${p.name}`}>
+              {busy === "gemm" ? "测试中…" : "测 GEMM"}
+            </button>
+          </div>
+        ) : (
+          <span className="muted small">{p.status === "loaded" ? "该插件没有微基准" : "—"}</span>
+        )}
+        {err && <div className="error-box" data-testid={`bench-err-${p.name}`}>{err}</div>}
+        {results.length > 0 && (
+          <ul className="small" style={{ margin: "6px 0 0", paddingLeft: 16 }} data-testid={`bench-results-${p.name}`}>
+            {results.map((r, i) => (
+              <li key={i}>
+                设备 {r.device} · {r.kind}{r.kind === "gemm" ? ` ${r.dtype}` : ""}：<b>{r.value.toFixed(r.value < 10 ? 3 : 1)} {r.unit}</b>（{r.seconds.toFixed(3)} s）
+              </li>
+            ))}
+          </ul>
+        )}
+      </td>
+    </tr>
+  );
+}
 
 export default function HardwarePage() {
   const hw = useAsync(api.hardware, []);
   const profiles = useAsync(api.hardwareProfiles, []);
+  const plugins = useAsync(api.hardwarePlugins, []);
   return (
     <>
       <h1>硬件</h1>
@@ -45,6 +115,32 @@ export default function HardwarePage() {
             })}
           </tbody>
         </table>
+      </div>
+      <div className="card table-wrap" data-testid="plugins-card">
+        <h2>硬件插件（HAL）</h2>
+        <p className="note">
+          每个厂商一个插件（cuda、rocm、metal、cpu……），放在插件目录里即被发现；坏插件只会显示“已拒绝”和原因，不影响其他插件。
+          微基准实测显存带宽和 GEMM 吞吐，一次只跑一个，以免互相干扰。
+        </p>
+        {plugins.error && <div className="error-box">{plugins.error}</div>}
+        <table>
+          <thead>
+            <tr>
+              <th>插件</th>
+              <th>厂商</th>
+              <th>版本</th>
+              <th>状态</th>
+              <th className="num">设备数</th>
+              <th>微基准</th>
+            </tr>
+          </thead>
+          <tbody>
+            {plugins.data?.map((p) => (
+              <PluginRow key={p.name} p={p} />
+            ))}
+          </tbody>
+        </table>
+        {plugins.data && plugins.data.length === 0 && <p className="muted">没有找到插件（检查 MQDE_PLUGIN_DIR 或可执行文件旁的 plugins/ 目录）。</p>}
       </div>
       <div className="card table-wrap">
         <h2>硬件画像库（data/hardware_db）</h2>

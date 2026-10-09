@@ -10,6 +10,10 @@ through the real REST API but no GPU, model or quantization is involved. The fin
 
 `layer_detail.mjs` (T-0903): clicking a worst-layer row opens the layer detail card; metrics and ranks are compared with values computed from the report JSON (18 checks, including the histogram charts and the QParams line on a job whose worst layer carries distributions; reversing the rank direction turns 2 red, dropping half the bars turns the bar-count check red).
 
+`ui_features.mjs`: the new backend features are reachable from the UI. Hardware page: the HAL plugins card with each plugin's state, reason, and bandwidth / GEMM buttons that run the real micro-benchmark and show the number (errors shown on the row); Estimate page and the new-job sidebar: a backend-profile selector (hf_transformers / vllm) that changes the estimate; New-job page: logits probe, vLLM deployment and lm-eval options that end up in the submitted job. 20 checks against the real server and a browser; three breakages (backend not sent, benchmark button ignoring its kind, logits option dropped) each turn checks red.
+
+Job page (`JobLLM.tsx`): the logits-probe table (KL, Top-1 agreement, with the top-k lower-bound note) and the lm-eval accuracy table (unquantized baseline first) are rendered from a report; they are covered by the next test, `job_new_sections.mjs`.
+
 ```bash
 cd web && npm run build && cd ..          # the test serves web/dist
 (cd demo && npm install)                  # Playwright; Google Chrome must be installed

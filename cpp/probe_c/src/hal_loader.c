@@ -3,6 +3,7 @@
 #include "mqde/hal/mqde_hal.h"
 
 #include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -133,8 +134,21 @@ static void validate(slot_t* s, const mqde_hal_plugin_v1* api, const char* only,
   s->info.status = n > 0 ? MQDE_HAL_LOADED : MQDE_HAL_INACTIVE;
 }
 
+/* The same file reached through two directory entries (MQDE_PLUGIN_DIR and <exe dir>/plugins often name one
+ * directory, and a symlink can alias a file) must be loaded once: a second copy would be reported as a
+ * duplicate and look like a failure. */
+static int already_seen(const char* path) {
+  char real[PATH_MAX];
+  if (!realpath(path, real)) return 0;
+  for (int i = 0; i < g_count; ++i) {
+    char other[PATH_MAX];
+    if (realpath(g_slots[i].info.path, other) && strcmp(real, other) == 0) return 1;
+  }
+  return 0;
+}
+
 static void load_file(const char* path, const char* only, const char* off) {
-  if (g_count >= MAX_PLUGINS) return;
+  if (g_count >= MAX_PLUGINS || already_seen(path)) return;
   slot_t* s = &g_slots[g_count];
   memset(s, 0, sizeof *s);
   copy(s->info.path, sizeof s->info.path, path);

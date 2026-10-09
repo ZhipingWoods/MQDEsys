@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api, fmt, fmtBytes, LlamaCppDeploy, LlamaServe, llamaSpeed, LLMJobReport, LLMRecipeReport, Sensitivity } from "../api";
+import { api, fmt, fmtBytes, LlamaCppDeploy, LlamaServe, llamaSpeed, LLMJobReport, LLMRecipeReport, Sensitivity, LmEval } from "../api";
 import { baseOption, Chart, series, token } from "../charts";
 import { Tile } from "./Estimate";
 import { LayerAnalysis } from "./LayerAnalysis";
@@ -155,7 +155,9 @@ function Overview({ rep, rs }: { rep: LLMJobReport; rs: LLMRecipeReport[] }) {
         </p>
       </div>
       {rs.some((r) => r.export) && <ExportCard rs={rs} />}
+      {rs.some((r) => r.logits) && <LogitsCard rep={rep} rs={rs} />}
       {rs.some((r) => Object.values(r.export ?? {}).some((e) => e.vllm)) && <VllmCard rs={rs} />}
+      {(rep.baseline_lm_eval || rs.some((r) => Object.values(r.export ?? {}).some((e) => e.vllm?.lm_eval))) && <LmEvalCard rep={rep} rs={rs} />}
       {rep.llamacpp && <LlamaCppCard d={rep.llamacpp} />}
     </>
   );
@@ -313,6 +315,107 @@ function ExportCard({ rs }: { rs: LLMRecipeReport[] }) {
       <p className="note">
         检查方式：用参考解包器读回 checkpoint，逐层比较整数码与零点（必须完全一致），再用 fp16 scale 反量化出后端实际使用的权重重新测 PPL。GPTQ/AWQ 格式不含激活量化。AWQ/SmoothQuant 的平滑系数按输入分组共享，并折叠进前一层（norm 或 up_proj/v_proj），因此可以直接导出；GQA 模型的 o_proj 无法折叠，保持不做平滑。
       </p>
+    </div>
+  );
+}
+
+/** KL / Top-1 agreement against the unquantized model. Top-k KL is a lower bound, and the page says so. */
+function LogitsCard({ rep, rs }: { rep: LLMJobReport; rs: LLMRecipeReport[] }) {
+  const probe = rep.logits_probe;
+  return (
+    <div className="card table-wrap" data-testid="logits-card">
+      <h2>输出分布偏移（logits 探针）</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>配方</th>
+            <th className="num">KL（nats）</th>
+            <th className="num">Top-1 一致率</th>
+            <th className="num">原 Top-1 概率下降</th>
+            <th className="num">位置数</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rs
+            .filter((r) => r.logits)
+            .map((r) => (
+              <tr key={r.recipe} data-testid={`logits-${r.recipe}`}>
+                <td>{r.recipe}</td>
+                <td className="num">{fmt(r.logits!.kl, 4)}</td>
+                <td className="num">{(100 * r.logits!.top1_agreement).toFixed(1)}%</td>
+                <td className="num">{fmt(r.logits!.ref_top1_prob_drop, 4)}</td>
+                <td className="num">{r.logits!.positions.toLocaleString()}</td>
+              </tr>
+            ))}
+        </tbody>
+      </table>
+      <p className="note">
+        PPL 只看实际下一个 token 的概率；这里比较整个输出分布。参考分布在量化前从原模型捕获
+        {probe ? `（${probe.windows} 个窗口 × ${probe.seq_len} token，参考占 ${probe.reference_mib.toFixed(0)} MiB）` : ""}。
+        {probe && !probe.exact && ` 只保存 top-${probe.k} logits，所以 KL 是下界，实测约偏低 11%（Qwen2.5-0.5B）；Top-1 一致率不受影响。`}
+      </p>
+    </div>
+  );
+}
+
+/** lm-eval accuracy rows: the unquantized baseline first, then each exported checkpoint served by vLLM. */
+function LmEvalCard({ rep, rs }: { rep: LLMJobReport; rs: LLMRecipeReport[] }) {
+  const sources: { who: string; fmt: string; lm: LmEval }[] = [];
+  if (rep.baseline_lm_eval) sources.push({ who: "未量化（基线）", fmt: "–", lm: rep.baseline_lm_eval });
+  for (const r of rs) for (const [f, e] of Object.entries(r.export ?? {})) if (e.vllm?.lm_eval) sources.push({ who: r.recipe, fmt: f, lm: e.vllm.lm_eval });
+  return (
+    <div className="card table-wrap" data-testid="lmeval-card">
+      <h2>任务精度（lm-eval，部署后的服务）</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>配方</th>
+            <th>格式</th>
+            <th>任务</th>
+            <th>指标</th>
+            <th className="num">acc ± se</th>
+            <th className="num">样本数</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sources.flatMap(({ who, fmt: f, lm }) =>
+            lm.status !== "succeeded" || !lm.tasks
+              ? [
+                  <tr key={who + f}>
+                    <td>{who}</td>
+                    <td>{f}</td>
+                    <td>–</td>
+                    <td className="bad">{lm.status === "skipped" ? "已跳过" : "失败"}</td>
+                    <td className="num">–</td>
+                    <td className="num">–</td>
+                    <td className="small">{lm.reason ?? (lm.error ?? "").split("\n")[0]}</td>
+                  </tr>,
+                ]
+              : Object.entries(lm.tasks).flatMap(([task, t]) =>
+                  Object.entries(t.metrics).map(([k, m]) => (
+                    <tr key={who + f + task + k} data-testid={`lmeval-${who}-${task}-${k}`}>
+                      <td>{who}</td>
+                      <td>{f}</td>
+                      <td>{t.alias ?? task}</td>
+                      <td>
+                        {m.metric}（{m.filter}）
+                      </td>
+                      <td className="num">
+                        {m.value.toFixed(4)}
+                        {m.stderr != null ? ` ± ${m.stderr.toFixed(4)}` : ""}
+                      </td>
+                      <td className="num">{t.samples?.effective ?? "–"}</td>
+                      <td className="small">
+                        lm-eval {lm.version ?? ""} · limit {lm.limit ?? "–"} · {lm.num_fewshot == null ? "任务默认" : `${lm.num_fewshot}-shot`}
+                      </td>
+                    </tr>
+                  )),
+                ),
+          )}
+        </tbody>
+      </table>
+      <p className="note">样本数少时标准误很大，两个配方的差异在标准误之内就不能说谁更好。</p>
     </div>
   );
 }

@@ -28,6 +28,15 @@ export default function NewJobPage() {
   const [exportFmts, setExportFmts] = useState<string[]>(["gptq"]);
   const [sens, setSens] = useState("");
   const [gguf, setGguf] = useState<string[]>([]);
+  // logits probe (KL / Top-1 agreement), vLLM deployment (S11/S12) and lm-eval task accuracy: all LLM-only
+  const [probe, setProbe] = useState(false);
+  const [probeExact, setProbeExact] = useState(false);
+  const [useVllm, setUseVllm] = useState(false);
+  const [vllmUtil, setVllmUtil] = useState(0.3);
+  const [useLmEval, setUseLmEval] = useState(false);
+  const [lmTasks, setLmTasks] = useState("gsm8k");
+  const [lmLimit, setLmLimit] = useState(50);
+  const [lmShots, setLmShots] = useState(5);
   const [dataset, setDataset] = useState(DEFAULT_DATASET);
   const [nCalib, setNCalib] = useState(16);
   const [nEval, setNEval] = useState(24);
@@ -72,9 +81,30 @@ export default function NewJobPage() {
           },
           calibration: { dataset: "wikitext-2-raw-v1:train", n_samples: nCalib, seq_len: seqLen },
           evaluation: { dataset: "wikitext-2-raw-v1:test", seq_len: seqLen, max_windows: windows },
-          deploy: { hardware: hw, device, ...(gguf.length ? { llamacpp: { types: gguf } } : {}) },
+          deploy: {
+            hardware: hw,
+            device,
+            ...(gguf.length ? { llamacpp: { types: gguf } } : {}),
+            ...(useVllm
+              ? {
+                  vllm: {
+                    gpu_memory_utilization: vllmUtil,
+                    ...(useLmEval
+                      ? { lm_eval: { tasks: lmTasks.split(",").map((t) => t.trim()).filter(Boolean), limit: lmLimit, num_fewshot: lmShots } }
+                      : {}),
+                  },
+                }
+              : {}),
+          },
           ...(exportFmts.length ? { export: { formats: exportFmts } } : {}),
-          ...(sens ? { analysis: { sensitivity: sens, sensitivity_windows: 8 } } : {}),
+          ...(sens || probe
+            ? {
+                analysis: {
+                  ...(sens ? { sensitivity: sens, sensitivity_windows: 8 } : {}),
+                  ...(probe ? { logits_probe: probeExact ? { exact: true } : {} } : {}),
+                },
+              }
+            : {}),
         };
 
   const submit = async () => {
@@ -91,10 +121,12 @@ export default function NewJobPage() {
   };
 
   // live estimate sidebar: same endpoint as the estimate page, 300 ms after the last change
-  const live = useDebounced({ model, hw, picked, action }, 300);
+  const [estBackend, setEstBackend] = useState("hf_transformers");
+  const backendList = useAsync(api.backends, []);
+  const live = useDebounced({ model, hw, picked, action, estBackend }, 300);
   const liveRt = { ...LIVE_RUNTIME, extra_modalities: live.action && kind === "vla" ? ["action"] : [] };
   const est = useAsync(
-    () => (live.picked.length ? api.estimate(live.model, live.hw, live.picked, liveRt) : Promise.resolve(null)),
+    () => (live.picked.length ? api.estimate(live.model, live.hw, live.picked, liveRt, live.estBackend) : Promise.resolve(null)),
     [JSON.stringify(live), kind],
   );
 
@@ -263,6 +295,16 @@ export default function NewJobPage() {
                 </select>
               </div>
             </div>
+            <div className="form-row">
+              <div className="field">
+                <label>
+                  <input type="checkbox" checked={probe} onChange={(e) => setProbe(e.target.checked)} data-testid="opt-probe" /> logits 探针（量化前后输出分布的 KL 与 Top-1 一致率）
+                </label>
+                <label className="small">
+                  <input type="checkbox" checked={probeExact} disabled={!probe} onChange={(e) => setProbeExact(e.target.checked)} data-testid="opt-probe-exact" /> 精确 KL（保存全部 logits，约 1.2 GiB / 8 窗口；默认只存 top-256，KL 为下界）
+                </label>
+              </div>
+            </div>
             <p className="note">评估位点：pretrain（原模型）→ fake_quant_wo_kv（权重+激活量化）→ fake_quant（再加 KV Cache 量化）。PPL 为不重叠窗口的 token 级困惑度。</p>
           </>
         )}
@@ -305,6 +347,30 @@ export default function NewJobPage() {
             </div>
           )}
           {kind === "llm" && (
+            <div className="field" style={{ minWidth: 320 }}>
+              <label>
+                <input type="checkbox" checked={useVllm} onChange={(e) => setUseVllm(e.target.checked)} data-testid="opt-vllm" /> vLLM 部署实测（需要 GPU 与 vLLM；缺失则该阶段跳过）
+              </label>
+              {useVllm && (
+                <>
+                  <label className="small">
+                    显存利用率 <input type="number" step={0.05} min={0.1} max={0.95} value={vllmUtil} style={{ width: 70 }} onChange={(e) => setVllmUtil(Number(e.target.value))} data-testid="opt-vllm-util" />
+                  </label>
+                  <label className="small">
+                    <input type="checkbox" checked={useLmEval} onChange={(e) => setUseLmEval(e.target.checked)} data-testid="opt-lmeval" /> lm-eval 任务精度（同时评未量化基线）
+                  </label>
+                  {useLmEval && (
+                    <div className="form-row" style={{ margin: 0 }}>
+                      <input value={lmTasks} onChange={(e) => setLmTasks(e.target.value)} placeholder="gsm8k,arc_easy" style={{ width: 150 }} aria-label="lm-eval 任务" data-testid="opt-lmeval-tasks" />
+                      <input type="number" min={1} value={lmLimit} style={{ width: 70 }} onChange={(e) => setLmLimit(Number(e.target.value))} aria-label="样本数" />
+                      <input type="number" min={0} value={lmShots} style={{ width: 60 }} onChange={(e) => setLmShots(Number(e.target.value))} aria-label="few-shot" />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+          {kind === "llm" && (
             <div className="field">
               <label>执行设备</label>
               <select value={device} onChange={(e) => setDevice(e.target.value)}>
@@ -329,6 +395,13 @@ export default function NewJobPage() {
       <aside className="card" style={{ position: "sticky", top: 12 }} data-testid="live-estimate">
         <h2>实时预估</h2>
         <p className="note">{hw} · 并发 1 · 不加载权重</p>
+        <select value={estBackend} onChange={(e) => setEstBackend(e.target.value)} data-testid="live-backend" aria-label="推理后端画像">
+          {(backendList.data ?? [{ id: "hf_transformers" }]).map((b) => (
+            <option key={b.id} value={b.id}>
+              后端：{b.id}
+            </option>
+          ))}
+        </select>
         {est.loading && <p className="note">计算中…</p>}
         {est.error && <div className="error-box" data-testid="live-estimate-error">{est.error}</div>}
         {est.data && (

@@ -109,6 +109,34 @@ export interface Device {
   profile?: string;
 }
 
+export interface BackendInfo {
+  id: string;
+  activation_model: "per_seq" | "batched";
+  max_batched_tokens: number;
+  runtime_overhead_bytes: number;
+  allocator_factor: number;
+}
+
+export interface HalPlugin {
+  name: string;
+  vendor: string;
+  version: string;
+  status: "loaded" | "inactive" | "rejected" | "disabled" | "unknown";
+  devices: number;
+  reason: string;
+  has_profile: boolean;
+}
+
+export interface ProfileResult {
+  plugin: string;
+  device: number;
+  kind: string;
+  dtype: string;
+  value: number;
+  unit: string;
+  seconds: number;
+}
+
 export interface JobListItem {
   job_id: string;
   name?: string;
@@ -207,6 +235,7 @@ export interface LLMRecipeReport {
   summary: { ppl: number; ppl_delta_pct: number; kv_delta_pct: number | null; worst_layers: { name: string; out_sqnr_db: number }[] };
   export?: Record<string, LLMExport>;
   sensitivity?: Sensitivity;
+  logits?: LogitsResult;
 }
 
 export interface Sensitivity {
@@ -274,6 +303,36 @@ export interface VllmDeploy {
   served_ppl?: number;
   served_windows?: number;
   served_vs_real_ppl_pct?: number;
+  lm_eval?: LmEval;
+}
+
+/** lm-evaluation-harness run through its official CLI against the served model (ADR-0002). */
+export interface LmEval {
+  status: "succeeded" | "failed" | "skipped";
+  reason?: string;
+  error?: string;
+  version?: string | null;
+  limit?: number | null;
+  num_fewshot?: number | null;
+  tasks?: Record<
+    string,
+    {
+      alias?: string;
+      samples?: { original?: number; effective?: number };
+      metrics: Record<string, { metric: string; filter: string; value: number; stderr: number | null }>;
+    }
+  >;
+}
+
+/** Output-distribution comparison against the unquantized model (eval/logits_probe.py). */
+export interface LogitsResult {
+  kl: number;
+  top1_agreement: number;
+  ref_top1_prob_drop: number;
+  positions: number;
+  windows: number;
+  exact: boolean;
+  k: number;
 }
 
 export interface LLMJobReport {
@@ -288,6 +347,8 @@ export interface LLMJobReport {
   recipes?: Record<string, LLMRecipeReport>;
   env?: { torch: string; torch_threads: number; device: string };
   llamacpp?: LlamaCppDeploy;
+  baseline_lm_eval?: LmEval;
+  logits_probe?: { windows: number; seq_len: number; k: number; exact: boolean; reference_mib: number };
 }
 
 export interface LlamaCppRun {
@@ -489,10 +550,14 @@ export const api = {
   recipes: () => req<Recipe[]>("GET", "/recipes"),
   algorithms: () => req<Algorithm[]>("GET", "/algorithms"),
   hardwareProfiles: () => req<HardwareProfile[]>("GET", "/hardware/profiles"),
+  hardwarePlugins: () => req<HalPlugin[]>("GET", "/hardware/plugins"),
+  profileDevice: (plugin: string, device: number, kind: "bandwidth" | "gemm", dtype = "fp32") =>
+    req<ProfileResult>("POST", "/hardware/profile", { plugin, device, kind, dtype }),
   hardware: () => req<{ devices: Device[]; job_gpus: { pool: { gpu: number; job: string | null }[]; queued: number } }>("GET", "/hardware"),
   inspect: (path: string) => req<Record<string, any>>("POST", "/models:inspect", { path }),
-  estimate: (model: string, hardware: string, recipes: string[], runtime: RuntimeParams) =>
-    req<{ hardware: HardwareProfile; estimates: Estimate[] }>("POST", "/estimate", { model, hardware, recipes, runtime }),
+  backends: () => req<BackendInfo[]>("GET", "/backends"),
+  estimate: (model: string, hardware: string, recipes: string[], runtime: RuntimeParams, backend = "hf_transformers") =>
+    req<{ hardware: HardwareProfile; estimates: Estimate[] }>("POST", "/estimate", { model, hardware, recipes, runtime, backend }),
   matrix: (model: string, runtime: RuntimeParams) => req<{ cells: MatrixCell[] }>("POST", "/estimate:matrix", { model, runtime }),
   jobs: () => req<JobListItem[]>("GET", "/jobs"),
   job: (id: string) => req<JobDetail>("GET", `/jobs/${id}`),
