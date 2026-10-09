@@ -302,4 +302,82 @@ std::vector<Problem> validate_jobspec(const Json& job) {
   return out;
 }
 
+// ---------------------------------------------------------------- recommend
+
+std::string preferred_export_format(const QuantSpec& weight) {
+  if (!weight.enabled()) return "";  // bf16: nothing to export
+  if (weight.fmt == NumFormat::kFp8E4M3 || weight.fmt == NumFormat::kFp8E5M2) return "compressed-tensors";
+  return weight.bits == 4 ? "awq" : "gptq";
+}
+
+RecommendResult recommend(const modelspec::ModelSpec& spec,
+                          const std::vector<estimator::BackendProfile>& backends,
+                          const std::vector<estimator::HardwareProfile>& hardware,
+                          const estimator::RuntimeParams& rt, int top_k) {
+  RecommendResult out;
+  auto recipe_names = estimator::list_data_entries("recipes");
+  if (!recipe_names) return out;
+  std::vector<Recommendation> all;
+  for (const auto& rn : *recipe_names) {
+    auto recipe = estimator::load_recipe(rn);
+    if (!recipe) continue;
+    for (const auto& hw : hardware) {
+      for (const auto& be : backends) {
+        const auto est = estimator::estimate(spec, *recipe, hw, be, rt);
+        Recommendation rec;
+        rec.recipe = recipe->name;
+        rec.algorithm = recipe->default_algorithm;
+        rec.maturity = recipe->maturity;
+        rec.backend = be.id;
+        rec.hardware = hw.id;
+        rec.feasible = est.feasible;
+        rec.peak_bytes = est.peak_bytes;
+        rec.capacity_bytes = est.capacity_bytes;
+        rec.max_concurrency = est.max_concurrency;
+        rec.export_format = preferred_export_format(recipe->weight);
+        if (!est.feasible) {
+          rec.reasons = est.reasons;
+          rec.reasons.push_back(fmt::format("peak {} exceeds capacity {} at {}% utilization", est.peak_bytes,
+                                            est.capacity_bytes,
+                                            static_cast<int>(rt.gpu_memory_utilization * 100)));
+          ++out.excluded;
+          continue;
+        }
+        if (!rec.export_format.empty()) {
+          const auto dep = check_deploy(rec.export_format, *recipe, be.id, hw);
+          rec.deploy_verdict = dep.verdict;
+          if (dep.verdict == Verdict::kUnsupported) {
+            rec.reasons.push_back(
+                fmt::format("{} export does not deploy on {}: {}", rec.export_format, be.id, dep.reason));
+            ++out.excluded;
+            continue;
+          }
+          rec.reasons.push_back(dep.verdict == Verdict::kNative
+                                    ? fmt::format("native {} kernel on {}", rec.export_format, hw.id)
+                                    : fmt::format("emulated: {}", dep.reason));
+        } else {
+          rec.deploy_verdict = Verdict::kNative;
+          rec.reasons.push_back("bf16: no quantization, no export needed");
+        }
+        rec.reasons.push_back(fmt::format("fits: peak {:.1f} GiB of {:.1f} GiB capacity",
+                                          static_cast<double>(est.peak_bytes) / (1 << 30),
+                                          static_cast<double>(est.capacity_bytes) / (1 << 30)));
+        rec.reasons.push_back(
+            fmt::format("{} recipe, estimated max_concurrency {}", recipe->maturity, est.max_concurrency));
+        all.push_back(std::move(rec));
+      }
+    }
+  }
+  std::stable_sort(all.begin(), all.end(), [](const Recommendation& a, const Recommendation& b) {
+    if ((a.deploy_verdict == Verdict::kNative) != (b.deploy_verdict == Verdict::kNative))
+      return a.deploy_verdict == Verdict::kNative;
+    if (a.max_concurrency != b.max_concurrency) return a.max_concurrency > b.max_concurrency;
+    if ((a.maturity == "production") != (b.maturity == "production")) return a.maturity == "production";
+    return a.recipe < b.recipe;
+  });
+  if (static_cast<int>(all.size()) > top_k) all.resize(static_cast<size_t>(top_k));
+  out.top = std::move(all);
+  return out;
+}
+
 }  // namespace mqde::planner

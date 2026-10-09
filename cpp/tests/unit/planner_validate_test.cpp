@@ -1,4 +1,5 @@
 // T-0210: compatibility matrix (export-format packing rules, backend known issues) and JobSpec validation.
+#include <fmt/ranges.h>
 #include <gtest/gtest.h>
 
 #include "mqde/planner/validate.h"
@@ -317,4 +318,126 @@ TEST(planner_validate_jobspec, missing_fields_default_sensibly_and_do_not_crash)
   EXPECT_FALSE(validate_jobspec(Json::object()).empty());  // no recipe at all
   EXPECT_NO_FATAL_FAILURE(validate_jobspec({{"quant", "not an object"}}));
   EXPECT_NO_FATAL_FAILURE(validate_jobspec({{"quant", {{"recipe", "not an array"}}}}));
+}
+
+// ---------------------------------------------------------------- recommend
+
+namespace {
+
+// A 7B-parameter dense llama, built the same way cpp/tests/unit/concurrency_test.cpp's tiny_dense() does (one
+// real weight tensor sized to the target parameter count; estimate() only needs total bytes for the memory
+// numbers used here, not real per-layer shapes).
+modelspec::ModelSpec dense_7b() {
+  Json cfg = {{"model_type", "llama"},      {"num_hidden_layers", 32},  {"hidden_size", 4096},
+              {"num_attention_heads", 32},  {"num_key_value_heads", 8}, {"head_dim", 128},
+              {"intermediate_size", 14336}, {"vocab_size", 128256},     {"max_position_embeddings", 131072}};
+  const int64_t rows = 4096, cols = static_cast<int64_t>(7e9 / rows);
+  std::vector<modelspec::TensorInfo> t = {{"model.layers.0.mlp.up_proj.weight",
+                                           "BF16",
+                                           {rows, cols},
+                                           rows * cols,
+                                           static_cast<uint64_t>(rows * cols * 2),
+                                           "m"}};
+  auto fam = modelspec::find_model_family("llama");
+  auto spec = modelspec::build_model_spec(cfg, t, *fam);
+  EXPECT_TRUE(spec) << (spec ? "" : std::string(spec.error().message));
+  spec->path = "test/dense7b";
+  return *spec;
+}
+
+estimator::HardwareProfile gpu24() {
+  estimator::HardwareProfile h;
+  h.id = "test/24g";
+  h.name = "Test 24GB";
+  h.arch = "sm_89";
+  h.mem_bytes = 24ull << 30;
+  h.mem_bw_gbps = 1000;
+  h.peak_tflops = {{"bf16", 100}, {"fp8", 200}, {"int8", 200}, {"int4", 400}};
+  h.native_formats = {"bf16", "fp16", "fp8_e4m3", "fp8_e5m2", "int8", "int4"};
+  return h;
+}
+
+estimator::BackendProfile vllm_be() {
+  estimator::BackendProfile b;
+  b.id = "vllm";
+  b.runtime_overhead_bytes = 400 << 20;
+  b.allocator_factor = 1.0;
+  b.activation_model = "batched";
+  b.max_batched_tokens = 8192;
+  return b;
+}
+
+}  // namespace
+
+TEST(planner_recommend,
+     a_7b_model_on_24gb_at_8k_context_and_concurrency_8_recommends_w4a16_or_fp8_and_excludes_bf16) {
+  estimator::RuntimeParams rt;
+  rt.context_tokens = 8192;
+  rt.concurrency = 8;
+  rt.gpu_memory_utilization = 0.9;
+  auto r = recommend(dense_7b(), {vllm_be()}, {gpu24()}, rt, 5);
+  ASSERT_FALSE(r.top.empty()) << "excluded " << r.excluded;
+  std::set<std::string> names;
+  for (const auto& rec : r.top) names.insert(rec.recipe);
+  EXPECT_TRUE(names.count("W4A16") || names.count("FP8")) << fmt::format("{}", fmt::join(names, ", "));
+  for (const auto& rec : r.top) {
+    EXPECT_TRUE(rec.feasible) << rec.recipe;
+    EXPECT_NE(rec.recipe, "BF16") << "16 bit x 7B does not fit in 24 GiB at this context and concurrency";
+    EXPECT_FALSE(rec.reasons.empty());
+  }
+  EXPECT_GT(r.excluded, 0)
+      << "bf16 (and the 2-bit recipes being dominated) should be excluded, not silently omitted";
+}
+
+TEST(planner_recommend, every_recommendation_actually_fits_and_has_a_native_or_emulated_kernel) {
+  estimator::RuntimeParams rt;
+  rt.context_tokens = 4096;
+  rt.concurrency = 4;
+  rt.gpu_memory_utilization = 0.9;
+  auto r = recommend(dense_7b(), {vllm_be()}, {gpu24()}, rt, 10);
+  for (const auto& rec : r.top) {
+    auto recipe = estimator::load_recipe(rec.recipe);
+    ASSERT_TRUE(recipe);
+    const auto est = estimator::estimate(dense_7b(), *recipe, gpu24(), vllm_be(), rt);
+    EXPECT_TRUE(est.feasible) << rec.recipe;
+    EXPECT_EQ(rec.peak_bytes, est.peak_bytes);
+    EXPECT_NE(rec.deploy_verdict, Verdict::kUnsupported) << rec.recipe;
+  }
+}
+
+TEST(planner_recommend, results_are_ranked_feasible_and_native_first_then_by_higher_concurrency) {
+  estimator::RuntimeParams rt;
+  rt.context_tokens = 2048;
+  rt.concurrency = 1;
+  rt.gpu_memory_utilization = 0.9;
+  auto r = recommend(dense_7b(), {vllm_be()}, {gpu24()}, rt, 10);
+  ASSERT_GE(r.top.size(), 2u);
+  for (size_t i = 1; i < r.top.size(); ++i) {
+    const bool prev_native = r.top[i - 1].deploy_verdict == Verdict::kNative;
+    const bool cur_native = r.top[i].deploy_verdict == Verdict::kNative;
+    EXPECT_TRUE(prev_native || !cur_native) << "a native-kernel result must not come after a non-native one";
+    if (prev_native == cur_native) EXPECT_GE(r.top[i - 1].max_concurrency, r.top[i].max_concurrency);
+  }
+}
+
+TEST(planner_recommend, top_k_actually_limits_the_count_and_a_tiny_hardware_excludes_everything) {
+  estimator::RuntimeParams rt;
+  rt.context_tokens = 2048;
+  rt.concurrency = 1;
+  rt.gpu_memory_utilization = 0.9;
+  auto r3 = recommend(dense_7b(), {vllm_be()}, {gpu24()}, rt, 3);
+  EXPECT_LE(r3.top.size(), 3u);
+  estimator::HardwareProfile tiny = gpu24();
+  tiny.mem_bytes = 1ull << 20;  // 1 MiB: nothing fits
+  auto none = recommend(dense_7b(), {vllm_be()}, {tiny}, rt, 5);
+  EXPECT_TRUE(none.top.empty());
+  EXPECT_GT(none.excluded, 0);
+}
+
+TEST(planner_preferred_export_format, matches_what_check_deploy_and_check_export_were_written_for) {
+  EXPECT_EQ(preferred_export_format(none()), "");
+  EXPECT_EQ(preferred_export_format(w_int(4)), "awq");
+  EXPECT_EQ(preferred_export_format(w_int(2)), "gptq");
+  EXPECT_EQ(preferred_export_format(w_int(8)), "gptq");
+  EXPECT_EQ(preferred_export_format(w_fp8()), "compressed-tensors");
 }

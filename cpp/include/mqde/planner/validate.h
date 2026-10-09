@@ -65,4 +65,42 @@ struct Problem {
 // job will succeed (model-specific and runtime failures are still possible).
 std::vector<Problem> validate_jobspec(const Json& job);
 
+// ---- recommend (T-0211) ----
+
+// The export format planner::recommend tries for a recipe's weight spec, so check_deploy has something
+// concrete to test: int4 prefers awq (broadest vLLM support per docs/PROGRESS.md), other int bit widths
+// prefer gptq (wider bits_ok), fp8 uses compressed-tensors. Exposed so callers can show the reader which
+// format a recommendation assumes.
+std::string preferred_export_format(const quant::QuantSpec& weight);
+
+struct Recommendation {
+  std::string recipe, algorithm, backend, hardware;
+  std::string maturity;  // the recipe's own "production" | "experimental" (data/recipes/*.yaml), used as a
+                         // ranking tiebreak
+  bool feasible = false;
+  Verdict deploy_verdict = Verdict::kUnsupported;
+  uint64_t peak_bytes = 0, capacity_bytes = 0;
+  int64_t max_concurrency = 0;
+  std::string export_format;  // from preferred_export_format; empty if the recipe needs no export (bf16)
+  std::vector<std::string> reasons;  // why this combination was ranked where it is, or why it was excluded
+  // TP (tensor-parallel degree) is not modeled anywhere in this codebase (HardwareProfile is single-GPU);
+  // every recommendation implicitly assumes TP=1. Not included as a field so it is never mistaken for a real
+  // result.
+};
+
+// Top-K feasible (recipe, algorithm, backend, hardware) combinations for `spec` under `rt` (context,
+// concurrency, memory utilization), searched over every recipe in data/recipes and every (backend, hardware)
+// pair in `backends`/`hardware`. Infeasible or unsupported combinations are omitted from the ranked list but
+// counted in `excluded` so a caller can report "N combinations considered, M excluded, here are the rest".
+// Ranking: feasible native-kernel combinations first, then by estimated max_concurrency (higher is better),
+// then by recipe maturity (production before experimental).
+struct RecommendResult {
+  std::vector<Recommendation> top;
+  int excluded = 0;
+};
+RecommendResult recommend(const modelspec::ModelSpec& spec,
+                          const std::vector<estimator::BackendProfile>& backends,
+                          const std::vector<estimator::HardwareProfile>& hardware,
+                          const estimator::RuntimeParams& rt, int top_k = 5);
+
 }  // namespace mqde::planner

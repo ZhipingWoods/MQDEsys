@@ -412,6 +412,54 @@ Result<void> serve(const ServerOptions& o) {
     send_json(res, {{"cells", cells}});
   });
 
+  // Top-K (recipe, algorithm, backend, hardware) recommendations under memory + deployability constraints
+  // (T-0211). Body: {model, runtime, hardware?: [ids] (default: every hardware_db entry), backend?: [ids]
+  // (default: vllm), top_k?: default 5}.
+  svr.Post("/api/v1/recommend", [&](const httplib::Request& req, httplib::Response& res) {
+    auto body = parse_body(req, res);
+    if (!body) return;
+    const auto path = body->value("model", "");
+    if (!model_allowed(path)) return send_error(res, 403, "forbidden", "model path is outside allowed roots");
+    auto spec = get_spec(path);
+    if (!spec) return send_error(res, spec.error());
+    const auto rt = runtime_from(body->value("runtime", Json::object()));
+    const int top_k = body->value("top_k", 5);
+    std::vector<estimator::HardwareProfile> hws;
+    if (auto want = body->value("hardware", Json::array()); !want.empty()) {
+      for (const auto& h : want)
+        if (auto hw = estimator::load_hardware(h.get<std::string>())) hws.push_back(*hw);
+    } else {
+      auto ids = estimator::list_data_entries("hardware_db");
+      if (!ids) return send_error(res, ids.error());
+      for (const auto& h : *ids)
+        if (auto hw = estimator::load_hardware(h)) hws.push_back(*hw);
+    }
+    std::vector<estimator::BackendProfile> bes;
+    auto want_be = body->value("backend", Json::array({"vllm"}));
+    for (const auto& b : want_be)
+      if (auto be = estimator::load_backend(b.get<std::string>())) bes.push_back(*be);
+    if (hws.empty() || bes.empty())
+      return send_error(res, 400, "invalid_argument", "no usable hardware / backend profile");
+    const auto r = planner::recommend(*spec, bes, hws, rt, top_k);
+    Json top = Json::array();
+    for (const auto& rec : r.top)
+      top.push_back({{"recipe", rec.recipe},
+                     {"algorithm", rec.algorithm},
+                     {"backend", rec.backend},
+                     {"hardware", rec.hardware},
+                     {"maturity", rec.maturity},
+                     {"feasible", rec.feasible},
+                     {"deploy_verdict", std::string(planner::verdict_name(rec.deploy_verdict))},
+                     {"peak_bytes", rec.peak_bytes},
+                     {"capacity_bytes", rec.capacity_bytes},
+                     {"max_concurrency", rec.max_concurrency},
+                     {"export_format", rec.export_format},
+                     {"reasons", rec.reasons}});
+    send_json(
+        res,
+        {{"top", top}, {"excluded", r.excluded}, {"considered", static_cast<int>(top.size()) + r.excluded}});
+  });
+
   // ---------------- model library + graph (netron-style) ----------------
   auto scan_library = [&]() {
     std::vector<fs::path> out;
