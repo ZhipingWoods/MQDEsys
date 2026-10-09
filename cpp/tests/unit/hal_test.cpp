@@ -423,8 +423,9 @@ TEST_F(hal_rocm, lists_the_fake_devices_with_the_attributes_the_plugin_reads) {
     ASSERT_EQ(mqde_probe_all(devs, 32, &cnt), 0);
     int found = 0;
     for (int i = 0; i < cnt; ++i)
-      if (std::string(devs[i].vendor) == "amd") {
-        EXPECT_EQ(devs[i].kind, MQDE_DEV_GPU);
+      // the built-in CPU row of an AMD host also has vendor "amd", so select the plugin's devices by kind as
+      // well
+      if (std::string(devs[i].vendor) == "amd" && devs[i].kind == MQDE_DEV_GPU) {
         EXPECT_EQ(devs[i].index, found);
         EXPECT_EQ(std::string(devs[i].name), "Fake AMD GPU " + std::to_string(found));
         EXPECT_EQ(devs[i].compute_units, 96u) << "the CU count comes from attribute id 63";
