@@ -1,0 +1,279 @@
+// T-1101: HAL plugin ABI, loader and probe integration. Every scenario is a real shared library built from
+// cpp/tests/plugins/<case>.c (or the shipped template plugin) and loaded with dlopen: ABI mismatch, missing
+// symbol, NULL mandatory functions, a probe that fails or lies about its count, duplicate names, and the
+// allow / deny lists.
+#include <cstdlib>
+#include <cstring>
+#include <map>
+#include <string>
+
+#include <gtest/gtest.h>
+
+#include "mqde/hal/mqde_hal.h"
+#include "mqde_probe.h"
+
+#ifndef _WIN32
+namespace {
+
+struct Env {
+  Env(const char* k, const char* v) : key(k) {
+    const char* old = ::getenv(k);
+    if (old) saved = old, had = true;
+    if (v)
+      ::setenv(k, v, 1);
+    else
+      ::unsetenv(k);
+  }
+  ~Env() {
+    if (had)
+      ::setenv(key.c_str(), saved.c_str(), 1);
+    else
+      ::unsetenv(key.c_str());
+  }
+  std::string key, saved;
+  bool had = false;
+};
+
+std::map<std::string, mqde_hal_plugin_info> load_cases() {
+  EXPECT_GT(mqde_hal_load_all(), 0);
+  std::map<std::string, mqde_hal_plugin_info> m;
+  for (int i = 0; i < mqde_hal_plugin_count(); ++i) {
+    mqde_hal_plugin_info p;
+    EXPECT_EQ(mqde_hal_plugin_get(i, &p), 0);
+    std::string file = p.path;
+    file = file.substr(file.rfind('/') + 1);
+    m[file.substr(0, file.size() - 3)] = p;  // keyed by the library's file name: good, bad_abi, ...
+  }
+  return m;
+}
+
+}  // namespace
+
+class hal_cases : public ::testing::Test {
+ protected:
+  Env dir{"MQDE_PLUGIN_DIR", MQDE_HAL_CASE_DIR};
+  Env only{"MQDE_HAL_PLUGINS", nullptr};
+  Env off{"MQDE_HAL_DISABLE", nullptr};
+  Env home{"MQDE_HOME", nullptr};
+};
+
+TEST_F(hal_cases, a_good_plugin_loads_and_reports_its_device) {
+  auto m = load_cases();
+  ASSERT_TRUE(m.count("good"));
+  EXPECT_EQ(m["good"].status, MQDE_HAL_LOADED);
+  EXPECT_STREQ(m["good"].name, "good");
+  EXPECT_EQ(m["good"].devices, 1);
+  EXPECT_STREQ(m["good"].reason, "");
+  const auto* api = mqde_hal_plugin_by_name("good");
+  ASSERT_NE(api, nullptr);
+  mqde_hal_device d[4];
+  int n = 0;
+  ASSERT_EQ(api->device_probe(d, 4, &n), 0);
+  ASSERT_EQ(n, 1);
+  EXPECT_STREQ(d[0].name, "Acme One");
+}
+
+TEST_F(hal_cases, each_kind_of_broken_plugin_is_rejected_with_a_reason_naming_the_problem) {
+  auto m = load_cases();
+  struct Want {
+    const char* file;
+    const char* reason;
+  };
+  for (const Want& w :
+       {Want{"bad_abi", "ABI version 2"}, Want{"small_struct", "struct_size 24"},
+        Want{"no_symbol", "mqde_hal_get_plugin_v1"}, Want{"returns_null", "returned NULL"},
+        Want{"null_probe", "device_probe"}, Want{"null_last_error", "last_error"},
+        Want{"bad_name", "invalid plugin name"}, Want{"probe_fails", "device_probe failed: boom"},
+        Want{"too_many", "1000 devices"}, Want{"negative_n", "-3 devices"}}) {
+    ASSERT_TRUE(m.count(w.file)) << w.file;
+    EXPECT_EQ(m[w.file].status, MQDE_HAL_REJECTED) << w.file;
+    EXPECT_NE(std::string(m[w.file].reason).find(w.reason), std::string::npos)
+        << w.file << ": " << m[w.file].reason;
+    EXPECT_EQ(mqde_hal_plugin_by_name(m[w.file].name), nullptr) << w.file << " must not be usable";
+  }
+}
+
+TEST_F(hal_cases, a_broken_plugin_does_not_stop_the_good_ones) {
+  auto m = load_cases();
+  EXPECT_EQ(m["good"].status, MQDE_HAL_LOADED);
+  int rejected = 0, loaded = 0;
+  for (auto& [k, p] : m) {
+    rejected += p.status == MQDE_HAL_REJECTED;
+    loaded += p.status == MQDE_HAL_LOADED;
+  }
+  EXPECT_GE(rejected, 10);
+  EXPECT_GE(loaded, 2);  // good, plus the first of the duplicates
+}
+
+TEST_F(hal_cases, zero_devices_is_inactive_not_an_error) {
+  auto m = load_cases();
+  EXPECT_EQ(m["zero_devices"].status, MQDE_HAL_INACTIVE);
+  EXPECT_EQ(m["zero_devices"].devices, 0);
+  EXPECT_STREQ(m["zero_devices"].reason, "");
+  EXPECT_NE(mqde_hal_plugin_by_name("zero_devices"), nullptr) << "still loaded: it may find devices later";
+}
+
+TEST_F(hal_cases, duplicate_names_keep_the_first_in_file_order_and_say_why) {
+  auto m = load_cases();
+  EXPECT_EQ(m["dup_a"].status, MQDE_HAL_LOADED);
+  EXPECT_EQ(m["dup_b"].status, MQDE_HAL_REJECTED);
+  EXPECT_NE(std::string(m["dup_b"].reason).find("duplicate plugin name"), std::string::npos)
+      << m["dup_b"].reason;
+  EXPECT_NE(std::string(m["dup_b"].reason).find("dup_a.so"), std::string::npos) << "names the file that won";
+}
+
+TEST_F(hal_cases, the_allow_list_loads_only_the_named_plugins) {
+  Env only2("MQDE_HAL_PLUGINS", "good");
+  auto m = load_cases();
+  EXPECT_EQ(m["good"].status, MQDE_HAL_LOADED);
+  EXPECT_EQ(m["zero_devices"].status, MQDE_HAL_DISABLED);
+  EXPECT_NE(std::string(m["zero_devices"].reason).find("MQDE_HAL_PLUGINS"), std::string::npos);
+  EXPECT_EQ(m["bad_abi"].status, MQDE_HAL_REJECTED)
+      << "a plugin that is broken is reported as broken, not as 'disabled'";
+}
+
+TEST_F(hal_cases, the_deny_list_skips_the_named_plugins) {
+  Env off2("MQDE_HAL_DISABLE", "good,dup");
+  auto m = load_cases();
+  EXPECT_EQ(m["good"].status, MQDE_HAL_DISABLED);
+  EXPECT_EQ(m["dup_a"].status, MQDE_HAL_DISABLED);
+  EXPECT_EQ(m["zero_devices"].status, MQDE_HAL_INACTIVE);
+  EXPECT_EQ(mqde_hal_plugin_by_name("good"), nullptr);
+  Env off3("MQDE_HAL_DISABLE", "goo");  // a prefix is not a match
+  EXPECT_EQ(load_cases()["good"].status, MQDE_HAL_LOADED);
+}
+
+TEST_F(hal_cases, loading_again_rescans_and_a_missing_directory_is_not_an_error) {
+  EXPECT_GT(load_cases().size(), 10u);
+  Env gone("MQDE_PLUGIN_DIR", "/definitely/not/a/directory");
+  Env noexe("MQDE_HOME", "/also/not/there");
+  EXPECT_EQ(mqde_hal_load_all(),
+            0);  // (the executable's own plugins/ directory does not exist next to the test binary)
+  EXPECT_EQ(mqde_hal_plugin_count(), 0);
+  mqde_hal_plugin_info p;
+  EXPECT_NE(mqde_hal_plugin_get(0, &p), 0);
+  EXPECT_NE(mqde_hal_plugin_get(-1, &p), 0);
+  EXPECT_EQ(mqde_hal_plugin_by_name("good"), nullptr);
+  EXPECT_EQ(mqde_hal_plugin_by_name(nullptr), nullptr);
+}
+
+TEST_F(hal_cases, devices_of_loaded_plugins_are_listed_with_their_plugin_names) {
+  load_cases();
+  mqde_hal_device d[16];
+  const char* names[16];
+  const int n = mqde_hal_devices(d, 16, names);
+  ASSERT_GE(n, 1);
+  bool found = false;
+  for (int i = 0; i < n; ++i)
+    if (std::string(names[i]) == "good") found = std::string(d[i].name) == "Acme One";
+  EXPECT_TRUE(found);
+  EXPECT_EQ(mqde_hal_devices(d, 0, nullptr), 0) << "capacity zero writes nothing";
+}
+
+// ---- the shipped template plugin, through the real probe
+// ----------------------------------------------------------
+
+class hal_template : public ::testing::Test {
+ protected:
+  Env dir{"MQDE_PLUGIN_DIR", MQDE_TEMPLATE_PLUGIN_DIR};
+  Env only{"MQDE_HAL_PLUGINS", nullptr};
+  Env off{"MQDE_HAL_DISABLE", nullptr};
+};
+
+TEST_F(hal_template, is_inactive_by_default_so_it_never_fakes_hardware_in_a_normal_probe) {
+  Env none("MQDE_TEMPLATE_DEVICES", nullptr);
+  ASSERT_GE(mqde_hal_load_all(), 1);
+  mqde_hal_plugin_info p;
+  ASSERT_EQ(mqde_hal_plugin_get(0, &p), 0);
+  EXPECT_STREQ(p.name, "template");
+  EXPECT_EQ(p.status, MQDE_HAL_INACTIVE);
+  mqde_device_info devs[32];
+  int n = 0;
+  ASSERT_EQ(mqde_probe_all(devs, 32, &n), 0);
+  for (int i = 0; i < n; ++i) EXPECT_STRNE(devs[i].vendor, "template");
+}
+
+TEST_F(hal_template, its_devices_appear_in_mqde_probe_all_without_any_change_above_the_loader) {
+  Env two("MQDE_TEMPLATE_DEVICES", "2");
+  ASSERT_GE(mqde_hal_load_all(), 1);
+  mqde_device_info devs[32];
+  int n = 0;
+  ASSERT_EQ(mqde_probe_all(devs, 32, &n), 0);
+  int found = 0;
+  for (int i = 0; i < n; ++i)
+    if (std::string(devs[i].vendor) == "template") {
+      EXPECT_EQ(devs[i].kind, MQDE_DEV_NPU);
+      EXPECT_EQ(devs[i].index, found);
+      EXPECT_EQ(devs[i].mem_total_bytes, 16ull << 30);
+      EXPECT_STREQ(devs[i].arch, "tmpl1");
+      EXPECT_EQ(std::string(devs[i].name), "MQDE Template Accelerator " + std::to_string(found));
+      ++found;
+    }
+  EXPECT_EQ(found, 2);
+  EXPECT_EQ(devs[0].kind, MQDE_DEV_CPU) << "built-in devices still come first";
+}
+
+TEST_F(hal_template, a_device_the_builtin_probe_already_found_is_not_listed_twice) {
+  Env one("MQDE_TEMPLATE_DEVICES", "1");
+  ASSERT_GE(mqde_hal_load_all(), 1);
+  mqde_device_info a[32], b[32];
+  int na = 0, nb = 0;
+  ASSERT_EQ(mqde_probe_all(a, 32, &na), 0);
+  ASSERT_EQ(mqde_probe_all(b, 32, &nb), 0);
+  EXPECT_EQ(na, nb) << "probing twice does not accumulate devices";
+}
+
+TEST_F(hal_template, capabilities_memory_and_profile_work_and_bad_requests_say_what_is_wrong) {
+  Env two("MQDE_TEMPLATE_DEVICES", "2");
+  ASSERT_GE(mqde_hal_load_all(), 1);
+  const auto* api = mqde_hal_plugin_by_name("template");
+  ASSERT_NE(api, nullptr);
+  EXPECT_EQ(api->compile, nullptr) << "optional functions may be NULL in v1";
+  mqde_hal_capability_query q{};
+  q.device = 1;
+  std::strcpy(q.dtype, "int8");
+  mqde_hal_capability_result r{};
+  ASSERT_EQ(api->supports(&q, &r), 0);
+  EXPECT_EQ(r.supported, 1);
+  EXPECT_EQ(r.native, 1);
+  EXPECT_DOUBLE_EQ(r.peak_tflops, 200.0);
+  std::strcpy(q.dtype, "fp8_e4m3");
+  ASSERT_EQ(api->supports(&q, &r), 0);
+  EXPECT_EQ(r.supported, 1);
+  EXPECT_EQ(r.native, 0) << "emulated, not native";
+  std::strcpy(q.dtype, "float128");
+  ASSERT_EQ(api->supports(&q, &r), 0);
+  EXPECT_EQ(r.supported, 0);
+  q.device = 5;
+  EXPECT_NE(api->supports(&q, &r), 0);
+  EXPECT_STREQ(api->last_error(), "no such device");
+
+  void* p = nullptr;
+  ASSERT_EQ(api->alloc(0, 1 << 20, &p), 0);
+  ASSERT_NE(p, nullptr);
+  std::memset(p, 0xAB, 1 << 20);
+  EXPECT_EQ(api->free(0, p), 0);
+
+  mqde_hal_profile_request req{};
+  req.device = 0;
+  std::strcpy(req.kind, "bandwidth");
+  mqde_hal_profile_result res{};
+  ASSERT_EQ(api->profile(0, &req, &res), 0);
+  EXPECT_GT(res.value, 0.0);
+  EXPECT_STREQ(res.unit, "GB/s");
+  std::strcpy(req.kind, "teleport");
+  EXPECT_NE(api->profile(0, &req, &res), 0);
+  EXPECT_NE(std::string(api->last_error()).find("unknown profile kind"), std::string::npos);
+}
+
+// ---- ABI layout: the numbers scripts/check_abi.sh compares against abi_v1.golden
+// ----------------------------------
+
+TEST(hal_abi, version_and_struct_sizes_are_the_published_ones) {
+  EXPECT_EQ(MQDE_HAL_ABI_VERSION, 1);
+  // 4+4 (kind, index) + 32 + 128 + 32 strings = 200, + 8+8 memory sizes = 216, + 4+4 = 224, + 64 driver
+  // string
+  EXPECT_EQ(sizeof(mqde_hal_device), 288u);
+  EXPECT_EQ(offsetof(mqde_hal_plugin_v1, device_probe), 32u);
+}
+#endif

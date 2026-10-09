@@ -28,10 +28,13 @@ export default function HardwarePage() {
             {hw.data?.devices.map((d) => {
               const pool = hw.data?.job_gpus.pool.find((p) => d.kind === "gpu" && p.gpu === d.index);
               return (
-                <tr key={`${d.kind}${d.index}`}>
+                <tr key={`${d.vendor ?? ""}${d.kind}${d.index}`}>
                   <td className="num">{d.index}</td>
                   <td>{d.kind.toUpperCase()}</td>
-                  <td>{d.name}</td>
+                  <td>
+                    {d.name}
+                    {d.vendor && d.kind !== "cpu" && <span className="muted small"> · {d.vendor}</span>}
+                  </td>
                   <td className="mono">{d.arch}</td>
                   <td className="num">{fmtBytes(d.mem_total_bytes)}</td>
                   <td className="num">{fmtBytes(d.mem_free_bytes)}</td>

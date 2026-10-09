@@ -1,0 +1,51 @@
+MQDE_HAL_ABI_VERSION=1
+pointer_size=8
+mqde_hal_device size=288 align=8
+  mqde_hal_device.kind offset=0 size=4
+  mqde_hal_device.index offset=4 size=4
+  mqde_hal_device.vendor offset=8 size=32
+  mqde_hal_device.name offset=40 size=128
+  mqde_hal_device.arch offset=168 size=32
+  mqde_hal_device.mem_total_bytes offset=200 size=8
+  mqde_hal_device.mem_free_bytes offset=208 size=8
+  mqde_hal_device.compute_units offset=216 size=4
+  mqde_hal_device.driver_version offset=224 size=64
+mqde_hal_capability_query size=56 align=4
+  mqde_hal_capability_query.device offset=0 size=4
+  mqde_hal_capability_query.dtype offset=8 size=16
+  mqde_hal_capability_query.op offset=24 size=32
+mqde_hal_capability_result size=112 align=8
+  mqde_hal_capability_result.supported offset=0 size=4
+  mqde_hal_capability_result.native offset=4 size=4
+  mqde_hal_capability_result.peak_tflops offset=8 size=8
+  mqde_hal_capability_result.note offset=16 size=96
+mqde_hal_profile_request size=64 align=8
+  mqde_hal_profile_request.device offset=0 size=4
+  mqde_hal_profile_request.kind offset=8 size=16
+  mqde_hal_profile_request.dtype offset=24 size=16
+  mqde_hal_profile_request.bytes offset=40 size=8
+  mqde_hal_profile_request.m offset=48 size=4
+  mqde_hal_profile_request.n offset=52 size=4
+  mqde_hal_profile_request.k offset=56 size=4
+  mqde_hal_profile_request.iterations offset=60 size=4
+mqde_hal_profile_result size=32 align=8
+  mqde_hal_profile_result.value offset=0 size=8
+  mqde_hal_profile_result.seconds offset=8 size=8
+  mqde_hal_profile_result.unit offset=16 size=16
+mqde_hal_compile_request size=16 align=8
+mqde_hal_compile_result size=264 align=8
+mqde_hal_launch_request size=16 align=8
+mqde_hal_plugin_v1 size=96 align=8
+  mqde_hal_plugin_v1.abi_version offset=0 size=4
+  mqde_hal_plugin_v1.struct_size offset=4 size=4
+  mqde_hal_plugin_v1.name offset=8 size=8
+  mqde_hal_plugin_v1.vendor offset=16 size=8
+  mqde_hal_plugin_v1.plugin_version offset=24 size=8
+  mqde_hal_plugin_v1.device_probe offset=32 size=8
+  mqde_hal_plugin_v1.last_error offset=40 size=8
+  mqde_hal_plugin_v1.supports offset=48 size=8
+  mqde_hal_plugin_v1.alloc offset=56 size=8
+  mqde_hal_plugin_v1.free offset=64 size=8
+  mqde_hal_plugin_v1.profile offset=72 size=8
+  mqde_hal_plugin_v1.compile offset=80 size=8
+  mqde_hal_plugin_v1.launch offset=88 size=8

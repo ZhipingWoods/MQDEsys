@@ -50,9 +50,7 @@ Json probe_json() {
   if (mqde_probe_all(devs, 32, &n) != 0) return arr;
   for (int i = 0; i < n; ++i) {
     const auto& d = devs[i];
-    Json j = {{"kind", d.kind == MQDE_DEV_CPU   ? "cpu"
-                       : d.kind == MQDE_DEV_GPU ? "gpu"
-                                                : "other"},
+    Json j = {{"kind", mqde_dev_kind_name(d.kind)},
               {"index", d.index},
               {"vendor", d.vendor},
               {"name", d.name},

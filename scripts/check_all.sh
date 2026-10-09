@@ -34,6 +34,7 @@ note_missing() { NAMES+=("$1"); STATES+=(SKIP); DETAILS+=("$2 not installed"); }
 
 # ---------------------------------------------------------------- structure
 run deps "module dependencies" python3 scripts/check_deps.py
+run abi "HAL ABI layout" bash scripts/check_abi.sh
 
 # ---------------------------------------------------------------- formatting
 if have clang-format; then

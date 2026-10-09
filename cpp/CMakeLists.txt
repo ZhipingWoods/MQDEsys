@@ -5,9 +5,23 @@ find_package(CLI11 REQUIRED)
 find_package(httplib REQUIRED)
 
 # ---- probe (pure C99, vendor libraries are dlopen'ed at runtime) ----
-add_library(mqde_probe STATIC probe_c/src/probe.c)
-target_include_directories(mqde_probe PUBLIC probe_c/include)
-target_link_libraries(mqde_probe PRIVATE ${CMAKE_DL_LIBS})
+# The HAL plugin loader (hal_loader.c) lives here too: plugin devices join the built-in ones inside mqde_probe_all().
+add_library(mqde_probe STATIC probe_c/src/probe.c probe_c/src/hal_loader.c)
+target_include_directories(mqde_probe PUBLIC probe_c/include include)
+find_package(Threads REQUIRED)
+target_link_libraries(mqde_probe PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+
+# ---- hardware plugins (HAL ABI v1): one directory per vendor under plugins/, built as loadable modules ----
+# Loaded at run time from $MQDE_PLUGIN_DIR, $MQDE_HOME/plugins or <executable dir>/plugins.
+function(mqde_add_plugin name src)
+  add_library(mqde_plugin_${name} MODULE ${src})
+  target_include_directories(mqde_plugin_${name} PRIVATE include)
+  set_target_properties(mqde_plugin_${name} PROPERTIES PREFIX "" SUFFIX ".so" OUTPUT_NAME ${name}
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin/plugins C_VISIBILITY_PRESET hidden)
+endfunction()
+if(NOT WIN32)
+  mqde_add_plugin(template plugins/template/template.c)
+endif()
 
 # ---- common ----
 add_library(mqde_common STATIC src/common/log.cpp src/common/config.cpp)
@@ -80,9 +94,26 @@ if(MQDE_BUILD_TESTS)
     tests/unit/concurrency_test.cpp
     tests/unit/installed_test.cpp
     tests/unit/hub_test.cpp
-    tests/unit/hub_remote_test.cpp)
+    tests/unit/hub_remote_test.cpp
+    tests/unit/hal_test.cpp)
   target_link_libraries(mqde_unit_tests PRIVATE mqde_fit mqde_hub mqde_estimator mqde_probe httplib::httplib GTest::gtest_main)
   target_compile_definitions(mqde_unit_tests PRIVATE MQDE_TEST_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures")
+  # Deliberately broken plugins for the loader tests, one directory per scenario group (see hal_test.cpp).
+  if(NOT WIN32)
+    set(MQDE_HAL_CASES good dup_a dup_b bad_abi small_struct no_symbol returns_null null_probe null_last_error bad_name
+        probe_fails too_many negative_n zero_devices)
+    set(MQDE_HAL_CASE_DIR ${CMAKE_BINARY_DIR}/test_plugins)
+    foreach(c ${MQDE_HAL_CASES})
+      add_library(hal_case_${c} MODULE tests/plugins/${c}.c)
+      target_include_directories(hal_case_${c} PRIVATE include)
+      set_target_properties(hal_case_${c} PROPERTIES PREFIX "" SUFFIX ".so" OUTPUT_NAME ${c}
+        LIBRARY_OUTPUT_DIRECTORY ${MQDE_HAL_CASE_DIR} C_VISIBILITY_PRESET hidden)
+      add_dependencies(mqde_unit_tests hal_case_${c})
+    endforeach()
+    add_dependencies(mqde_unit_tests mqde_plugin_template)
+    target_compile_definitions(mqde_unit_tests PRIVATE MQDE_HAL_CASE_DIR="${MQDE_HAL_CASE_DIR}"
+      MQDE_TEMPLATE_PLUGIN_DIR="${CMAKE_BINARY_DIR}/bin/plugins")
+  endif()
   include(GoogleTest)
   gtest_discover_tests(mqde_unit_tests)
 endif()

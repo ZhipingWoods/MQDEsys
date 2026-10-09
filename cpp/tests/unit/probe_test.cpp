@@ -23,3 +23,11 @@ TEST(probe, rejects_bad_arguments) {
   EXPECT_NE(mqde_probe_all(nullptr, 4, &n), 0);
   EXPECT_GT(std::strlen(mqde_probe_last_error()), 0u);
 }
+
+TEST(probe, device_kind_names_are_the_shared_spelling) {
+  EXPECT_STREQ(mqde_dev_kind_name(MQDE_DEV_CPU), "cpu");
+  EXPECT_STREQ(mqde_dev_kind_name(MQDE_DEV_GPU), "gpu");
+  EXPECT_STREQ(mqde_dev_kind_name(MQDE_DEV_NPU), "npu");
+  EXPECT_STREQ(mqde_dev_kind_name(MQDE_DEV_OTHER), "other");
+  EXPECT_STREQ(mqde_dev_kind_name(static_cast<mqde_dev_kind>(77)), "other");
+}

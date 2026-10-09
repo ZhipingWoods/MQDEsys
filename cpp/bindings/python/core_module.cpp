@@ -344,7 +344,8 @@ PYBIND11_MODULE(_core, m) {
     Json arr = Json::array();
     if (mqde_probe_all(devs, 32, &n) == 0)
       for (int i = 0; i < n; ++i)
-        arr.push_back({{"kind", devs[i].kind == MQDE_DEV_CPU ? "cpu" : "gpu"},
+        arr.push_back({{"kind", mqde_dev_kind_name(devs[i].kind)},
+                       {"vendor", devs[i].vendor},
                        {"index", devs[i].index},
                        {"name", devs[i].name},
                        {"arch", devs[i].arch},

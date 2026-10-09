@@ -1,6 +1,7 @@
 /* Hardware probe: CPU (Linux / macOS) + NVIDIA GPUs via a dynamically loaded NVML. */
 #define _GNU_SOURCE
 #include "mqde_probe.h"
+#include "mqde/hal/mqde_hal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,15 @@
 static char g_last_error[256] = "";
 
 const char* mqde_probe_last_error(void) { return g_last_error; }
+
+const char* mqde_dev_kind_name(mqde_dev_kind kind) {
+  switch (kind) {
+    case MQDE_DEV_CPU: return "cpu";
+    case MQDE_DEV_GPU: return "gpu";
+    case MQDE_DEV_NPU: return "npu";
+    default: return "other";
+  }
+}
 
 static void copy_str(char* dst, size_t cap, const char* src) {
   if (!src) src = "";
@@ -159,6 +169,38 @@ static int probe_nvidia(mqde_device_info* out, int max) {
 }
 #endif
 
+/* Plugin devices after the built-in ones. A plugin device that the built-in probe already found (same vendor, name and
+ * index, e.g. a CUDA plugin next to NVML) is not listed twice. */
+static int append_plugin_devices(mqde_device_info* out, int have, int max) {
+#if defined(_WIN32)
+  (void)out; (void)have; (void)max;
+  return 0;
+#else
+  mqde_hal_ensure_loaded();
+  mqde_hal_device devs[64];
+  int n = mqde_hal_devices(devs, 64, NULL);
+  int w = have;
+  for (int i = 0; i < n && w < max; ++i) {
+    int dup = 0;
+    for (int j = 0; j < have && !dup; ++j)
+      dup = strcmp(out[j].vendor, devs[i].vendor) == 0 && strcmp(out[j].name, devs[i].name) == 0 && out[j].index == devs[i].index;
+    if (dup) continue;
+    mqde_device_info* d = &out[w++];
+    memset(d, 0, sizeof *d);
+    d->kind = (mqde_dev_kind)devs[i].kind;
+    d->index = devs[i].index;
+    copy_str(d->vendor, sizeof d->vendor, devs[i].vendor);
+    copy_str(d->name, sizeof d->name, devs[i].name);
+    copy_str(d->arch, sizeof d->arch, devs[i].arch);
+    d->mem_total_bytes = devs[i].mem_total_bytes;
+    d->mem_free_bytes = devs[i].mem_free_bytes;
+    d->compute_units = devs[i].compute_units;
+    copy_str(d->driver_version, sizeof d->driver_version, devs[i].driver_version);
+  }
+  return w - have;
+#endif
+}
+
 int mqde_probe_all(mqde_device_info* out, int max_devices, int* n_found) {
   g_last_error[0] = '\0';
   if (!out || max_devices < 1 || !n_found) {
@@ -170,6 +212,7 @@ int mqde_probe_all(mqde_device_info* out, int max_devices, int* n_found) {
 #if !defined(_WIN32)
   n += probe_nvidia(out + n, max_devices - n);
 #endif
+  n += append_plugin_devices(out, n, max_devices);
   *n_found = n;
   return 0;
 }

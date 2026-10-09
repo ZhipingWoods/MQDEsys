@@ -208,8 +208,9 @@ Result<void> serve(const ServerOptions& o) {
     Json arr = Json::array();
     if (mqde_probe_all(devs, 32, &n) == 0)
       for (int i = 0; i < n; ++i) {
-        Json d = {{"kind", devs[i].kind == MQDE_DEV_CPU ? "cpu" : "gpu"},
+        Json d = {{"kind", mqde_dev_kind_name(devs[i].kind)},
                   {"index", devs[i].index},
+                  {"vendor", devs[i].vendor},
                   {"name", devs[i].name},
                   {"arch", devs[i].arch},
                   {"mem_total_bytes", devs[i].mem_total_bytes},

@@ -97,7 +97,8 @@ export interface MatrixCell {
 }
 
 export interface Device {
-  kind: "cpu" | "gpu";
+  kind: "cpu" | "gpu" | "npu" | "other";
+  vendor?: string;
   index: number;
   name: string;
   arch: string;
