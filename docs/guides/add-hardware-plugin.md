@@ -83,3 +83,19 @@ scripts/check_abi.sh            # the ABI layout against cpp/include/mqde/hal/ab
 - The hardware profile database (`data/hardware_db/<vendor>/<id>.yaml`: memory, bandwidth, peak TFLOPS per dtype, native
   formats) is separate from the plugin and is what the estimator reads. A plugin's `profile` results are meant to feed it;
   that connection is not built yet.
+
+## 6. The CUDA plugin as a worked example
+
+`cpp/plugins/cuda/cuda.c` is the first real plugin. It loads `libcuda`, `libcudart` and `libcublas` with `dlopen` (so a machine
+without NVIDIA software lists no device and no error), lists devices through the driver API, and implements `profile`:
+
+| Request | How it is measured | Measured on an RTX 4090 (GPU 5, cuBLAS 13) |
+|---|---|---|
+| `bandwidth` | 20 device-to-device copies of a 1 GiB buffer after 3 warm-up copies, CUDA events, read plus write counted | 886 to 919 GB/s, 88 to 91% of the 1008 GB/s datasheet value (the spec asks for 70 to 95%) |
+| `gemm` fp32 / fp16 / bf16 / int8 | 4096 cubed `cublasGemmEx`, 20 timed runs after 3 warm-up runs | 62.2 / 170.6 / 155.6 / 169.9 TFLOPS against datasheet 82.6 / 165.2 / 165.2 / 660.6 |
+
+Read these honestly: FP16 is 3% above the datasheet figure (boost clocks), FP32 is 75% of it, and **INT8 is 26%: that is a
+property of this `cublasGemmEx` call, not of the hardware**, so treat the INT8 number as a lower bound. FP8 and a proper INT8
+number need `cublasLt`, which is not implemented. With `CUDA_VISIBLE_DEVICES` set, the plugin's device ordinals follow the mask
+while the built-in NVML probe lists every GPU; both report the same vendor, name and index only for the unmasked case, which is
+the one where they are merged.

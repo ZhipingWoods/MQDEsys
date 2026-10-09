@@ -334,6 +334,9 @@ static int bench_gemm(int device, const mqde_hal_profile_request* req, mqde_hal_
   CK(L.cudaEventElapsedTime(&ms, e0, e1), "cudaEventElapsedTime");
   res->seconds = (double)ms / 1000.0;
   res->value = res->seconds > 0 ? 2.0 * (double)m * n * k * iters / res->seconds / 1e12 : 0;
+  /* INT8 through cublasGemmEx reached about 170 TFLOPS on an RTX 4090 (datasheet 660): this call does not use
+   * the IMMA layout that cublasLt does, so for int8 the number is a lower bound of the hardware, not its
+   * peak. */
   snprintf(res->unit, sizeof res->unit, "TFLOPS");
   L.cublasDestroy(h), L.cudaEventDestroy(e0), L.cudaEventDestroy(e1), L.cudaFree(A), L.cudaFree(B),
       L.cudaFree(C);
