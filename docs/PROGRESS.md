@@ -180,6 +180,24 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-09（深夜） · Claude · 真实作业验收：整条链路一次跑通
+
+4090，GPU 池 4-7，`build/dev/bin/mqde serve`（启动时导出 `MQDE_VLLM_BIN`/`MQDE_LM_EVAL_BIN`/`HF_ENDPOINT`，子进程才能继承）。通过 `POST /api/v1/jobs` 提交一个真实作业（Qwen2.5-0.5B-Instruct，W4A16 GPTQ，导出 AWQ，开 logits 探针，vLLM 部署 + lm-eval gsm8k），`planner::validate_jobspec` 先接受了它，然后全程跑完，中途没有人工介入：
+
+| 阶段 | 结果 |
+|---|---|
+| 未量化 PPL | 18.103 |
+| 未量化 gsm8k（lm-eval，5-shot，50 样本） | strict 0.20±0.057，flexible 0.28±0.064 |
+| GPTQ 量化 + fake/real 一致性 | real_check codes_identical = True |
+| 量化后 PPL（fake 与真实权重） | 20.656（较基线 +14.1%） |
+| logits 探针 | KL 0.1328，Top-1 一致率 80.0% |
+| AWQ 导出 + vLLM 部署 | smoke "Paris."，压测 16/16 成功，234.4 tok/s |
+| 部署后 PPL（vLLM `prompt_logprobs`） | 20.659（与真实权重相差 0.013%） |
+| 量化后 gsm8k | strict 0.00，flexible 0.04±0.028 |
+
+第一次提交时忘了在启动 `mqde serve` 的 shell 里导出 `MQDE_VLLM_BIN`/`MQDE_LM_EVAL_BIN`，两个阶段都正确地走了"找不到可执行文件→标记 skipped"这条路径而没有让作业失败，但自然也没有真数据；加上环境变量后同一个作业重新提交，完整跑完。`GET /metrics` 在作业运行期间正确显示 `RUNNING`/`gpu_busy=1`，结束后变为 `SUCCEEDED`/`gpu_busy=0`；HTML 报告页（`report.en.html`）上的数字与 `report.json` 一致，未量化基线排在精度表第一行。
+
+本轮（T-0103 到 T-1205 这一批）至此有一次完整的真实端到端验收，不只是单元测试。
 ### 2026-10-09（晚） · Claude · P1/P2 基础设施补完：common、storage、estimator 性能模型、planner
 
 受命"把未完成任务扫一遍做完，C++ 测试通过即可"。补完 P1（common/storage）和 P2（estimator 性能、planner）里一直空着的任务，之前的会话跳过了它们直接去做量化/部署/前端。全部走 TDD，每个模块都做了至少一次破坏性验证（改坏实现，确认对应测试变红，再还原）。4090（GCC、Linux）和 Mac（Clang）各跑了全量 `ctest`，Linux 232 个、Mac 236 个（多出的 4 个是 `#ifdef __APPLE__` 的 Metal 插件测试）。
