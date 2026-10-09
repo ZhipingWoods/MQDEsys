@@ -96,6 +96,8 @@ without NVIDIA software lists no device and no error), lists devices through the
 
 Read these honestly: FP16 is 3% above the datasheet figure (boost clocks), FP32 is 75% of it, and **INT8 is 26%: that is a
 property of this `cublasGemmEx` call, not of the hardware**, so treat the INT8 number as a lower bound. FP8 and a proper INT8
-number need `cublasLt`, which is not implemented. With `CUDA_VISIBLE_DEVICES` set, the plugin's device ordinals follow the mask
-while the built-in NVML probe lists every GPU; both report the same vendor, name and index only for the unmasked case, which is
-the one where they are merged.
+number need `cublasLt`, which is not implemented. The built-in NVML probe ignores `CUDA_VISIBLE_DEVICES`
+and lists every GPU, while the plugin's ordinals follow the mask. Merging compares vendor, name and index, so a masked run only
+avoids duplicates when the plugin's ordinals happen to equal NVML indices that are the same model: on the 4090 host with
+`CUDA_VISIBLE_DEVICES=4,5` the plugin's devices 0 and 1 matched NVML entries 0 and 1 by name and index, so 8 rows were shown (not
+10), but those are not the same physical GPUs. Treat the merge as a convenience for the unmasked case, not as an identity check.
