@@ -9,6 +9,7 @@ the CMake link graph; adding an edge here means changing the architecture, so it
     modelspec, quant <- estimator
     estimator <- fit, hub
     fit, hub, estimator, probe <- server <- apps/bindings
+    storage: SQLite metadata and the artifact cache; uses only common
     hal: a pure C leaf (plugin ABI header); it includes nothing of ours, and the probe library and everything above may use it
 
 Usage: scripts/check_deps.py [--root <repo>]   (exit 1 and a list of violations on failure)
@@ -24,16 +25,17 @@ from pathlib import Path
 ALLOWED: dict[str, set[str]] = {
     "common": set(),
     "hal": set(),
+    "storage": {"common"},
     "quant": {"common"},
     "modelspec": {"common"},
     "estimator": {"common", "modelspec", "quant"},
     "fit": {"common", "modelspec", "quant", "estimator"},
     "hub": {"common", "modelspec", "quant", "estimator"},
-    "server": {"common", "modelspec", "quant", "estimator", "fit", "hub", "hal"},
+    "server": {"common", "modelspec", "quant", "estimator", "fit", "hub", "hal", "storage"},
 }
 
 # Entry points and tests may use every module.
-EVERYTHING = {"common", "modelspec", "quant", "estimator", "fit", "hub", "server", "hal"}
+EVERYTHING = {"common", "modelspec", "quant", "estimator", "fit", "hub", "server", "hal", "storage"}
 ALLOWED.update({"apps": EVERYTHING, "bindings": EVERYTHING, "tests": EVERYTHING})
 
 INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]mqde/([a-z_]+)/')

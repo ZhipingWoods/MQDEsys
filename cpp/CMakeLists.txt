@@ -9,6 +9,7 @@ find_package(httplib REQUIRED)
 add_library(mqde_probe STATIC probe_c/src/probe.c probe_c/src/hal_loader.c)
 target_include_directories(mqde_probe PUBLIC probe_c/include include)
 find_package(Threads REQUIRED)
+find_package(SQLite3 REQUIRED)
 target_link_libraries(mqde_probe PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
 
 # ---- hardware plugins (HAL ABI v1): one directory per vendor under plugins/, built as loadable modules ----
@@ -68,6 +69,14 @@ add_library(mqde_fit STATIC src/fit/fit.cpp src/fit/benchmarks.cpp src/fit/concu
                              src/fit/installed.cpp)
 target_link_libraries(mqde_fit PUBLIC mqde_estimator PRIVATE httplib::httplib)
 
+# ---- storage: SQLite metadata + content-addressed cache ----
+add_library(mqde_storage STATIC src/storage/db.cpp src/storage/cas.cpp)
+if(TARGET SQLite3::SQLite3)
+  target_link_libraries(mqde_storage PUBLIC mqde_common SQLite3::SQLite3)
+else()
+  target_link_libraries(mqde_storage PUBLIC mqde_common SQLite::SQLite3)
+endif()
+
 # ---- hub (Hugging Face client + model catalog) ----
 add_library(mqde_hub STATIC src/hub/hf.cpp src/hub/catalog.cpp)
 target_link_libraries(mqde_hub PUBLIC mqde_modelspec PRIVATE httplib::httplib)
@@ -104,6 +113,8 @@ if(MQDE_BUILD_TESTS)
     tests/unit/common_registry_test.cpp
     tests/unit/common_hash_test.cpp
     tests/unit/common_thread_pool_test.cpp
+    tests/unit/storage_db_test.cpp
+    tests/unit/storage_cas_test.cpp
     tests/unit/modelspec_test.cpp
     tests/unit/quant_test.cpp
     tests/unit/pack_test.cpp
@@ -119,7 +130,7 @@ if(MQDE_BUILD_TESTS)
   add_library(mqde_registry_probe STATIC tests/registry_probe/shapes.cpp)
   target_include_directories(mqde_registry_probe PUBLIC tests/registry_probe)
   target_link_libraries(mqde_registry_probe PUBLIC mqde_common)
-  target_link_libraries(mqde_unit_tests PRIVATE mqde_registry_probe mqde_fit mqde_hub mqde_estimator mqde_probe httplib::httplib GTest::gtest_main)
+  target_link_libraries(mqde_unit_tests PRIVATE mqde_storage mqde_registry_probe mqde_fit mqde_hub mqde_estimator mqde_probe httplib::httplib GTest::gtest_main)
   target_compile_definitions(mqde_unit_tests PRIVATE MQDE_TEST_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures")
   # Deliberately broken plugins for the loader tests, one directory per scenario group (see hal_test.cpp).
   if(NOT WIN32)
