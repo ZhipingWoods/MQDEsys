@@ -51,6 +51,14 @@ def build_command(binary: str | Path, port: int, served_name: str, tokenizer: st
     return cmd + list(extra or [])
 
 
+def first_problem(log: str) -> str | None:
+    """The first line that says what went wrong (server rejection, missing module...), instead of the end of a long traceback."""
+    for line in log.splitlines():
+        if any(k in line for k in ("API request failed", "ModuleNotFoundError", "ImportError", "Connection refused", "No such file")):
+            return line.strip()[:600]
+    return None
+
+
 def find_results(out_dir: str | Path) -> Path:
     """The newest ``results_*.json`` below out_dir (lm-eval writes <out_dir>/<model name>/results_<timestamp>.json)."""
     found = sorted(Path(out_dir).rglob("results_*.json"), key=lambda p: p.stat().st_mtime)
@@ -105,7 +113,7 @@ def run_lm_eval(port: int, served_name: str, tokenizer: str | Path, tasks: list[
     wall = time.perf_counter() - t0
     tail = log.read_text(errors="replace")[-1500:]
     if r.returncode != 0:
-        raise RuntimeError(f"lm-eval exited with {r.returncode}: ...{tail}")
+        raise RuntimeError(f"lm-eval exited with {r.returncode}: {first_problem(log.read_text(errors='replace')) or '...' + tail}")
     path = find_results(out_dir)
     out = parse_results(json.loads(path.read_text(encoding="utf-8")))
     out.update({"command": cmd, "seconds": wall, "results_file": str(path), "limit": limit, "num_fewshot": num_fewshot, "seed": seed})

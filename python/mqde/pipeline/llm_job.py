@@ -114,6 +114,14 @@ class LLMJobSpec:
         )
 
 
+def served_max_len(cfg: dict[str, Any], eval_seq_len: int, prompt_len: int, n_predict: int) -> int:
+    """max_model_len for the vLLM server: enough for the PPL windows and the load test, and for lm-eval's few-shot prompts."""
+    n = max(int(cfg.get("max_model_len", 1024)), eval_seq_len + 16, prompt_len + n_predict + 16)
+    if cfg.get("lm_eval"):  # 5-shot gsm8k prompts are about 1.4k tokens and the server rejects longer ones
+        n = max(n, int(cfg["lm_eval"].get("max_model_len", 4096)))
+    return n
+
+
 class LLMJob:
     def __init__(self, spec: LLMJobSpec, job_dir: str | Path | None = None, job_id: str | None = None) -> None:
         self.spec = spec
@@ -317,7 +325,7 @@ class LLMJob:
             self.ev.log(f"vLLM {ckpt.name}: skipped (no CUDA device)")
             return {"status": "skipped", "reason": "no CUDA device"}
         conc, n_predict, prompt_len = int(cfg.get("concurrency", 4)), int(cfg.get("n_predict", 64)), int(cfg.get("prompt_len", 256))
-        max_len = max(int(cfg.get("max_model_len", 1024)), s.eval_seq_len + 16, prompt_len + n_predict + 16)
+        max_len = served_max_len(cfg, s.eval_seq_len, prompt_len, n_predict)
         srv = VllmServer(ckpt, ckpt.parent / f"vllm-{ckpt.name}.log", max_model_len=max_len, dtype="float16",
                          gpu_memory_utilization=float(cfg.get("gpu_memory_utilization", 0.3)),
                          enforce_eager=bool(cfg.get("enforce_eager", True)), max_num_seqs=max(conc, 8))

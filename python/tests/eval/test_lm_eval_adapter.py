@@ -97,6 +97,17 @@ def test_failures_are_errors_with_the_log_tail(tmp_path: Path) -> None:
         run_lm_eval(1, "m", "t", ["a"], tmp_path / "o3", timeout=0.3, binary=fake_cli(tmp_path, DOC, sleep=5))
 
 
+def test_the_first_real_problem_is_reported_not_the_traceback_tail(tmp_path: Path) -> None:
+    from mqde.eval.lm_eval_adapter import first_problem
+
+    log = ("INFO fine\nWARNING  [models.api_models:521] API request failed! Status code: 400, Response text: "
+           "{\"error\":{\"message\":\"This model's maximum context length is 1024 tokens. However, you requested 256 output tokens\"}}\n"
+           "Traceback ...\nRuntimeError: Session is closed\n")
+    assert "maximum context length is 1024" in (first_problem(log) or "")
+    assert first_problem("INFO all good\n") is None
+    assert "No module named" in (first_problem("ModuleNotFoundError: No module named 'transformers'") or "")
+
+
 def test_newest_results_file_wins(tmp_path: Path) -> None:
     import os
     d = tmp_path / "m"

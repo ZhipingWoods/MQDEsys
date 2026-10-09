@@ -139,3 +139,13 @@ def test_lm_eval_stage_records_results_skips_without_the_binary_and_never_fails_
     monkeypatch.setenv("MQDE_LM_EVAL_BIN", str(tmp_path / "missing"))
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     assert job._lm_eval(8123, ckpt, {}, "n")["status"] == "skipped"
+
+
+def test_vllm_context_grows_for_lm_eval_only() -> None:
+    from mqde.pipeline.llm_job import served_max_len
+
+    assert served_max_len({}, 512, 256, 64) == 1024
+    assert served_max_len({}, 2048, 256, 64) == 2064, "PPL windows still decide when they are longer"
+    assert served_max_len({"lm_eval": {"tasks": ["gsm8k"]}}, 512, 256, 64) == 4096, "5-shot gsm8k needs about 1.4k + 256 tokens"
+    assert served_max_len({"lm_eval": {"max_model_len": 8192}}, 512, 256, 64) == 8192
+    assert served_max_len({"lm_eval": {"max_model_len": 512}}, 512, 256, 64) == 1024, "never below what the other stages need"
