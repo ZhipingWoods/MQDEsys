@@ -83,7 +83,12 @@ static void* open_first(const char* const* names) {
   return NULL;
 }
 
-#define SYM(h, field, name) ((L.field = (field##_t)dlsym((h), name)) != NULL)
+/* resolves one symbol into L.<field>; true when found */
+static int sym_ok(void** slot, void* h, const char* name) {
+  *slot = dlsym(h, name);
+  return *slot != NULL;
+}
+#define SYM(h, field, name) sym_ok((void**)&L.field, (h), (name))
 
 static void load_libs(void) {
   if (L.tried) return;
