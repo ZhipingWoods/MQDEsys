@@ -416,7 +416,9 @@ TEST(planner_recommend, results_are_ranked_feasible_and_native_first_then_by_hig
     const bool prev_native = r.top[i - 1].deploy_verdict == Verdict::kNative;
     const bool cur_native = r.top[i].deploy_verdict == Verdict::kNative;
     EXPECT_TRUE(prev_native || !cur_native) << "a native-kernel result must not come after a non-native one";
-    if (prev_native == cur_native) EXPECT_GE(r.top[i - 1].max_concurrency, r.top[i].max_concurrency);
+    if (prev_native == cur_native) {
+      EXPECT_GE(r.top[i - 1].max_concurrency, r.top[i].max_concurrency);
+    }
   }
 }
 
