@@ -127,13 +127,15 @@ def test_lm_eval_stage_records_results_skips_without_the_binary_and_never_fails_
     ckpt = tmp_path / "ckpt"
     ckpt.mkdir()
     monkeypatch.setenv("MQDE_LM_EVAL_BIN", str(fake_cli(tmp_path, DOC)))
-    ok = job._lm_eval(8123, ckpt, {"tasks": ["gsm8k"], "limit": 10, "num_fewshot": 5})
+    ok = job._lm_eval(8123, ckpt, {"tasks": ["gsm8k"], "limit": 10, "num_fewshot": 5}, "the-served-name")
     assert ok["status"] == "succeeded" and ok["tasks"]["gsm8k"]["metrics"]["exact_match,strict-match"]["value"] == 0.5
     argv = json.loads((tmp_path / "argv.json").read_text())
     assert "--limit" in argv and argv[argv.index("--limit") + 1] == "10" and "gsm8k" in argv  # the config reaches the CLI
+    # the name the server really serves under, not the directory name
+    assert "model=the-served-name," in argv[argv.index("--model_args") + 1]
     monkeypatch.setenv("MQDE_LM_EVAL_BIN", str(fake_cli(tmp_path, None, code=2)))
-    bad = job._lm_eval(8123, ckpt, {})
+    bad = job._lm_eval(8123, ckpt, {}, "n")
     assert bad["status"] == "failed" and "exited with 2" in bad["error"]
     monkeypatch.setenv("MQDE_LM_EVAL_BIN", str(tmp_path / "missing"))
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
-    assert job._lm_eval(8123, ckpt, {})["status"] == "skipped"
+    assert job._lm_eval(8123, ckpt, {}, "n")["status"] == "skipped"

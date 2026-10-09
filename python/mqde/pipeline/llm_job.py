@@ -302,7 +302,7 @@ class LLMJob:
 
     def _vllm_serve(self, ckpt: Path, ids: torch.Tensor, real_ppl: float) -> dict[str, Any]:
         """S11 + S12: serve the exported checkpoint with vLLM, smoke it, load it, and score it with its own logprobs."""
-        from mqde.backend.base import openai_smoke
+        from mqde.backend.base import openai_models, openai_smoke
         from mqde.backend.vllm_server import VllmServer, vllm_bin
         from mqde.eval.loadtest import LoadSpec, run_load
         from mqde.eval.served_ppl import served_perplexity
@@ -330,7 +330,7 @@ class LLMJob:
                                                    prompt_len=prompt_len, n_predict=n_predict))
                 sp = served_perplexity(srv.port, ids.tolist(), s.eval_seq_len, int(cfg.get("ppl_windows", s.eval_windows)),
                                        concurrency=conc)
-                lm = self._lm_eval(srv.port, ckpt, cfg["lm_eval"]) if cfg.get("lm_eval") else None
+                lm = self._lm_eval(srv.port, ckpt, cfg["lm_eval"], openai_models(srv.port)[0]["id"]) if cfg.get("lm_eval") else None
                 props, engine = srv.props(), srv.engine_info()
         except Exception as e:
             self.ev.log(f"vLLM {ckpt.name}: failed: {e}", level="warning")
@@ -343,13 +343,13 @@ class LLMJob:
                 "engine": engine, "smoke": sm, "load": load, "served_ppl": sp["ppl"], "served_windows": sp["windows"],
                 "served_vs_real_ppl_pct": 100.0 * (sp["ppl"] / real_ppl - 1.0), **({"lm_eval": lm} if lm is not None else {})}
 
-    def _lm_eval(self, port: int, ckpt: Path, cfg: dict[str, Any]) -> dict[str, Any]:
+    def _lm_eval(self, port: int, ckpt: Path, cfg: dict[str, Any], served_name: str) -> dict[str, Any]:
         """S12 task accuracy: the official lm-eval CLI against the server that is already up (ADR-0002). Never fails the job."""
         from mqde.eval.lm_eval_adapter import run_lm_eval
 
         tasks = [str(t) for t in cfg.get("tasks", ["gsm8k"])]
         try:
-            res = run_lm_eval(port, ckpt.name, ckpt, tasks, ckpt.parent / f"lm-eval-{ckpt.name}", limit=cfg.get("limit", 50),
+            res = run_lm_eval(port, served_name, ckpt, tasks, ckpt.parent / f"lm-eval-{ckpt.name}", limit=cfg.get("limit", 50),
                               num_fewshot=cfg.get("num_fewshot"), concurrency=int(cfg.get("concurrency", 8)),
                               seed=int(cfg.get("seed", 1234)), max_gen_toks=cfg.get("max_gen_toks"),
                               timeout=float(cfg.get("timeout", 7200)))
