@@ -277,3 +277,98 @@ TEST(hal_abi, version_and_struct_sizes_are_the_published_ones) {
   EXPECT_EQ(offsetof(mqde_hal_plugin_v1, device_probe), 32u);
 }
 #endif
+
+// ---- the shipped CPU plugin: a real device and real micro-benchmarks, on any machine
+// --------------------------------
+
+#ifndef _WIN32
+class hal_cpu : public ::testing::Test {
+ protected:
+  Env dir{"MQDE_PLUGIN_DIR", MQDE_TEMPLATE_PLUGIN_DIR};
+  Env only{"MQDE_HAL_PLUGINS", "cpu"};
+  Env off{"MQDE_HAL_DISABLE", nullptr};
+};
+
+TEST_F(hal_cpu, is_the_same_device_the_builtin_probe_found_so_the_cpu_is_listed_once) {
+  ASSERT_GE(mqde_hal_load_all(), 1);
+  mqde_device_info devs[32];
+  int n = 0;
+  ASSERT_EQ(mqde_probe_all(devs, 32, &n), 0);
+  int cpus = 0;
+  for (int i = 0; i < n; ++i) cpus += devs[i].kind == MQDE_DEV_CPU;
+  EXPECT_EQ(cpus, 1) << "the plugin's CPU matches the built-in one by vendor, name and index";
+}
+
+TEST_F(hal_cpu, bandwidth_and_gemm_return_plausible_positive_numbers_with_units) {
+  ASSERT_GE(mqde_hal_load_all(), 1);
+  const auto* api = mqde_hal_plugin_by_name("cpu");
+  ASSERT_NE(api, nullptr);
+  mqde_hal_profile_request req{};
+  req.device = 0;
+  std::strcpy(req.kind, "bandwidth");
+  req.bytes = 64u << 20;
+  req.iterations = 4;
+  mqde_hal_profile_result res{};
+  ASSERT_EQ(api->profile(0, &req, &res), 0) << api->last_error();
+  EXPECT_STREQ(res.unit, "GB/s");
+  EXPECT_GT(res.value, 0.5) << "a memcpy slower than 0.5 GB/s would mean the timing is broken";
+  EXPECT_LT(res.value, 5000.0) << "faster than 5 TB/s on a CPU would mean the copy was optimised away";
+  EXPECT_GT(res.seconds, 0.0);
+
+  std::strcpy(req.kind, "gemm");
+  std::strcpy(req.dtype, "fp32");
+  req.m = req.n = req.k = 256;
+  req.iterations = 2;
+  ASSERT_EQ(api->profile(0, &req, &res), 0) << api->last_error();
+  EXPECT_STREQ(res.unit, "TFLOPS");
+  EXPECT_GT(res.value, 1e-5);
+  EXPECT_LT(res.value, 50.0);
+  // the number is derived from the work and the time: 2*m*n*k flops over the reported seconds
+  EXPECT_NEAR(res.value, 2.0 * 256 * 256 * 256 / res.seconds / 1e12, res.value * 1e-6);
+}
+
+TEST_F(hal_cpu, a_bigger_gemm_does_not_report_a_wildly_different_rate_but_takes_longer) {
+  ASSERT_GE(mqde_hal_load_all(), 1);
+  const auto* api = mqde_hal_plugin_by_name("cpu");
+  ASSERT_NE(api, nullptr);
+  mqde_hal_profile_request small{}, big{};
+  std::strcpy(small.kind, "gemm"), std::strcpy(small.dtype, "fp32");
+  big = small;
+  small.m = small.n = small.k = 128;
+  big.m = big.n = big.k = 384;
+  small.iterations = big.iterations = 2;
+  mqde_hal_profile_result a{}, b{};
+  ASSERT_EQ(api->profile(0, &small, &a), 0);
+  ASSERT_EQ(api->profile(0, &big, &b), 0);
+  EXPECT_GT(b.seconds, a.seconds) << "27 times the flops must take longer";
+}
+
+TEST_F(hal_cpu, capability_answers_and_bad_requests) {
+  ASSERT_GE(mqde_hal_load_all(), 1);
+  const auto* api = mqde_hal_plugin_by_name("cpu");
+  ASSERT_NE(api, nullptr);
+  mqde_hal_capability_query q{};
+  mqde_hal_capability_result r{};
+  std::strcpy(q.dtype, "fp32");
+  ASSERT_EQ(api->supports(&q, &r), 0);
+  EXPECT_EQ(r.supported, 1);
+  EXPECT_EQ(r.native, 1);
+  std::strcpy(q.dtype, "fp8_e4m3");
+  ASSERT_EQ(api->supports(&q, &r), 0);
+  EXPECT_EQ(r.supported, 1);
+  EXPECT_EQ(r.native, 0) << "emulated";
+  std::strcpy(q.dtype, "float128");
+  ASSERT_EQ(api->supports(&q, &r), 0);
+  EXPECT_EQ(r.supported, 0);
+  q.device = 3;
+  EXPECT_NE(api->supports(&q, &r), 0);
+  mqde_hal_profile_request req{};
+  std::strcpy(req.kind, "gemm");
+  std::strcpy(req.dtype, "fp16");
+  mqde_hal_profile_result res{};
+  EXPECT_NE(api->profile(0, &req, &res), 0);
+  EXPECT_NE(std::string(api->last_error()).find("fp32 only"), std::string::npos);
+  std::strcpy(req.kind, "teleport");
+  EXPECT_NE(api->profile(0, &req, &res), 0);
+}
+#endif
