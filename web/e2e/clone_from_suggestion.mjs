@@ -47,7 +47,8 @@ fs.writeFileSync(path.join(src, 'events.jsonl'), [{ type: 'job_state', state: 'R
 fs.writeFileSync(path.join(src, 'job.yaml'), [
   'metadata: {name: tiny-source}', `model: {type: llm, path: ${os.tmpdir()}/model}`,
   'quant:', '  recipe: [w4a16, w4a8]', '  algorithm: gptq', '  kv: {format: int, bits: 8, method: kivi}',
-  '  mixed_precision: {rules: [{match: "block:0", bits: 8}]}', 'deploy: {device: cpu}', 'analysis: {sensitivity: block}',
+  '  mixed_precision: {rules: [{match: "block:0", bits: 8}]}', 'calibration: {dataset: synthetic, n_samples: 8}',
+  'deploy: {device: cpu}', 'analysis: {sensitivity: block}',
   `output_dir: ${runs}`, 'apiVersion: mqde/v1', 'kind: Job', ''].join('\n'));
 
 const port = await freePort();

@@ -26,7 +26,9 @@ const wdesc = (r: LLMRecipeReport) =>
   `W ${r.weight.format}${r.weight.bits ?? ""}${r.weight.group_size ? " g" + r.weight.group_size : ""} · A ${r.act.format === "none" ? "FP" : `${r.act.format}${r.act.bits ?? ""}`}`;
 
 function ordered(rep: LLMJobReport): LLMRecipeReport[] {
-  const order = rep.spec.recipes.map((x) => x.toLowerCase());
+  // A job that failed before writing its full report (or a stand-in worker in a test) may have no spec / recipes at
+  // all; fall back to whatever `recipes` order the report itself has rather than crashing the page.
+  const order = (rep.spec?.recipes ?? []).map((x) => x.toLowerCase());
   return Object.values(rep.recipes ?? {}).sort((a, b) => order.indexOf(a.recipe.toLowerCase()) - order.indexOf(b.recipe.toLowerCase()));
 }
 

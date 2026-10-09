@@ -199,7 +199,7 @@ function ReportView({ rep }: { rep: JobReport }) {
 
 function orderedRecipes(rep: JobReport): string[] {
   const all = Object.keys(rep.recipes ?? {});
-  const order = (rep.spec.recipes ?? []).map((x) => x.toLowerCase());
+  const order = (rep.spec?.recipes ?? []).map((x) => x.toLowerCase());
   return [...all].sort((a, b) => order.indexOf(a.toLowerCase()) - order.indexOf(b.toLowerCase()));
 }
 

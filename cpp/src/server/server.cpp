@@ -21,6 +21,7 @@
 #include "mqde/hal/mqde_hal.h"
 #include "mqde/hub/catalog.h"
 #include "mqde/hub/hf.h"
+#include "mqde/planner/validate.h"
 #include "mqde/quant/metrics.h"
 #include "mqde/quant/ops.h"
 #include "mqde_probe.h"
@@ -983,26 +984,25 @@ Result<void> serve(const ServerOptions& o) {
       if (!path_allowed(o.allowed_roots, ds))
         return send_error(res, 403, "forbidden", std::string(ptr) + " is outside allowed roots");
     }
-    const auto recipes = job.value("/quant/recipe"_json_pointer, Json::array());
-    if (!recipes.is_array() || recipes.empty())
-      return send_error(res, 400, "invalid_argument", "quant.recipe must be a non-empty list");
-    for (const auto& r : recipes)
-      if (auto rr = estimator::load_recipe(r.get<std::string>()); !rr) return send_error(res, rr.error());
-    if (const auto algo = job.value("/quant/algorithm"_json_pointer, std::string("recipe"));
-        algo != "recipe") {
-      auto known = load_algorithms();
-      if (!known) return send_error(res, known.error());
-      bool ok = false;
-      for (const auto& a : *known) ok = ok || a.value("name", "") == algo;
-      if (!ok) return send_error(res, 400, "invalid_argument", "unknown quant.algorithm '" + algo + "'");
+    // Every static JobSpec rule this module knows (recipe/algorithm existence, calibration, export
+    // compatibility, model.type / device) is reported at once, not just the first one
+    // (planner::validate_jobspec, T-0210).
+    if (auto problems = planner::validate_jobspec(job); !problems.empty()) {
+      std::vector<std::string> lines;
+      for (const auto& p : problems) lines.push_back(fmt::format("{}: {}", p.field, p.message));
+      Json detail = Json::array();
+      for (const auto& p : problems)
+        detail.push_back({{"field", p.field}, {"message", p.message}, {"suggestion", p.suggestion}});
+      res.status = 400;
+      res.set_content(Json{{"code", "invalid_argument"},
+                           {"message", fmt::format("{}", fmt::join(lines, "; "))},
+                           {"problems", detail}}
+                          .dump(),
+                      "application/json");
+      return;
     }
     const auto mtype = job.value("/model/type"_json_pointer, std::string("vla"));
-    if (mtype != "vla" && mtype != "llm")
-      return send_error(res, 400, "invalid_argument", "model.type must be 'vla' or 'llm'");
     const bool cpu = job.value("/deploy/device"_json_pointer, std::string()) == "cpu";
-    if (cpu && mtype != "llm")
-      return send_error(res, 400, "invalid_argument",
-                        "deploy.device=cpu is only supported for model.type=llm");
     if (!cpu && o.gpus.empty())
       return send_error(res, 503, "unavailable", "server started without a GPU pool (--gpus)");
     job["apiVersion"] = "mqde/v1";
