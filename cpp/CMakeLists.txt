@@ -41,9 +41,9 @@ if(NOT WIN32)
 endif()
 
 # ---- common ----
-add_library(mqde_common STATIC src/common/log.cpp src/common/config.cpp)
+add_library(mqde_common STATIC src/common/log.cpp src/common/config.cpp src/common/hash.cpp src/common/thread_pool.cpp)
 target_include_directories(mqde_common PUBLIC include)
-target_link_libraries(mqde_common PUBLIC nlohmann_json::nlohmann_json yaml-cpp::yaml-cpp fmt::fmt)
+target_link_libraries(mqde_common PUBLIC nlohmann_json::nlohmann_json yaml-cpp::yaml-cpp fmt::fmt Threads::Threads)
 target_compile_definitions(mqde_common PUBLIC MQDE_DEFAULT_DATA_DIR="${MQDE_DATA_DIR}"
                                               MQDE_VERSION="${PROJECT_VERSION}")
 
@@ -101,6 +101,9 @@ if(MQDE_BUILD_TESTS)
   find_package(GTest REQUIRED)
   add_executable(mqde_unit_tests
     tests/unit/common_test.cpp
+    tests/unit/common_registry_test.cpp
+    tests/unit/common_hash_test.cpp
+    tests/unit/common_thread_pool_test.cpp
     tests/unit/modelspec_test.cpp
     tests/unit/quant_test.cpp
     tests/unit/pack_test.cpp
@@ -113,7 +116,10 @@ if(MQDE_BUILD_TESTS)
     tests/unit/hub_test.cpp
     tests/unit/hub_remote_test.cpp
     tests/unit/hal_test.cpp)
-  target_link_libraries(mqde_unit_tests PRIVATE mqde_fit mqde_hub mqde_estimator mqde_probe httplib::httplib GTest::gtest_main)
+  add_library(mqde_registry_probe STATIC tests/registry_probe/shapes.cpp)
+  target_include_directories(mqde_registry_probe PUBLIC tests/registry_probe)
+  target_link_libraries(mqde_registry_probe PUBLIC mqde_common)
+  target_link_libraries(mqde_unit_tests PRIVATE mqde_registry_probe mqde_fit mqde_hub mqde_estimator mqde_probe httplib::httplib GTest::gtest_main)
   target_compile_definitions(mqde_unit_tests PRIVATE MQDE_TEST_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures")
   # Deliberately broken plugins for the loader tests, one directory per scenario group (see hal_test.cpp).
   if(NOT WIN32)

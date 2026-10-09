@@ -598,6 +598,11 @@ TEST_F(hal_metal, bandwidth_is_in_the_range_of_unified_memory_and_is_stable_betw
   std::strcpy(req.kind, "bandwidth");
   req.bytes = 128u << 20;
   req.iterations = 8;
+  {  // the first benchmark in a process runs while the GPU clock is still ramping (ratios of 1.8 were seen):
+     // not measured
+    mqde_hal_profile_result warm{};
+    ASSERT_EQ(api->profile(0, &req, &warm), 0) << api->last_error();
+  }
   double v[3];
   for (double& x : v) {
     mqde_hal_profile_result r{};

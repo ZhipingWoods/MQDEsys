@@ -8,6 +8,7 @@
 
 #include <httplib.h>
 
+#include "mqde/common/hash.h"
 #include "mqde/hub/hf.h"
 
 using namespace mqde;
@@ -144,10 +145,6 @@ TEST(hub_remote, retries_transient_errors) {
 
 // ---- T-0505: resumable download with checksum verification
 // ---------------------------------------------------------
-
-namespace mqde::hub {
-std::string sha256_hex(const std::string& data);  // defined in hf.cpp, not part of the public header
-}
 
 namespace {
 
