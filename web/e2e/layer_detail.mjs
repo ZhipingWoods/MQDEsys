@@ -34,15 +34,27 @@ const results = [];
 const check = (name, ok, detail = '') => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`); };
 const freePort = () => new Promise((res) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 const runs = fs.mkdtempSync(path.join(os.tmpdir(), 'mqde-e2e-runs-'));
-const src = path.join(runs, SRC_JOB);
-fs.mkdirSync(src);
-fs.writeFileSync(path.join(src, 'report.json'), JSON.stringify(fixture));
-fs.writeFileSync(path.join(src, 'events.jsonl'), [{ type: 'job_state', state: 'RUNNING', seq: 1, ts: 1 }, { type: 'job_state', state: 'SUCCEEDED', seq: 2, ts: 2 }].map((e) => JSON.stringify(e)).join('\n') + '\n');
-fs.writeFileSync(path.join(src, 'job.yaml'), [
+// Two finished jobs: the plain fixture (an old report without distributions) and a copy whose worst layer carries them.
+const STATS_JOB = '20261008-000001-bbbbbb';
+const withStats = JSON.parse(JSON.stringify(fixture));
+const wl = withStats.recipes.W4A16.layers.filter((l) => l.out_sqnr_db != null).sort((a, b) => a.out_sqnr_db - b.out_sqnr_db)[0];
+const counts = Array.from({ length: 48 }, (_, i) => Math.round(1e5 * Math.exp(-(((i - 23.5) / 6) ** 2))));
+wl.w_hist = { min: -0.5, max: 0.5, mean: 0.0001, std: 0.04, n: counts.reduce((a, b) => a + b, 0), counts };
+wl.act_hist = { min: -8, max: 12, mean: 0.01, std: 1.2, n: 12345, counts: counts.map((c) => Math.max(1, c >> 2)) };
+wl.w_scale_summary = { n: 256, min: 0.001, p50: 0.002, p99: 0.01, max: 0.02, spread: 20 };
+const writeJob = (id, report) => {
+  const src = path.join(runs, id);
+  fs.mkdirSync(src);
+  fs.writeFileSync(path.join(src, 'report.json'), JSON.stringify(report));
+  fs.writeFileSync(path.join(src, 'events.jsonl'), [{ type: 'job_state', state: 'RUNNING', seq: 1, ts: 1 }, { type: 'job_state', state: 'SUCCEEDED', seq: 2, ts: 2 }].map((e) => JSON.stringify(e)).join('\n') + '\n');
+  fs.writeFileSync(path.join(src, 'job.yaml'), [
   'metadata: {name: tiny-source}', `model: {type: llm, path: ${os.tmpdir()}/model}`,
   'quant:', '  recipe: [w4a16, w4a8]', '  algorithm: gptq', '  kv: {format: int, bits: 8, method: kivi}',
   '  mixed_precision: {rules: [{match: "block:0", bits: 8}]}', 'deploy: {device: cpu}', 'analysis: {sensitivity: block}',
   `output_dir: ${runs}`, 'apiVersion: mqde/v1', 'kind: Job', ''].join('\n'));
+};
+writeJob(SRC_JOB, fixture);
+writeJob(STATS_JOB, withStats);
 
 const port = await freePort();
 const server = spawn(bin, ['serve', '--repo', repo, '--runs', runs, '--web', path.join(repo, 'web/dist'), '--python', path.join(here, 'fake_worker.py'),
@@ -80,6 +92,23 @@ try {
     check(`row ${idx}: its weight-SQNR rank is ${wr}`, text.includes(`${wr} / ${layers.length}`));
   }
   check('the worst layer is rank 1 by output SQNR', rankOf(worst[0], 'out_sqnr_db', true) === 1);
+  check('an old report (no distributions) says so instead of drawing empty charts',
+    (await page.getByTestId('layer-detail').innerText()).includes('没有该层的权重 / 激活分布') && (await page.getByTestId('hist-weight').count()) === 0);
+  await page.getByRole('button', { name: '关闭' }).click();
+  await page.goto(`${base}/jobs/${STATS_JOB}?tab=W4A16`, { waitUntil: 'load' });
+  await page.getByTestId('worst-row').first().click();
+  await page.getByTestId('hist-weight').waitFor({ timeout: 10000 });
+  const hw = (await page.getByTestId('hist-weight').innerText()).replace(/\s+/g, ' ');
+  check('weight histogram shows n, range and mean from the data', hw.includes(wl.w_hist.n.toLocaleString()) && hw.includes('-0.500') && hw.includes('0.500'), hw.slice(0, 90));
+  check('activation histogram is drawn too', (await page.getByTestId('hist-act').innerText()).includes('12,345'));
+  const box = await page.locator('[data-testid="hist-weight"] svg').first().boundingBox();
+  check('the weight chart (SVG) rendered with a real size', !!box && box.width > 100 && box.height > 50, JSON.stringify(box));
+  // one <path> per non-empty bar: every bin of this synthetic histogram is non-zero, so 48 bars must be drawn
+  await page.waitForTimeout(800);
+  const bars = await page.locator('[data-testid="hist-weight"] svg path[fill]').count();
+  check('one bar per non-empty bin is drawn (48)', bars >= 48, String(bars));
+  const sc = (await page.getByTestId('scale-summary').innerText()).replace(/\s+/g, ' ');
+  check('QParams scale summary shows count, median, p99 and spread', sc.includes('256') && sc.includes('0.00200') && sc.includes('0.0100') && sc.includes('20.0'), sc.slice(0, 110));
   await page.getByRole('button', { name: '关闭' }).click();
   check('the close button removes the card', (await page.getByTestId('layer-detail').count()) === 0);
   check('no page errors', errors.length === 0, errors.slice(0, 2).join(' | '));

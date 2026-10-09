@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { fmt, LayerTrace } from "../api";
+import { fmt, Histogram, LayerTrace } from "../api";
 import { baseOption, Chart, series, token } from "../charts";
 
 /** Per-layer error views shared by the VLA and LLM job pages: heatmap, per-block SQNR, kurtosis scatter, Top-15. */
@@ -237,7 +237,46 @@ function LayerDetail({ layer: l, layers, strip, onClose }: { layer: LayerTrace; 
           ))}
         </tbody>
       </table>
-      <p className="note">权重 / 激活直方图和 QParams 分布需要作业额外保存张量统计，目前报告里没有这部分数据，所以这里不画。</p>
+      {l.w_hist || l.act_hist ? (
+        <div className="grid-2">
+          {l.w_hist && <HistChart title="权重分布" h={l.w_hist} testid="hist-weight" />}
+          {l.act_hist && <HistChart title="激活分布（校准样本）" h={l.act_hist} testid="hist-act" />}
+        </div>
+      ) : (
+        <p className="note">这份报告里没有该层的权重 / 激活分布（旧作业，或无校准数据的算法如 RTN 没有激活分布）。</p>
+      )}
+      {l.w_scale_summary && (
+        <p className="note" data-testid="scale-summary">
+          量化缩放（QParams）：{l.w_scale_summary.n} 个，最小 {l.w_scale_summary.min.toPrecision(3)}，中位 {l.w_scale_summary.p50.toPrecision(3)}，P99{" "}
+          {l.w_scale_summary.p99.toPrecision(3)}，最大 {l.w_scale_summary.max.toPrecision(3)}
+          {l.w_scale_summary.spread != null ? `（最大/最小 = ${l.w_scale_summary.spread.toFixed(1)}×）` : ""}。比值越大，说明各组数值范围差别越大，低比特越吃亏。
+        </p>
+      )}
+    </div>
+  );
+}
+
+function HistChart({ title, h, testid }: { title: string; h: Histogram; testid: string }) {
+  const w = (h.max - h.min) / h.counts.length;
+  return (
+    <div data-testid={testid}>
+      <h3 style={{ margin: "8px 0" }}>{title}</h3>
+      <p className="note">
+        n = {h.n.toLocaleString()} · 范围 [{h.min.toPrecision(3)}, {h.max.toPrecision(3)}] · 均值 {h.mean.toPrecision(3)} · 标准差 {h.std.toPrecision(3)}
+      </p>
+      <Chart
+        option={() => {
+          const o = baseOption();
+          return {
+            ...o,
+            grid: { ...(o.grid as object), top: 16 },
+            tooltip: { ...(o.tooltip as object), trigger: "axis" },
+            xAxis: { ...(o.xAxis as object), type: "category", data: h.counts.map((_, i) => (h.min + (i + 0.5) * w).toPrecision(3)), axisLabel: { interval: 11 } },
+            yAxis: { ...(o.yAxis as object), type: "log", name: "count（对数）", min: 1, nameTextStyle: { color: token("--text-muted") } },
+            series: [{ type: "bar", data: h.counts.map((c) => (c > 0 ? c : null)), itemStyle: { color: series(0) }, barCategoryGap: "10%" }],
+          };
+        }}
+      />
     </div>
   );
 }

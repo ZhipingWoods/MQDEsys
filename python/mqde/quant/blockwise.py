@@ -26,7 +26,7 @@ from torch import nn
 
 from mqde import core
 from mqde.quant import algorithms
-from mqde.quant.engine import ActivationCache, LayerTrace, RecipeSpec, compare
+from mqde.quant.engine import ActivationCache, LayerTrace, RecipeSpec, compare, histogram_summary, scale_summary
 from mqde.quant.modules import FakeQuantLinear, replace_module, static_act_params
 from mqde.quant.numerics import QuantSpec, fake_quant_act, qdq
 
@@ -228,6 +228,9 @@ class BlockwiseQuantizer:
             w_kurtosis=core.tensor_stats(w.cpu().numpy())["kurtosis"],
         )
         tr.algorithm, tr.algo_info = self.algorithm, {**(ar.info or {}), "bits": ws.bits}
+        tr.w_hist, tr.w_scale_summary = histogram_summary(w), scale_summary(w_scale)
+        if xc is not None:
+            tr.act_hist = histogram_summary(xc)
         if full in self._fold_info:
             tr.algo_info["smooth"] = self._fold_info[full]
         act_p = None

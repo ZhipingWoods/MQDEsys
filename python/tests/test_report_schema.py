@@ -94,3 +94,20 @@ def test_cli(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["html", str(bad)]) == 1 and not list((tmp_path / "b").glob("*.html"))  # nothing written for an invalid report
     bad.write_text("not json")
     assert main(["validate", str(bad)]) == 2
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "needle"),
+    [
+        (["recipes", "W4A16", "layers", 0, "w_hist"], {"min": 0, "max": 1, "n": 4}, "missing required key 'counts'"),
+        (["recipes", "W4A16", "layers", 0, "w_hist"], {"min": 0, "max": 1, "n": 4, "counts": [1, -1]}, "below the minimum"),
+        (["recipes", "W4A16", "layers", 0, "w_scale_summary"], {"n": 3}, "missing required key 'min'"),
+    ],
+)
+def test_distribution_fields_are_checked(path: list[Any], value: Any, needle: str) -> None:
+    assert any(needle in e for e in mutate(path, value))
+
+
+def test_distribution_fields_are_optional_and_may_be_null() -> None:
+    assert mutate(["recipes", "W4A16", "layers", 0, "act_hist"], None) == []
+    assert validate_report(load("llm_full")) == [], "old reports without the fields stay valid"

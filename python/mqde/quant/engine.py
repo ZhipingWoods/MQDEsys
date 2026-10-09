@@ -76,9 +76,41 @@ class LayerTrace:
     seconds: float = 0.0
     algorithm: str = "rtn"
     algo_info: dict[str, Any] = field(default_factory=dict)
+    # Compact distributions for the error page (see histogram_summary / scale_summary); None when not computed
+    w_hist: dict[str, Any] | None = None
+    act_hist: dict[str, Any] | None = None
+    w_scale_summary: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {k: (list(v) if isinstance(v, tuple) else v) for k, v in self.__dict__.items()}
+
+
+HIST_BINS = 48
+
+
+def histogram_summary(t: torch.Tensor, bins: int = HIST_BINS) -> dict[str, Any]:
+    """Equal-width histogram of a tensor's values over [min, max], plus the exact min / max / mean / std and element count.
+
+    Compact (``bins`` integers) so it can sit in the report for every layer; ``counts`` sum to ``n``.
+    """
+    x = t.detach().float().flatten()
+    lo, hi = float(x.min()), float(x.max())
+    if hi <= lo:
+        hi = lo + 1e-12
+    counts = torch.histc(x.cpu(), bins=bins, min=lo, max=hi)
+    return {"min": lo, "max": hi, "mean": float(x.mean()), "std": float(x.std()) if x.numel() > 1 else 0.0, "n": int(x.numel()),
+            "counts": [int(c) for c in counts]}
+
+
+def scale_summary(scale: torch.Tensor | None) -> dict[str, Any] | None:
+    """Distribution of the weight quantization scales (QParams): min / p50 / p99 / max, their count, and max/min spread."""
+    if scale is None or scale.numel() == 0:
+        return None
+    s = scale.detach().float().flatten().abs().cpu()
+    q = torch.quantile(s, torch.tensor([0.5, 0.99]))
+    lo = float(s.min())
+    return {"n": int(s.numel()), "min": lo, "p50": float(q[0]), "p99": float(q[1]), "max": float(s.max()),
+            "spread": float(s.max() / lo) if lo > 0 else None}
 
 
 @dataclass
@@ -192,7 +224,9 @@ class FakeQuantEngine:
         )
         tr.algorithm = self.algorithm
         tr.algo_info = ar.info or {}
+        tr.w_hist, tr.w_scale_summary = histogram_summary(w), scale_summary(w_scale)
         if x_cal is not None:
+            tr.act_hist = histogram_summary(x_cal)
             x = x_cal
             y_ref = x @ w.T
             xs = x / ar.in_scale if ar.in_scale is not None else x

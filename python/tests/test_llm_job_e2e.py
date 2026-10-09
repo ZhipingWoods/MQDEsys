@@ -157,3 +157,25 @@ def test_baseline_lm_eval_is_on_by_default_and_can_be_switched_off() -> None:
     assert not wants_lm_eval_baseline(None) and not wants_lm_eval_baseline({}) and not wants_lm_eval_baseline({"lm_eval": None})
     assert wants_lm_eval_baseline({"lm_eval": {"tasks": ["gsm8k"]}})
     assert not wants_lm_eval_baseline({"lm_eval": {"tasks": ["gsm8k"], "baseline": False}})
+
+
+def test_layers_carry_weight_and_activation_distributions(job_env: None, tmp_path: Path) -> None:
+    rep = LLMJob(spec(tmp_path, algorithm="gptq"), job_dir=tmp_path / "j").run()
+    layers = rep["recipes"]["W4A16"]["layers"]
+    assert layers
+    for lay in layers:
+        wh, ah, ss = lay["w_hist"], lay["act_hist"], lay["w_scale_summary"]
+        assert sum(wh["counts"]) == wh["n"] == lay["shape"][0] * lay["shape"][1], "the weight histogram covers the whole weight"
+        assert ah is not None and sum(ah["counts"]) == ah["n"] > 0
+        assert ss is not None and ss["min"] > 0 and ss["max"] >= ss["p99"] >= ss["p50"] >= ss["min"]
+        # the histogram range agrees with the separately computed absmax
+        assert max(ah["max"], -ah["min"]) == pytest.approx(lay["act_absmax"], rel=1e-5)
+    from mqde.report.schema import validate_report
+
+    assert validate_report(rep) == []
+
+
+def test_data_free_rtn_has_weight_distributions_but_no_activation_histogram(job_env: None, tmp_path: Path) -> None:
+    rep = LLMJob(spec(tmp_path), job_dir=tmp_path / "j2").run()
+    for lay in rep["recipes"]["W4A16"]["layers"]:
+        assert lay["w_hist"] is not None and lay["act_hist"] is None and lay["act_absmax"] is None

@@ -123,6 +123,16 @@ export interface JobListItem {
   n_events: number;
 }
 
+/** Equal-width histogram over [min, max] with exact totals (see mqde.quant.engine.histogram_summary). */
+export interface Histogram {
+  min: number;
+  max: number;
+  mean: number;
+  std: number;
+  n: number;
+  counts: number[];
+}
+
 export interface LayerTrace {
   name: string;
   component: string;
@@ -139,6 +149,9 @@ export interface LayerTrace {
   act_kurtosis: number | null;
   act_outlier_ratio: number | null;
   w_kurtosis: number | null;
+  w_hist?: Histogram | null;
+  act_hist?: Histogram | null;
+  w_scale_summary?: { n: number; min: number; p50: number; p99: number; max: number; spread: number | null } | null;
   algorithm?: string;
   algo_info?: { bits?: number; act?: string } & Record<string, unknown>;
 }
