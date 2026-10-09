@@ -125,7 +125,9 @@ def served_max_len(cfg: dict[str, Any], eval_seq_len: int, prompt_len: int, n_pr
 def wants_lm_eval_baseline(vllm: dict[str, Any] | None) -> bool:
     """Task accuracy of a quantized model means nothing without the unquantized model's on the same tasks: on by default."""
     cfg = (vllm or {}).get("lm_eval")
-    return bool(cfg) and bool(cfg.get("baseline", True))
+    if not cfg:
+        return False
+    return bool(cfg.get("baseline", True))
 
 
 class LLMJob:
