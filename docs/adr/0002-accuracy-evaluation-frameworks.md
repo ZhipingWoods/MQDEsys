@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 |------|------|
-| 状态 | **Proposed**（等待负责人批准，批准前不改 `pyproject.toml`，也不写 `lm_eval_adapter.py`） |
+| 状态 | **Approved**（2026-10-09 负责人批准：采纳方案 A，先做 lm-eval；`pyproject.toml` 不改） |
 | 日期 | 2026-10-08 |
 | 作者 | Claude（Sonnet 5.5） |
 | 审核人 | 负责人（zhipingwu） |

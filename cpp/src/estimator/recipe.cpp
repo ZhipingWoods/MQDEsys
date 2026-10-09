@@ -50,6 +50,14 @@ Result<BackendProfile> load_backend(std::string_view id_or_path) {
   b.allocator_factor = get_or<double>(j, "allocator_factor", b.allocator_factor);
   b.eta_bw = get_or<double>(j, "eta_bw", b.eta_bw);
   b.mfu = get_or<double>(j, "mfu", b.mfu);
+  b.activation_model = get_or<std::string>(j, "activation_model", b.activation_model);
+  b.max_batched_tokens = get_or<int64_t>(j, "max_batched_tokens", b.max_batched_tokens);
+  if (b.activation_model != "per_seq" && b.activation_model != "batched")
+    return make_error(Errc::kInvalidArgument,
+                      "backend '{}': activation_model must be per_seq or batched, got '{}'", b.id,
+                      b.activation_model);
+  if (b.max_batched_tokens <= 0)
+    return make_error(Errc::kInvalidArgument, "backend '{}': max_batched_tokens must be positive", b.id);
   return b;
 }
 

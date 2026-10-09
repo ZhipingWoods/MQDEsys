@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 |------|------|
-| 状态 | **Proposed**（等待负责人批准；批准前不改 `cpp/include/mqde/estimator/estimator.h`） |
+| 状态 | **Approved**（2026-10-09 负责人批准；0.5B 的两个点已实现并通过，≥ 7B 验证见第 7 节） |
 | 日期 | 2026-10-08 |
 | 作者 | Claude（Sonnet 5.5） |
 | 审核人 | 负责人（zhipingwu） |
@@ -87,3 +87,19 @@ max_batched_tokens: 8192           # 仅 batched 时使用
 1. 是否批准在 `BackendProfile` 增加 `activation_model` 与 `max_batched_tokens`（L2 头文件改动）？
 2. 验收阈值 [0.5, 1.5] 是否合适，还是要更严？
 3. 是否同意把“≥ 7B 检查点上的验证”作为合并前的硬条件（需要先准备检查点与空闲 GPU）？
+
+## 7. 实施记录（2026-10-09）
+
+负责人批准了方案，并允许使用 GPU 4 到 7 做 ≥ 7B 的验证。验收阈值与“7B 验证是合并前硬条件”按第 6 节原样采用。
+
+0.5B 的两个点（`estimator_batched.regression_against_what_vllm_reported`，用仓库自己的 `vllm` 画像，没有拟合系数）：
+
+| 上下文 | 预估并发 | vLLM 实测 | 比值 | 旧模型预估 |
+|---:|---:|---:|---:|---:|
+| 1024 | 501 | 547.03 | 0.92 | 76 |
+| 32768 | 16 | 17.09 | 0.94 | 2 |
+
+第 2.1 节纸面手算预测 0.99 和 0.88，实际 0.92 和 0.94：差别来自实现里多算的每序列 logits 行和 `max_batched_tokens` 封顶的细节，方向和量级与手算一致。
+破坏性验证：把 `vllm.yaml` 改回 `per_seq`，回归测试变红且预估值恰为 76 和 2，与第 1 节表格一致；让二分查找忽略 KV，两个测试变红。
+
+实现范围：`BackendProfile` 增加 `activation_model`、`max_batched_tokens`（缺省值保持旧行为）；`load_backend` 校验取值；`batched` 下语言模型激活只计一次、不计逐层隐状态保留，视觉/动作阶段仍按序列计；最大并发由二分查找得到。`max_num_seqs` 仍未建模。

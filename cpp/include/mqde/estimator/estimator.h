@@ -36,6 +36,12 @@ struct BackendProfile {
   double allocator_factor = 1.05;
   double eta_bw = 0.6;
   double mfu = 0.35;
+  // "per_seq": every concurrent sequence gets its own activation memory (HF eager, one forward per sequence).
+  // "batched": the engine packs all sequences into one batch of at most max_batched_tokens tokens, so the
+  // language model's activation memory is charged once for min(context x concurrency, max_batched_tokens)
+  // tokens (vLLM, ADR-0003).
+  std::string activation_model = "per_seq";
+  int64_t max_batched_tokens = 8192;  // only used by "batched"
 };
 
 Result<Recipe> load_recipe(std::string_view name_or_path);

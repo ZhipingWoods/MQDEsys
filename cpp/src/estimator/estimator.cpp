@@ -192,8 +192,20 @@ Estimate estimate(const ModelSpec& spec, const Recipe& recipe, const HardwarePro
                   static_cast<double>(sh.ctx) * 2.0 * width) *
                  4.0;
   }
-  e.activation_bytes = static_cast<uint64_t>(std::max({act_vision, act_lang, act_action}) *
-                                             static_cast<double>(rt.concurrency));
+  const bool batched = be.activation_model == "batched";
+  // batched engines: one packed batch of at most max_batched_tokens tokens, no per-layer hidden-state
+  // retention
+  const double act_tok = (2.0 * tx.intermediate + 6.0 * tx.hidden) * act_b;  // bytes per token in the batch
+  const double act_logits = static_cast<double>(tx.vocab) * 4.0;             // per sequence, fp32
+  const auto act_batched = [&](int64_t conc) {
+    const double toks = std::min(static_cast<double>(sh.ctx) * static_cast<double>(conc),
+                                 static_cast<double>(be.max_batched_tokens));
+    return std::max({toks * act_tok + act_logits * static_cast<double>(conc),
+                     act_vision * static_cast<double>(conc), act_action * static_cast<double>(conc)});
+  };
+  e.activation_bytes = batched ? static_cast<uint64_t>(act_batched(rt.concurrency))
+                               : static_cast<uint64_t>(std::max({act_vision, act_lang, act_action}) *
+                                                       static_cast<double>(rt.concurrency));
   e.runtime_bytes = be.runtime_overhead_bytes;
 
   const double f = be.allocator_factor;
@@ -209,6 +221,22 @@ Estimate estimate(const ModelSpec& spec, const Recipe& recipe, const HardwarePro
   const double budget = static_cast<double>(e.capacity_bytes) - static_cast<double>(e.runtime_bytes) -
                         static_cast<double>(e.weights_bytes) * f;
   e.max_concurrency = (budget > 0 && per_seq > 0) ? static_cast<int64_t>(std::floor(budget / per_seq)) : 0;
+  if (batched) {
+    // Peak memory is monotone in the number of sequences, so the largest feasible count is found by doubling
+    // + bisection.
+    const auto fits = [&](int64_t c) {
+      return (static_cast<double>(e.weights_bytes) + kv_seq * static_cast<double>(c) + act_batched(c)) * f +
+                 static_cast<double>(e.runtime_bytes) <=
+             static_cast<double>(e.capacity_bytes);
+    };
+    int64_t lo = 0, hi = 1;
+    while (hi < (int64_t{1} << 30) && fits(hi)) lo = hi, hi *= 2;
+    while (hi - lo > 1) {
+      const int64_t mid = lo + (hi - lo) / 2;
+      (fits(mid) ? lo : hi) = mid;
+    }
+    e.max_concurrency = lo;
+  }
 
   // ---- roofline floor per decision step ----
   e.compute_format = recipe.act.enabled() ? format_name(recipe.act) : "bf16";
@@ -261,6 +289,12 @@ Estimate estimate(const ModelSpec& spec, const Recipe& recipe, const HardwarePro
                   "kernel-launch overhead not modeled",
                   e.compute_format, be.mfu, be.eta_bw),
   };
+  if (batched)
+    e.assumptions.push_back(
+        fmt::format("batched engine: language-model activations charged once for min(context x concurrency, "
+                    "{}) tokens, not per "
+                    "sequence; vision / action stages stay per sequence; max_num_seqs is not modeled",
+                    be.max_batched_tokens));
   e.confidence = "low";  // becomes medium/high once measured feedback (S15) exists for (hw, backend, recipe)
   return e;
 }
