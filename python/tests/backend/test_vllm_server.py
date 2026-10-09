@@ -34,6 +34,12 @@ def test_gpu_is_pinned_through_the_environment(tmp_path: Path) -> None:
     assert s._env["CUDA_VISIBLE_DEVICES"] == "3"
 
 
+def test_the_binary_directory_is_first_on_path_so_vllm_finds_its_own_ninja(tmp_path: Path) -> None:
+    s = mock_backend.vllm(tmp_path)
+    assert s._env["PATH"].split(os.pathsep)[0] == str(tmp_path)
+    assert os.environ["PATH"] in s._env["PATH"], "the rest of PATH is kept"
+
+
 def test_lifecycle_info_smoke_and_load(tmp_path: Path) -> None:
     srv = mock_backend.vllm(tmp_path, max_model_len=512, served_name="qwen-test", ttft=0.05, tpot=0.01)
     with srv:
@@ -94,6 +100,7 @@ def test_missing_model_path(tmp_path: Path) -> None:
     ("torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB", "out of memory"),
     ("RuntimeError: No CUDA GPUs are available", "no visible CUDA"),
     ("OSError: [Errno 98] Address already in use", "port already in use"),
+    ("FileNotFoundError: [Errno 2] No such file or directory: 'ninja'", "could not find `ninja`"),
     ("INFO Using MarlinLinearKernel for AutoAWQMarlinLinearMethod", None),
 ])
 def test_diagnose_real_log_lines(log: str, why: str | None) -> None:

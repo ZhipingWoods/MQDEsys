@@ -39,6 +39,8 @@ DIAGNOSES: list[tuple[str, str]] = [
     ("Invalid repository ID or local directory", "model path not found"),
     ("does not appear to have a file named", "checkpoint directory is missing files (config / weights / tokenizer)"),
     ("is not supported for quantization", "quantization method is not supported by this model architecture"),
+    ("No such file or directory: 'ninja'", "vLLM compiles kernels at startup and could not find `ninja` "
+                                           "(it lives next to the vllm binary: put that directory on PATH)"),
     ("Cannot find any model weights", "no weight files found in the checkpoint directory"),
 ]
 
@@ -83,7 +85,8 @@ class VllmServer(ServerBackend):
         args = launch_args(binary or vllm_bin(), model, port, max_model_len=max_model_len,
                            gpu_memory_utilization=gpu_memory_utilization, max_num_seqs=max_num_seqs, dtype=dtype,
                            enforce_eager=enforce_eager, served_name=served_name, extra=extra)
-        env = {"PYTHONUNBUFFERED": "1"}
+        # vLLM's JIT kernel builds call `ninja`, which sits in the same bin/ as `vllm` in its own environment
+        env = {"PYTHONUNBUFFERED": "1", "PATH": f"{Path(args[0]).parent}{os.pathsep}{os.environ.get('PATH', '')}"}
         if gpu is not None:
             env["CUDA_VISIBLE_DEVICES"] = str(gpu)
         super().__init__(args, log_path, port=port, env=env, startup_timeout=startup_timeout)
