@@ -58,6 +58,7 @@ External tools are optional and only needed for the matching stage:
 | llama.cpp perplexity / bench | `llama-perplexity`, `llama-bench` | `MQDE_LLAMACPP_BIN`, else `build/llamacpp/bin`, `build/llamacpp-metal/bin` |
 | llama.cpp serving | `llama-server` | `MQDE_LLAMA_SERVER_BIN`, else `build/llamacpp-server/bin/llama-server` |
 | vLLM serving | `vllm` (needs a CUDA GPU) | `MQDE_VLLM_BIN`, else `vllm` on `PATH`, else `build/vllm/bin/vllm` |
+| Task accuracy (gsm8k, mmlu ...) | `lm-eval` (own environment, with `transformers`) | `MQDE_LM_EVAL_BIN`, else `lm-eval` on `PATH` |
 
 A missing binary turns the stage into `skipped` with the reason in the report; it does not fail the job.
 

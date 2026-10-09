@@ -73,3 +73,14 @@ T-0801 要求“MMLU / GSM8K 结果与 lm-eval 官方 CLI 直接运行的结果�
 3. MMLU / GSM8K 的数据集在开发机上的来源（镜像、代理，或手动放进缓存目录）。
 
 批准后的验收：在有数据集的机器上，对同一已部署模型分别用我们的适配器和直接运行官方 CLI（相同 `--limit`、相同种子），两者的 `acc` / `exact_match` 数值逐位一致，结果写入报告并出现在 HTML 报告的 S12 部分。
+
+## 7. 实施记录（2026-10-09）
+
+负责人批准方案 A，先做 lm-eval，evalscope 之后。`pyproject.toml` 没有改。
+
+- **实现**：`eval/lm_eval_adapter.py`（拼命令、运行官方 CLI、解析 JSON）；`deploy.vllm.lm_eval` 选项（`tasks`、`limit`、`num_fewshot`、`baseline` 等）；未量化基线默认同样评一遍；HTML 报告新增“任务精度”表，基线排第一行。找不到可执行文件记为 `skipped`，运行失败记为 `failed` 并写出第一条服务端错误，不使作业失败。
+- **环境**：4090 上单独的 Python 3.12 虚拟环境，`lm_eval[api]` 0.4.13 加 `transformers`（分词器需要，基础安装不带），通过 `MQDE_LM_EVAL_BIN` 指向。数据集走 hf-mirror。
+- **验收（与官方 CLI 一致）**：对同一个正在运行的 vLLM 服务，分别用适配器和直接运行官方命令行（相同参数、相同种子、gsm8k、5-shot、20 个样本），`exact_match` 的 strict 与 flexible 两个数值逐位一致（0.05 和 0.1）。这在构造上基本必然成立，因为运行的就是同一个 CLI；它验证的是适配器没有改动参数、没有错读结果。只试了 gsm8k 和 20 个样本，没有跑 MMLU，也没有在完整数据集上跑。
+- **跑通真实作业时遇到的三个问题（都已修）**：vLLM 以完整路径作为模型名而请求用了目录名（404）；作业默认上下文 1024 容不下 5-shot gsm8k 的约 1.4k token 提示（400，现在有 lm-eval 时自动放大到 4096）；lm-eval 环境缺 `transformers`。另外 lm-eval 的真实输出里 `sample_len` 是数值字段，不是指标，解析器一开始把它当成了指标，用真实输出做夹具后修正。
+- **结果**（Qwen2.5-0.5B-Instruct，gsm8k，5-shot，50 个样本，RTX 4090）：未量化 strict 0.20 ± 0.057、flexible 0.28 ± 0.064；W4A16 GPTQ 导出 AWQ 为 0.02 ± 0.020、0.06 ± 0.034；PPL 从 18.10 到 20.66。基线 strict 在另一次服务设置不同的运行里是 0.18，即 50 个样本里差 1 个，所以这是“明显下降”而不是精确数值。
+- **未做**：evalscope 适配器、MMLU、完整数据集的运行、llama-server 后端、VLA。

@@ -58,6 +58,7 @@ python -c "from mqde import core; print(core.__name__)"
 | llama.cpp 困惑度 / bench | `llama-perplexity`、`llama-bench` | `MQDE_LLAMACPP_BIN`，否则 `build/llamacpp/bin`、`build/llamacpp-metal/bin` |
 | llama.cpp 服务 | `llama-server` | `MQDE_LLAMA_SERVER_BIN`，否则 `build/llamacpp-server/bin/llama-server` |
 | vLLM 服务 | `vllm`（需要 CUDA GPU） | `MQDE_VLLM_BIN`，否则 `PATH` 中的 `vllm`，否则 `build/vllm/bin/vllm` |
+| 任务精度（gsm8k、mmlu 等） | `lm-eval`（单独环境，含 `transformers`） | `MQDE_LM_EVAL_BIN`，否则 `PATH` 中的 `lm-eval` |
 
 找不到二进制时，对应阶段记为 `skipped` 并在报告里写明原因，不会让作业失败。
 

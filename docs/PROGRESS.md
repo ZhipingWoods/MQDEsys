@@ -180,6 +180,16 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-09（下午） · Claude · ADR-0002 与 ADR-0003 获批并实施
+
+负责人批准两份 ADR，并开放 GPU 4 到 7；SGLang 先放一放，等其他任务基本完成再做。
+
+- **ADR-0003（预估器按批计激活）**：`BackendProfile` 增加 `activation_model`、`max_batched_tokens`，`vllm` 画像用 `batched`；最大并发由二分查找得到。对照 vLLM 自己的启动报告，**没有拟合系数**：Qwen2.5-0.5B 预估 501 与 16，实测 547.03 与 17.09（0.92、0.94）；**Qwen2.5-7B（新下载，GPU 5）** 1k、8k、32k 上下文预估 110、13、3，实测 115.66、14.46、3.61（0.95、0.90、0.83）；旧模型在 7B 的 32k 上给 0，即判定一条序列都放不下。FP8 版 0.5B 的预估 488 对 509（0.96）。权重 7B 预估 14.19 GiB 对 vLLM 14.29 GiB。破坏性验证：把画像改回 `per_seq`，预估值恰为旧的 76 和 2；让二分查找忽略 KV，两个测试变红。局限：一种 GPU、一个 vLLM 版本、两个模型；`max_num_seqs` 没建模；其他批处理引擎没有数据。D-9 关闭。
+- **ADR-0002（lm-eval 以子进程接入）**：`eval/lm_eval_adapter.py` 加 `deploy.vllm.lm_eval` 选项；未量化基线默认同样评一遍；报告页新增任务精度表，基线排第一行。适配器与直接运行官方命令行（相同参数、种子）的 gsm8k 分数逐位一致（20 个样本）；这几乎是构造上必然的，它证明的是适配器没有改参数、没有错读结果。真实作业（Qwen2.5-0.5B W4A16 GPTQ 导出 AWQ，gsm8k 5-shot 50 个样本）：未量化 0.20 / 0.28，量化后 0.02 / 0.06，PPL 18.10 到 20.66。样本少，基线 strict 在另一次运行里是 0.18，只能说“明显下降”。
+- **跑真实作业时才暴露、单元测试看不到的问题**（均已修并加测试）：vLLM 以完整路径作模型名而请求用了目录名；作业默认上下文 1024 装不下 5-shot 的约 1.4k token；lm-eval 环境缺 transformers；`sample_len` 被当成指标（用真实输出做夹具才发现）；FlashInfer 即时编译找不到 `ninja`（现在把 vllm 所在目录放进子进程 PATH，并加诊断）。
+- **环境（4090）**：`/cache/wuzhiping/envs/lmeval`（lm_eval 0.4.13 + transformers，`MQDE_LM_EVAL_BIN`）；Qwen2.5-7B-Instruct 在 `/cache/wuzhiping/hub/`；hf-mirror 可用但必须 `HF_HUB_DISABLE_XET=1`，否则大文件走 Xet 返回 401。
+- **没做**：evalscope 适配器、MMLU、完整数据集运行、llama-server 后端的任务精度、SGLang。
+
 ### 2026-10-09 · Claude · T-0304 新建作业页实时预估侧栏
 
 - 新建作业页右侧新增“实时预估”：改模型 / 硬件 / 配方后 300 ms 调用同一个 `/estimate`，逐配方显示权重、峰值、是否可部署，错误（如路径不在允许根目录）显示在侧栏里而不挡住表单。

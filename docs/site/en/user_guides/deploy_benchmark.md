@@ -1,6 +1,6 @@
 # Deployment and benchmarking
 
-**Status: partial.** llama.cpp (GGUF, CPU and Metal) and vLLM run end to end in Python. The C++ backend interface, SGLang, TensorRT-LLM, lm-eval/evalscope accuracy suites and the report page for boundary search are not done.
+**Status: partial.** llama.cpp (GGUF, CPU and Metal) and vLLM run end to end in Python. The C++ backend interface, SGLang, TensorRT-LLM, the evalscope adapter and the report page for boundary search are not done. lm-eval runs through its official command line (below).
 
 After export, a job can serve each checkpoint with a real engine, check it answers, load it, and score it. A missing engine binary makes the stage `skipped` (reason in the report); a failed start is `failed` with a diagnosis recognised from the engine's log (out of memory, unsupported quantization config, KV cache too small, port in use, missing file ...).
 
@@ -59,6 +59,27 @@ You can use the pieces directly. All live under `python/mqde/`.
 `run_load(port, LoadSpec(...))` streams requests against `POST /v1/completions` (`api="openai"`: vLLM, SGLang, llama-server) or llama-server's native `/completion` (`api="llama"`). Two modes: **closed loop** (`concurrency` workers back to back) and **open loop** (Poisson arrivals at `rate` req/s, at most `max_inflight` at once; `schedule_lag_ms` tells you if the generator, not the server, was the bottleneck). Prompts are token-id lists of exactly `prompt_len` tokens that differ per request, so prefix caching cannot hide the work; generation ignores EOS and produces exactly `n_predict` tokens.
 
 Definitions: TTFT = first token arrival minus request sent; TPOT = (last minus first arrival) / (tokens - 1); ITL = gaps between token arrivals; E2E = last arrival minus request sent; throughput = output tokens of successful requests / wall time. p50, p90 and p99 are reported. Against a mock server with TTFT 100 ms and TPOT 20 ms the measured error was under 2 ms.
+
+### `eval/lm_eval_adapter.py`: task accuracy through the official `lm-eval`
+
+PPL can stay almost unchanged while task accuracy collapses, so the deployed model can also be scored on lm-evaluation-harness tasks (ADR-0002). MQDEsys never imports lm-eval: it runs the `lm-eval` command you installed (`MQDE_LM_EVAL_BIN`, else `lm-eval` on `PATH`) against the vLLM server the stage already started, through lm-eval's `local-completions` model on 127.0.0.1, and reads the JSON it writes. Install it in its own environment (it needs `transformers` for the tokenizer; no torch). Datasets come from the Hugging Face hub or a mirror (`HF_ENDPOINT`).
+
+```bash
+PYTHONPATH=python MQDE_LM_EVAL_BIN=/path/to/envs/lmeval/bin/lm-eval python -m mqde.pipeline.llm_job \
+  --model <MODEL_DIR> --recipes w4a16 --export awq --device cuda \
+  --vllm '{"gpu_memory_utilization": 0.4, "lm_eval": {"tasks": ["gsm8k"], "limit": 50, "num_fewshot": 5}}'
+```
+
+Options under `lm_eval`: `tasks`, `limit` (default 50), `num_fewshot`, `concurrency`, `seed`, `max_gen_toks`, `max_model_len` (default 4096, because 5-shot prompts are about 1.4k tokens), `timeout`, and `baseline` (default true). With `baseline` the same run is repeated on the **unquantized** model, served the same way, and shown as the first row of the report's accuracy table; a quantized score means nothing without it. A missing `lm-eval` makes the stage `skipped`; a failing run is recorded as `failed` with the first server error, and the job still finishes.
+
+Checked on an RTX 4090 with lm-eval 0.4.13, Qwen2.5-0.5B-Instruct, gsm8k, 5-shot, 50 samples (`docs/PROGRESS.md`):
+
+| Model | strict-match | flexible-extract |
+|---|---:|---:|
+| Unquantized (fp16, vLLM) | 0.20 ± 0.057 | 0.28 ± 0.064 |
+| W4A16 GPTQ, exported as AWQ | 0.02 ± 0.020 | 0.06 ± 0.034 |
+
+The same checkpoint's PPL moved from 18.10 to 20.66. With 50 samples the standard errors are large, and the unquantized strict-match score was 0.18 in an earlier run with other server settings (one sample of 50), so read this as a clear drop on one small model, not as a precise number. Run directly with the same arguments, the official CLI gave bit-identical scores to the adapter (gsm8k, 20 samples).
 
 ### `eval/served_ppl.py`: accuracy of the deployed model
 

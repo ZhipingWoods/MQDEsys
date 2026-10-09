@@ -1,6 +1,6 @@
 # 部署与压测
 
-**状态：部分实现。** llama.cpp（GGUF，CPU 与 Metal）和 vLLM 已在 Python 中端到端跑通。C++ 后端接口、SGLang、TensorRT-LLM、lm-eval/evalscope 精度评测，以及边界搜索的报告页尚未完成。
+**状态：部分实现。** llama.cpp（GGUF，CPU 与 Metal）和 vLLM 已在 Python 中端到端跑通。C++ 后端接口、SGLang、TensorRT-LLM、evalscope 适配器，以及边界搜索的报告页尚未完成。lm-eval 通过它的官方命令行运行（见下文）。
 
 导出之后，作业可以用真实引擎部署每个 checkpoint，确认它能应答、给它加压并给它打分。找不到引擎二进制时该阶段记为 `skipped`（原因写在报告里）；启动失败记为 `failed`，并附上从引擎日志识别出的诊断（显存不足、不支持的量化配置、KV Cache 太小、端口被占用、文件缺失等）。
 
@@ -59,6 +59,27 @@ RTX 4090、vLLM 0.30.0、Qwen2.5-0.5B-Instruct 上的记录，W4A16 / FP8 均由
 `run_load(port, LoadSpec(...))` 对 `POST /v1/completions`（`api="openai"`：vLLM、SGLang、llama-server）或 llama-server 的原生 `/completion`（`api="llama"`）发流式请求。两种模式：**闭环**（`concurrency` 个 worker 连续发请求）和**开环**（按 `rate` req/s 的泊松到达，同时最多 `max_inflight` 个；`schedule_lag_ms` 告诉你瓶颈是发压端还是服务端）。输入是长度恰为 `prompt_len` 的 token id 列表，且每个请求不同，因此 prefix caching 无法掩盖实际计算量；生成时忽略 EOS，恰好产生 `n_predict` 个 token。
 
 定义：TTFT = 首个 token 到达时刻减去请求发出时刻；TPOT = （最后一个与第一个 token 到达时刻之差）/（token 数 - 1）；ITL = 相邻 token 到达的间隔；E2E = 最后一个 token 到达时刻减去请求发出时刻；吞吐 = 成功请求的输出 token 数 / 墙钟时间。报告 p50、p90 和 p99。对 TTFT 100 ms、TPOT 20 ms 的 mock 服务器，测量误差小于 2 ms。
+
+### `eval/lm_eval_adapter.py`：通过官方 `lm-eval` 评任务精度
+
+PPL 几乎不变而任务精度大幅下降是常见情形，所以部署后的模型还可以在 lm-evaluation-harness 的任务上打分（ADR-0002）。MQDEsys 不 import lm-eval：它运行你自己安装的 `lm-eval` 命令（`MQDE_LM_EVAL_BIN`，否则 `PATH` 中的 `lm-eval`），通过 lm-eval 的 `local-completions` 模型连接该阶段已启动的、监听 127.0.0.1 的 vLLM 服务，再读取它写出的 JSON。请把它装在单独的环境里（分词器需要 `transformers`，不需要 torch）。数据集来自 Hugging Face 或镜像（`HF_ENDPOINT`）。
+
+```bash
+PYTHONPATH=python MQDE_LM_EVAL_BIN=/path/to/envs/lmeval/bin/lm-eval python -m mqde.pipeline.llm_job \
+  --model <MODEL_DIR> --recipes w4a16 --export awq --device cuda \
+  --vllm '{"gpu_memory_utilization": 0.4, "lm_eval": {"tasks": ["gsm8k"], "limit": 50, "num_fewshot": 5}}'
+```
+
+`lm_eval` 下的选项：`tasks`、`limit`（默认 50）、`num_fewshot`、`concurrency`、`seed`、`max_gen_toks`、`max_model_len`（默认 4096，因为 5-shot 提示约 1.4k token）、`timeout`、`baseline`（默认 true）。开启 `baseline` 时，同样的评测会在**未量化**模型上以同样的方式重做一遍，并作为报告精度表的第一行；没有它，量化后的分数没有意义。找不到 `lm-eval` 时该阶段记为 `skipped`；运行失败会记为 `failed` 并写出服务端返回的第一条错误，作业仍然正常结束。
+
+在 RTX 4090、lm-eval 0.4.13、Qwen2.5-0.5B-Instruct、gsm8k、5-shot、50 个样本上的实测（`docs/PROGRESS.md`）：
+
+| 模型 | strict-match | flexible-extract |
+|---|---:|---:|
+| 未量化（fp16，vLLM） | 0.20 ± 0.057 | 0.28 ± 0.064 |
+| W4A16 GPTQ，导出为 AWQ | 0.02 ± 0.020 | 0.06 ± 0.034 |
+
+同一检查点的 PPL 从 18.10 变为 20.66。50 个样本的标准误很大，而且未量化的 strict-match 在另一次、服务设置不同的运行里是 0.18（差 50 个样本里的 1 个），所以这只能说明“在一个小模型上明显下降”，不是精确数值。用相同参数直接运行官方命令行，得到的分数与适配器逐位一致（gsm8k，20 个样本）。
 
 ### `eval/served_ppl.py`：部署后模型的精度
 
