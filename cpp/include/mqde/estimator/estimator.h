@@ -93,6 +93,15 @@ struct Estimate {
   double flops_per_step = 0;
   double bytes_per_step = 0;
   double latency_floor_ms = 0;
+  // Pieces of the roofline model for token generation (used by estimate_perf): language-model weights are
+  // re-read for every generated token, the LM head is touched once per token, attention work grows with the
+  // context length.
+  double flops_lang_per_token = 0;  // matmul FLOPs of the language layers for one token
+  double flops_head_per_token = 0;  // LM head FLOPs for one token
+  double bytes_lang = 0;            // weight bytes of the language layers touched per forward
+  double bytes_head = 0;            // weight bytes of the LM head
+  double attn_flops_per_ctx_token =
+      0;  // 4 * full-attention layers * heads * head_dim: FLOPs per token per context position
   std::string compute_format;  // which peak was used
   std::vector<std::string> assumptions;
   std::string confidence = "low";
@@ -100,6 +109,44 @@ struct Estimate {
 
 Estimate estimate(const modelspec::ModelSpec& spec, const Recipe& recipe, const HardwareProfile& hw,
                   const BackendProfile& backend, const RuntimeParams& rt);
+
+// ---- token-generation performance (roofline per phase), T-0209 ----
+struct PerfParams {
+  int64_t prompt_tokens = 1024;
+  int64_t output_tokens = 128;
+};
+
+struct PerfEstimate {
+  double ttft_ms = 0;  // time to first token: all `concurrency` prompts prefill together
+  double tpot_ms = 0;  // time per output token for every running sequence (one batched decode step)
+  double tokens_per_s_per_seq = 0;  // 1000 / tpot_ms
+  double tokens_per_s_total = 0;    // concurrency * per-seq rate
+  double request_latency_ms = 0;    // ttft + (output_tokens - 1) * tpot
+  double requests_per_s = 0;        // concurrency / request latency
+  std::string prefill_bound;        // "compute" | "memory": which roof sets TTFT
+  std::string decode_bound;         // "compute" | "memory": which roof sets TPOT
+  double eta_bw = 0, mfu = 0;       // coefficients used (from the backend profile / calibration)
+  std::string compute_format;
+  std::string confidence = "low";  // copied from the Estimate
+};
+
+// Prefill: max(FLOPs / (peak x MFU), weight + KV-write bytes / (BW x eta)). Decode step at the average
+// context length: max(FLOPs / (peak x MFU), weight bytes + KV / state read per sequence / (BW x eta)). The
+// kernel-launch overhead is not modeled.
+PerfEstimate estimate_perf(const Estimate& e, const HardwareProfile& hw, const BackendProfile& be,
+                           const PerfParams& p);
+
+// Inversions used by the feedback loop: the coefficient that would have produced a measurement. They fail,
+// with a reason, when the measured phase is not bound by the roof the coefficient belongs to (a compute-bound
+// decode says nothing about bandwidth).
+Result<double> infer_eta_bw(const Estimate& e, const HardwareProfile& hw, const BackendProfile& be,
+                            const PerfParams& p, double measured_tpot_ms);
+Result<double> infer_mfu(const Estimate& e, const HardwareProfile& hw, const BackendProfile& be,
+                         const PerfParams& p, double measured_ttft_ms);
+// measured peak minus the modelled weights + KV + activations (times the allocator factor)
+Result<double> infer_overhead_bytes(const Estimate& e, const BackendProfile& be, double measured_peak_bytes);
+// Copy of `be` with the calibrated coefficients applied.
+BackendProfile with_coefficients(BackendProfile be, double eta_bw, double mfu, double overhead_bytes);
 
 struct CurvePoint {
   int64_t x = 0;

@@ -70,7 +70,7 @@ add_library(mqde_fit STATIC src/fit/fit.cpp src/fit/benchmarks.cpp src/fit/concu
 target_link_libraries(mqde_fit PUBLIC mqde_estimator PRIVATE httplib::httplib)
 
 # ---- storage: SQLite metadata + content-addressed cache ----
-add_library(mqde_storage STATIC src/storage/db.cpp src/storage/cas.cpp)
+add_library(mqde_storage STATIC src/storage/db.cpp src/storage/cas.cpp src/storage/calibration.cpp)
 if(TARGET SQLite3::SQLite3)
   target_link_libraries(mqde_storage PUBLIC mqde_common SQLite3::SQLite3)
 else()
@@ -115,6 +115,8 @@ if(MQDE_BUILD_TESTS)
     tests/unit/common_thread_pool_test.cpp
     tests/unit/storage_db_test.cpp
     tests/unit/storage_cas_test.cpp
+    tests/unit/storage_calibration_test.cpp
+    tests/unit/estimator_perf_test.cpp
     tests/unit/modelspec_test.cpp
     tests/unit/quant_test.cpp
     tests/unit/pack_test.cpp

@@ -135,12 +135,18 @@ Estimate estimate(const ModelSpec& spec, const Recipe& recipe, const HardwarePro
       const double eff_params =
           shape.size() == 3 ? static_cast<double>(numel / shape[0]) : static_cast<double>(numel);
       flops += 2.0 * eff_params * tokens * moe_frac;
+      if (u.component == "language") e.flops_lang_per_token += 2.0 * eff_params * moe_frac;
+      if (u.component == "lm_head") e.flops_head_per_token += 2.0 * eff_params * moe_frac;
     }
     if (tokens > 0) {
       // Category-specific (per-embodiment) 3-D weights: only one slice is touched per step.
       const double touched = (shape.size() == 3 ? bytes / static_cast<double>(shape[0]) : bytes) * moe_frac;
       const double rereads = u.component == "action_head" ? static_cast<double>(sh.action_steps) : 1.0;
       bytes_read += touched * rereads;
+      // an embedding table is a lookup: a token touches one row, not the table (the whole table only matters
+      // as a tied LM head, below)
+      if (u.component == "language" && !is_embedding(t.name)) e.bytes_lang += touched;
+      if (u.component == "lm_head") e.bytes_head += touched;
     }
   }
   for (const auto& c : comps) {
@@ -169,6 +175,16 @@ Estimate estimate(const ModelSpec& spec, const Recipe& recipe, const HardwarePro
         conv_dim * static_cast<double>(std::max<int64_t>(tx.linear_conv_kernel - 1, 0)) * 2.0;
     e.state_bytes_per_seq = static_cast<uint64_t>(per_layer * static_cast<double>(tx.n_linear_attention));
   }
+  if (spec.text.tie_word_embeddings && e.flops_head_per_token == 0 && spec.text.vocab > 0 &&
+      spec.text.hidden > 0) {
+    // tied embeddings: the LM head is the embedding table, read in full and multiplied for every generated
+    // token (kept in 16 bit)
+    e.flops_head_per_token =
+        2.0 * static_cast<double>(spec.text.vocab) * static_cast<double>(spec.text.hidden);
+    e.bytes_head = 2.0 * static_cast<double>(spec.text.vocab) * static_cast<double>(spec.text.hidden);
+  }
+  e.attn_flops_per_ctx_token = 4.0 * static_cast<double>(tx.n_full_attention) *
+                               static_cast<double>(tx.n_heads) * static_cast<double>(tx.head_dim);
   const double kv_seq = kv_tok_full * static_cast<double>(sh.ctx) +
                         kv_tok_slide * static_cast<double>(slide_ctx) +
                         static_cast<double>(e.state_bytes_per_seq);
@@ -378,6 +394,133 @@ Json to_json(const std::vector<CurvePoint>& c) {
     arr.push_back(
         {{"x", p.x}, {"peak_bytes", p.peak_bytes}, {"kv_bytes", p.kv_bytes}, {"feasible", p.feasible}});
   return arr;
+}
+
+}  // namespace mqde::estimator
+
+// ---- token-generation performance ----
+
+namespace mqde::estimator {
+
+namespace {
+double peak_for(const HardwareProfile& hw, const std::string& fmt) {
+  const std::string key = fmt.starts_with("fp8") ? "fp8" : fmt;
+  if (hw.peak_tflops.contains(key)) return hw.peak_tflops.at(key);
+  if (hw.peak_tflops.contains("bf16")) return hw.peak_tflops.at("bf16");
+  return 0.0;
+}
+struct Phase {
+  double flops, bytes;
+};
+Phase prefill_phase(const Estimate& e, const PerfParams& p) {
+  const double c = static_cast<double>(std::max<int64_t>(e.rt.concurrency, 1));
+  const double P = static_cast<double>(p.prompt_tokens);
+  const double flops =
+      c * (e.flops_lang_per_token * P + e.attn_flops_per_ctx_token * P * P / 2.0 + e.flops_head_per_token);
+  const double bytes =
+      e.bytes_lang + e.bytes_head +
+      c * (static_cast<double>(e.kv_bytes_per_token) * P + static_cast<double>(e.state_bytes_per_seq));
+  return {flops, bytes};
+}
+Phase decode_phase(const Estimate& e, const PerfParams& p) {
+  const double c = static_cast<double>(std::max<int64_t>(e.rt.concurrency, 1));
+  const double ctx =
+      static_cast<double>(p.prompt_tokens) +
+      static_cast<double>(std::max<int64_t>(p.output_tokens, 1)) / 2.0;  // average over the generation
+  const double flops =
+      c * (e.flops_lang_per_token + e.flops_head_per_token + e.attn_flops_per_ctx_token * ctx);
+  const double bytes =
+      e.bytes_lang + e.bytes_head +
+      c * (static_cast<double>(e.kv_bytes_per_token) * ctx + static_cast<double>(e.state_bytes_per_seq));
+  return {flops, bytes};
+}
+double t_compute_ms(double flops, double peak_tflops, double mfu) {
+  return peak_tflops > 0 && mfu > 0 ? flops / (peak_tflops * 1e12 * mfu) * 1e3 : 0.0;
+}
+double t_memory_ms(double bytes, double bw_gbps, double eta) {
+  return bw_gbps > 0 && eta > 0 ? bytes / (bw_gbps * 1e9 * eta) * 1e3 : 0.0;
+}
+}  // namespace
+
+PerfEstimate estimate_perf(const Estimate& e, const HardwareProfile& hw, const BackendProfile& be,
+                           const PerfParams& p) {
+  PerfEstimate r;
+  r.eta_bw = be.eta_bw;
+  r.mfu = be.mfu;
+  r.compute_format = e.compute_format;
+  r.confidence = e.confidence;
+  const double peak = peak_for(hw, e.compute_format);
+  const double c = static_cast<double>(std::max<int64_t>(e.rt.concurrency, 1));
+  const auto pre = prefill_phase(e, p), dec = decode_phase(e, p);
+  const double pc = t_compute_ms(pre.flops, peak, be.mfu),
+               pm = t_memory_ms(pre.bytes, hw.mem_bw_gbps, be.eta_bw);
+  const double dc = t_compute_ms(dec.flops, peak, be.mfu),
+               dm = t_memory_ms(dec.bytes, hw.mem_bw_gbps, be.eta_bw);
+  r.ttft_ms = std::max(pc, pm);
+  r.tpot_ms = std::max(dc, dm);
+  r.prefill_bound = pc >= pm ? "compute" : "memory";
+  r.decode_bound = dc >= dm ? "compute" : "memory";
+  r.tokens_per_s_per_seq = r.tpot_ms > 0 ? 1000.0 / r.tpot_ms : 0.0;
+  r.tokens_per_s_total = c * r.tokens_per_s_per_seq;
+  r.request_latency_ms =
+      r.ttft_ms + static_cast<double>(std::max<int64_t>(p.output_tokens, 1) - 1) * r.tpot_ms;
+  r.requests_per_s = r.request_latency_ms > 0 ? c * 1000.0 / r.request_latency_ms : 0.0;
+  return r;
+}
+
+Result<double> infer_eta_bw(const Estimate& e, const HardwareProfile& hw, const BackendProfile& be,
+                            const PerfParams& p, double measured_tpot_ms) {
+  if (!(measured_tpot_ms > 0) || !std::isfinite(measured_tpot_ms))
+    return make_error(Errc::kInvalidArgument, "measured TPOT must be a positive number of milliseconds");
+  const auto d = decode_phase(e, p);
+  const double tc = t_compute_ms(d.flops, peak_for(hw, e.compute_format), be.mfu);
+  if (tc >= measured_tpot_ms)
+    return make_error(Errc::kInvalidArgument,
+                      "the modelled compute time ({:.3f} ms) already reaches the measured TPOT ({:.3f} ms): "
+                      "decode is compute-bound here, bandwidth efficiency cannot be inferred",
+                      tc, measured_tpot_ms);
+  if (hw.mem_bw_gbps <= 0)
+    return make_error(Errc::kInvalidArgument, "hardware profile has no memory bandwidth");
+  return d.bytes / (hw.mem_bw_gbps * 1e9 * measured_tpot_ms * 1e-3);
+}
+
+Result<double> infer_mfu(const Estimate& e, const HardwareProfile& hw, const BackendProfile& be,
+                         const PerfParams& p, double measured_ttft_ms) {
+  if (!(measured_ttft_ms > 0) || !std::isfinite(measured_ttft_ms))
+    return make_error(Errc::kInvalidArgument, "measured TTFT must be a positive number of milliseconds");
+  const auto d = prefill_phase(e, p);
+  const double tm = t_memory_ms(d.bytes, hw.mem_bw_gbps, be.eta_bw);
+  if (tm >= measured_ttft_ms)
+    return make_error(Errc::kInvalidArgument,
+                      "the modelled memory time ({:.3f} ms) already reaches the measured TTFT ({:.3f} ms): "
+                      "prefill is memory-bound here, MFU cannot be inferred",
+                      tm, measured_ttft_ms);
+  const double peak = peak_for(hw, e.compute_format);
+  if (peak <= 0)
+    return make_error(Errc::kInvalidArgument, "hardware profile has no peak throughput for {}",
+                      e.compute_format);
+  return d.flops / (peak * 1e12 * measured_ttft_ms * 1e-3);
+}
+
+Result<double> infer_overhead_bytes(const Estimate& e, const BackendProfile& be, double measured_peak_bytes) {
+  if (!(measured_peak_bytes > 0) || !std::isfinite(measured_peak_bytes))
+    return make_error(Errc::kInvalidArgument, "measured peak memory must be positive");
+  const double modelled = (static_cast<double>(e.weights_bytes) + static_cast<double>(e.kv_bytes) +
+                           static_cast<double>(e.activation_bytes)) *
+                          be.allocator_factor;
+  if (measured_peak_bytes < modelled)
+    return make_error(Errc::kInvalidArgument,
+                      "measured peak ({:.0f} B) is below the modelled weights + KV + activations ({:.0f} B): "
+                      "wrong units, or a different recipe / context than estimated",
+                      measured_peak_bytes, modelled);
+  return measured_peak_bytes - modelled;
+}
+
+BackendProfile with_coefficients(BackendProfile be, double eta_bw, double mfu, double overhead_bytes) {
+  be.eta_bw = eta_bw;
+  be.mfu = mfu;
+  be.runtime_overhead_bytes = static_cast<uint64_t>(std::max(0.0, overhead_bytes));
+  return be;
 }
 
 }  // namespace mqde::estimator
