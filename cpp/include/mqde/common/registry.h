@@ -91,7 +91,9 @@ struct Registrar {
 }  // namespace mqde
 
 #define MQDE_REGISTER_NAMED(id, registry, name, Type)                                    \
-  extern "C" int mqde_force_link_##id = 0;                                               \
+  extern "C" {                                                                           \
+  int mqde_force_link_##id = 0;                                                          \
+  }                                                                                      \
   static ::mqde::Registrar<std::remove_reference_t<decltype(registry)>::base_type, Type> \
       mqde_registrar_##id {                                                              \
     (registry), name                                                                     \
