@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../api";
-import { DEFAULT_DATASET, DEFAULT_LLM, DEFAULT_MODEL, useAsync } from "../hooks";
+import { api, fmtBytes, RuntimeParams } from "../api";
+import { DEFAULT_DATASET, DEFAULT_LLM, DEFAULT_MODEL, useAsync, useDebounced } from "../hooks";
+
+const LIVE_RUNTIME: RuntimeParams = { concurrency: 1, images_per_step: 2, text_tokens: 42, image_resolution: 448, gpu_memory_utilization: 0.9, extra_modalities: [] };
 
 export default function NewJobPage() {
   const nav = useNavigate();
@@ -88,6 +90,14 @@ export default function NewJobPage() {
     }
   };
 
+  // live estimate sidebar: same endpoint as the estimate page, 300 ms after the last change
+  const live = useDebounced({ model, hw, picked, action }, 300);
+  const liveRt = { ...LIVE_RUNTIME, extra_modalities: live.action && kind === "vla" ? ["action"] : [] };
+  const est = useAsync(
+    () => (live.picked.length ? api.estimate(live.model, live.hw, live.picked, liveRt) : Promise.resolve(null)),
+    [JSON.stringify(live), kind],
+  );
+
   const toggle = (id: string) => setPicked(picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id]);
 
   return (
@@ -97,6 +107,8 @@ export default function NewJobPage() {
         指定模型 → 量化配方 → 评估数据 → 部署硬件。作业由 C++ 调度到 GPU 池（{cfg.data?.gpus.join(", ") ?? "…"}）上的 Python 执行器，全过程事件实时推送。
       </p>
       {err && <div className="error-box">{err}</div>}
+      <div className="split">
+      <div>
       <div className="card">
         <h2>① 模型</h2>
         <div className="tabs" style={{ marginBottom: 12 }}>
@@ -312,6 +324,37 @@ export default function NewJobPage() {
         <button disabled={busy || picked.length === 0} onClick={submit}>
           {busy ? "提交中…" : "提交作业"}
         </button>
+      </div>
+      </div>
+      <aside className="card" style={{ position: "sticky", top: 12 }} data-testid="live-estimate">
+        <h2>实时预估</h2>
+        <p className="note">{hw} · 并发 1 · 不加载权重</p>
+        {est.loading && <p className="note">计算中…</p>}
+        {est.error && <div className="error-box" data-testid="live-estimate-error">{est.error}</div>}
+        {est.data && (
+          <table>
+            <thead>
+              <tr>
+                <th>配方</th>
+                <th>权重</th>
+                <th>峰值</th>
+                <th>可部署</th>
+              </tr>
+            </thead>
+            <tbody>
+              {est.data.estimates.map((e) => (
+                <tr key={e.recipe_id} data-testid={`live-${e.recipe_id}`}>
+                  <td>{e.recipe}</td>
+                  <td>{fmtBytes(e.breakdown.weights)}</td>
+                  <td>{fmtBytes(e.peak_bytes)}</td>
+                  <td>{e.feasible ? "✓" : `✗ ${e.reasons[0] ?? ""}`}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {est.data && <p className="note">显存容量 {fmtBytes(est.data.estimates[0]?.capacity_bytes)}（利用率 0.9）。由 C++ 预估器计算，与“资源预估”页同源。</p>}
+      </aside>
       </div>
     </>
   );

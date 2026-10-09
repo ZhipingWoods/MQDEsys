@@ -89,7 +89,7 @@
 | T-0301 | server：Drogon 服务骨架与只读端点 | P3 | T-0212,T-0007 | L2 | PARTIAL (2026-09-24, cpp-httplib instead of Drogon (see PROGRESS)) |
 | T-0302 | server：预估类端点 | P3 | T-0301 | L1 | PARTIAL (2026-09-24) |
 | T-0303 | 前端：API 客户端生成、布局、路由 | P3 | T-0004,T-0301 | L1 | PARTIAL (2026-09-24, hand-written typed client; generated client pending T-0007) |
-| T-0304 | 前端：新建作业向导 + 实时预估侧栏 | P3 | T-0303,T-0302 | L1 | PARTIAL (2026-09-24, form, no live estimate sidebar) |
+| T-0304 | 前端：新建作业向导 + 实时预估侧栏 | P3 | T-0303,T-0302 | L1 | PARTIAL (2026-10-09, form + live estimate sidebar: per-recipe weights / peak / feasible from the C++ estimator, 300 ms debounce, errors shown; Playwright web/e2e/newjob_live_estimate.mjs 10/10. Not done: five-step wizard layout, planner validation of illegal combinations, YAML download, `mqde run --dry-run` acceptance) |
 | T-0305 | 前端：预估中心 5 类图表 | P3 | T-0303,T-0302 | L1 | PARTIAL (2026-09-24) |
 | T-0306 | 前端：硬件页 | P3 | T-0303 | L1 | PARTIAL (2026-09-24) |
 | T-0401 | quant 核心：QuantSpec/QParams/粒度重排 | P4 | T-0101 | L2 | DONE (2026-09-24) |

@@ -180,6 +180,14 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-09 · Claude · T-0304 新建作业页实时预估侧栏
+
+- 新建作业页右侧新增“实时预估”：改模型 / 硬件 / 配方后 300 ms 调用同一个 `/estimate`，逐配方显示权重、峰值、是否可部署，错误（如路径不在允许根目录）显示在侧栏里而不挡住表单。
+- 浏览器测试 `web/e2e/newjob_live_estimate.mjs`，10 项通过：数值与接口返回逐项一致（按页面显示的格式比较）、增减配方、切换硬件后显示该硬件容量、逐字输入 72 个字符只发 1 次请求。破坏验证两次：把权重列改成 KV 列，2 项变红；去掉防抖，1 项变红（30 次请求）；均已还原。
+- 测试里 403 来自它故意输入的空路径 / 不存在路径，已在检查里按这个原因排除，不是忽略所有报错。
+- 没做：五步向导形式、planner 对非法组合的即时提示、YAML 下载、`mqde run --dry-run` 验收。
+- 注意：没有对 `NewJob.tsx` 跑 prettier，因为该文件原本就不符合 prettier，整文件重排会淹没这次的改动。
+
 ### 2026-10-09 · Claude · T-0806 报告 JSON schema
 
 - 新增 `mqde/report/report.schema.json`（draft-07）、不依赖第三方包的校验器 `report/schema.py`、命令 `python -m mqde.report validate|html report.json`。校验器列出**所有**问题并带 JSON 路径，不是只报第一个。
