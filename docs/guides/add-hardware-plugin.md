@@ -119,3 +119,14 @@ avoids duplicates when the plugin's ordinals happen to equal NVML indices that a
 
 What this does not prove: that the real library returns what the code expects, the capability tables, and anything numeric. Those
 are listed in `docs/TASKS.md` per plugin as "needs a machine with ...".
+
+## 8. What is verified for each shipped plugin
+
+| Plugin | Run on real hardware | How the numbers were obtained |
+|---|---|---|
+| `template` | simulated | none, by design |
+| `cpu` | Mac (Apple M5) and the 4090 host (AMD EPYC 7402) | memcpy and an fp32 loop, so the GEMM figure is a floor, not a BLAS number |
+| `cuda` | RTX 4090 (GPUs within 4 to 7) | cudart events and cuBLAS; see section 6 |
+| `metal` | Apple M5 | a standalone Objective-C program was run first to confirm the API calls and typical numbers, then the plugin; its tests run on the real GPU |
+| `rocm` | **no** | stand-in HIP library; attribute ids checked against the vendored HIP header; GEMM not implemented |
+| Ascend | **not started** | no CANN header or library is available to check calls against |

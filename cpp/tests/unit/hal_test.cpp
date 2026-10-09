@@ -2,6 +2,7 @@
 // cpp/tests/plugins/<case>.c (or the shipped template plugin) and loaded with dlopen: ABI mismatch, missing
 // symbol, NULL mandatory functions, a probe that fails or lies about its count, duplicate names, and the
 // allow / deny lists.
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <map>
@@ -553,5 +554,100 @@ TEST_F(hal_rocm, alloc_and_free_go_through_the_runtime) {
     EXPECT_NE(api->alloc(9, 16, &p), 0) << "a device that does not exist";
     EXPECT_NE(api->alloc(0, 16, nullptr), 0);
   });
+}
+#endif
+
+// ---- Metal plugin on a real Apple GPU (skipped where there is none)
+// --------------------------------------------------
+#ifdef __APPLE__
+class hal_metal : public ::testing::Test {
+ protected:
+  Env dir{"MQDE_PLUGIN_DIR", MQDE_TEMPLATE_PLUGIN_DIR};
+  Env only{"MQDE_HAL_PLUGINS", "metal"};
+  Env off{"MQDE_HAL_DISABLE", nullptr};
+  const mqde_hal_plugin_v1* api = nullptr;
+  void SetUp() override {
+    ASSERT_GE(mqde_hal_load_all(), 1);
+    if (plugin_info("metal").devices == 0) GTEST_SKIP() << "no Metal device on this machine";
+    api = mqde_hal_plugin_by_name("metal");
+    ASSERT_NE(api, nullptr);
+  }
+};
+
+TEST_F(hal_metal, lists_the_gpu_with_unified_memory_figures_and_it_is_not_duplicated) {
+  mqde_device_info devs[32];
+  int n = 0;
+  ASSERT_EQ(mqde_probe_all(devs, 32, &n), 0);
+  int gpus = 0;
+  for (int i = 0; i < n; ++i)
+    if (std::string(devs[i].vendor) == "apple" && devs[i].kind == MQDE_DEV_GPU) {
+      ++gpus;
+      EXPECT_GT(devs[i].mem_total_bytes, 1ull << 30);
+      EXPECT_LE(devs[i].mem_free_bytes, devs[i].mem_total_bytes);
+      EXPECT_NE(std::string(devs[i].name).find("Apple"), std::string::npos);
+    }
+  EXPECT_GE(gpus, 1);
+}
+
+TEST_F(hal_metal, bandwidth_is_in_the_range_of_unified_memory_and_is_stable_between_runs) {
+  mqde_hal_profile_request req{};
+  std::strcpy(req.kind, "bandwidth");
+  req.bytes = 128u << 20;
+  req.iterations = 8;
+  double v[3];
+  for (double& x : v) {
+    mqde_hal_profile_result r{};
+    ASSERT_EQ(api->profile(0, &req, &r), 0) << api->last_error();
+    EXPECT_STREQ(r.unit, "GB/s");
+    EXPECT_NEAR(r.value, 2.0 * (128u << 20) * 8 / r.seconds / 1e9, r.value * 1e-6);
+    x = r.value;
+  }
+  for (double x : v) {
+    EXPECT_GT(x, 20.0) << "an Apple GPU copy slower than 20 GB/s would be a broken measurement";
+    EXPECT_LT(x, 1500.0)
+        << "faster than any Apple unified memory (800 GB/s on the largest chips) means the copy was skipped";
+  }
+  EXPECT_LT(*std::max_element(v, v + 3) / *std::min_element(v, v + 3), 1.6)
+      << "three runs should agree within 60%";
+}
+
+TEST_F(hal_metal, gemm_rate_is_derived_from_the_work_and_the_time_and_fp16_is_not_slower_than_fp32) {
+  mqde_hal_profile_request req{};
+  std::strcpy(req.kind, "gemm");
+  req.m = req.n = req.k = 1536;
+  req.iterations = 6;
+  mqde_hal_profile_result f32{}, f16{};
+  std::strcpy(req.dtype, "fp32");
+  ASSERT_EQ(api->profile(0, &req, &f32), 0) << api->last_error();
+  std::strcpy(req.dtype, "fp16");
+  ASSERT_EQ(api->profile(0, &req, &f16), 0) << api->last_error();
+  EXPECT_STREQ(f32.unit, "TFLOPS");
+  const double work = 2.0 * 1536 * 1536 * 1536 * 6;
+  EXPECT_NEAR(f32.value, work / f32.seconds / 1e12, f32.value * 1e-6);
+  EXPECT_GT(f32.value, 0.05);
+  EXPECT_LT(f32.value, 100.0);
+  EXPECT_GE(f16.value, f32.value * 0.7) << "half precision should not be much slower than single";
+}
+
+TEST_F(hal_metal, errors_name_the_problem) {
+  mqde_hal_profile_request req{};
+  mqde_hal_profile_result r{};
+  std::strcpy(req.kind, "gemm");
+  std::strcpy(req.dtype, "int8");
+  EXPECT_NE(api->profile(0, &req, &r), 0);
+  EXPECT_NE(std::string(api->last_error()).find("fp32, fp16"), std::string::npos);
+  std::strcpy(req.kind, "bandwidth");
+  EXPECT_NE(api->profile(5, &req, &r), 0);
+  EXPECT_STREQ(api->last_error(), "no such device");
+  std::strcpy(req.kind, "teleport");
+  EXPECT_NE(api->profile(0, &req, &r), 0);
+  mqde_hal_capability_query q{};
+  mqde_hal_capability_result c{};
+  std::strcpy(q.dtype, "fp16");
+  ASSERT_EQ(api->supports(&q, &c), 0);
+  EXPECT_EQ(c.supported, 1);
+  std::strcpy(q.dtype, "fp8_e4m3");
+  ASSERT_EQ(api->supports(&q, &c), 0);
+  EXPECT_EQ(c.supported, 0);
 }
 #endif

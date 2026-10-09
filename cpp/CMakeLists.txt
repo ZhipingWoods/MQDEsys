@@ -25,6 +25,18 @@ if(NOT WIN32)
   mqde_add_plugin(cuda plugins/cuda/cuda.c)
   mqde_add_plugin(rocm plugins/rocm/rocm.c)
   target_link_libraries(mqde_plugin_rocm PRIVATE ${CMAKE_DL_LIBS})
+endif()
+if(APPLE)
+  # Metal is Objective-C and macOS only: built on the Mac, absent elsewhere.
+  enable_language(OBJC)
+  add_library(mqde_plugin_metal MODULE plugins/metal/metal.m)
+  target_include_directories(mqde_plugin_metal PRIVATE include)
+  target_compile_options(mqde_plugin_metal PRIVATE -fobjc-arc)
+  target_link_libraries(mqde_plugin_metal PRIVATE "-framework Metal" "-framework MetalPerformanceShaders" "-framework Foundation")
+  set_target_properties(mqde_plugin_metal PROPERTIES PREFIX "" SUFFIX ".so" OUTPUT_NAME metal
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin/plugins)
+endif()
+if(NOT WIN32)
   target_link_libraries(mqde_plugin_cuda PRIVATE ${CMAKE_DL_LIBS})
 endif()
 
