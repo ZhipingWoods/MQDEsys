@@ -57,6 +57,9 @@ def test_full_job_writes_report_and_both_html_pages(job_env: None, tmp_path: Pat
     assert r["sensitivity"]["groups"]
     # the JSON on disk equals the in-memory report, and the HTML pages exist next to it
     assert json.loads((tmp_path / "j" / "report.json").read_text())["job_id"] == rep["job_id"]
+    from mqde.report.schema import validate_report
+
+    assert validate_report(json.loads((tmp_path / "j" / "report.json").read_text())) == []  # the schema describes what jobs really write
     sections = {"en": ("Quantization evaluation report", "Export and fake/real consistency"), "zh": ("量化评估报告", "导出与一致性")}
     for lang, (title, export_title) in sections.items():
         html = (tmp_path / "j" / f"report.{lang}.html").read_text(encoding="utf-8")

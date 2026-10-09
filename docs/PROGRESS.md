@@ -180,6 +180,13 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-09 · Claude · T-0806 报告 JSON schema
+
+- 新增 `mqde/report/report.schema.json`（draft-07）、不依赖第三方包的校验器 `report/schema.py`、命令 `python -m mqde.report validate|html report.json`。校验器列出**所有**问题并带 JSON 路径，不是只报第一个。
+- 三份真实夹具和一份 tiny 作业实际写出的 report.json 都通过。tiny 作业暴露了一个 schema 写错的地方：部分层没有输出端 SQNR，值为 null，已允许 null（这是缺测，不是错误）。
+- 破坏性验证两次：让校验器忽略 required，5 个测试变红；删掉 schema 里的“无 error 则必须有结果”条件，1 个测试变红；均已还原。
+- 没做：VLA 作业报告、`mqde` 控制台入口（需要改打包配置，L2）。
+
 ### 2026-10-08（深夜，续） · Claude · logits 探针、FP8 块量化读取、demo 视频修复
 
 - **T-0510 logits 探针**（`eval/logits_probe.py`，12 个单元测试 + 3 个端到端测试 + 报告页测试）：量化前捕获原模型的参考分布，量化后逐位置比较 KL、Top-1 一致率、原 Top-1 概率下降。默认只存 top-256 logits 加整个词表的 log-sum-exp（Qwen2.5 词表下 12 MiB，对比全量 1199 MiB），代价是 **KL 是下界**：真实模型 Qwen2.5-0.5B 上实测偏低 10.8%（RTN）和 10.6%（GPTQ），Top-1 一致率不受影响。这个偏差写在 HTML 报告页上，`exact: true` 可得精确值。指标有区分力：精确 KL 上 GPTQ 0.148 对 RTN 0.226（top-256 下界分别为 0.133 和 0.202）。做过破坏性验证（让参考取自量化后的模型，测试变红，再还原）；我第一次的破坏写坏了、测试是因崩溃而红，不算数，重做后才算。
