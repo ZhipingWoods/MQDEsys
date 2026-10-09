@@ -48,7 +48,7 @@ mqde estimate -m <MODEL_DIR> -r bf16,w4a16,fp8 --hw nvidia/rtx4090 --ctx 4096 --
 - **latency floor（延迟下界）**：`max(FLOPs / (峰值算力 × MFU), 读取字节数 / (带宽 × eta))`，不含 kernel 启动开销。它是下界，不是预测值。
 
 ```{warning}
-预估器按 Hugging Face eager 的做法，给每条并发序列都计一份激活内存。对 vLLM 这类批处理引擎，这会让 `max concurrency` 成为偏保守的下限：Qwen2.5-0.5B FP8、1024 上下文时，vLLM 报告 509 个并发序列，而预估为 74。权重显存则一致（都是 0.59 GiB）。修正方案是一项登记在案的待决策事项（`docs/PROGRESS.md` 中的 D-9）。
+后端画像带有 `activation_model`。默认的 `per_seq` 按 Hugging Face eager 的做法，给每条并发序列都计一份激活内存。`vllm` 画像用 `batched`（ADR-0003）：vLLM 把所有序列拼成一个最多 `max_batched_tokens` 个 token 的批，所以激活内存只按 `min(上下文 × 并发, max_batched_tokens)` 个 token 计一次。对照 vLLM 0.30 自己的启动报告，没有任何拟合系数：`vllm` 画像在 Qwen2.5-7B（1k、8k、32k 上下文）上预估的最大并发是 vLLM 的 0.83 到 0.95，在 Qwen2.5-0.5B 上是 0.92 到 0.94；旧的 `per_seq` 在小模型上偏低 7 到 8.5 倍，在 7B 的 32k 上下文上连一条序列都放不下。目前的证据是一种 GPU、一个引擎版本、两个模型；`max_num_seqs` 没有建模，其他批处理引擎没有数据。
 ```
 
 相关命令：`mqde recipes`、`mqde hardware`、`mqde probe`（本机），以及 `mqde claim <MODEL_DIR> -H <hw> --min-tps 1`（保守与乐观的吞吐上下界，以及仍满足阈值的最大上下文）。

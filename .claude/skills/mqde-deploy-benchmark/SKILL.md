@@ -81,7 +81,8 @@ failure reason from the backend's own log.
 - Asymmetric GPTQ checkpoints are rejected by vLLM 0.30's config validator (`Unsupported quantization config:
   bits=4, sym=False`): export AWQ or compressed-tensors instead. This is a vLLM restriction, not an export defect.
 - vLLM reports its own KV capacity (`engine.kv_cache_tokens`, `max_concurrency_at_len`). The estimator's
-  `max_concurrency` for vLLM is a conservative lower bound (docs/PROGRESS.md D-9); do not present it as measured.
+  `max_concurrency` with the `vllm` backend profile was within 0.83 to 0.95 of it on Qwen2.5-0.5B and 7B (ADR-0003);
+  it is still an estimate (`max_num_seqs` is not modeled), so do not present it as measured.
 - A load-test number is only meaningful with the exact settings that produced it: always quote concurrency,
   prompt/output lengths, device and whether `enforce_eager` was on.
 - llama.cpp `llama-server` has no `prompt_logprobs`; served PPL is vLLM-only. llama.cpp PPL comes from

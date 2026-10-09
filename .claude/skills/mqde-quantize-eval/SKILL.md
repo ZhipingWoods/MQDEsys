@@ -26,8 +26,8 @@ build/dev/bin/mqde estimate -m <MODEL_DIR_OR_hf:org/name> -r w4a16,fp8 --conc 1,
 
 `hf:org/name` reads only the config and the safetensors header. The output lists weights, KV cache, activation peak
 and the maximum concurrency per recipe. Recipes: `mqde recipes`. Hardware profiles: `mqde hardware`.
-The estimator's `max_concurrency` charges every sequence its own activation memory, so for vLLM it is a conservative
-lower bound (docs/PROGRESS.md, D-9).
+For vLLM use the `vllm` backend profile (batched activations, ADR-0003): its `max_concurrency` was 0.83 to 0.95 of vLLM's
+own figure on two models. The default profile charges activations per sequence and is only a conservative bound there.
 
 ## 2. Pick recipe and algorithm
 

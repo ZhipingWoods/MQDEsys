@@ -40,7 +40,7 @@
 
 **Q4_K shows "144 fallback layers".** Tensors whose row length is not a multiple of 256 fall back to Q5_0, as `llama-quantize` does; this is expected for Qwen2.5-0.5B.
 
-**The estimator's maximum concurrency is much lower than vLLM's.** Known (D-9): the estimator charges per-sequence activation memory. Use it as a conservative bound for batching engines.
+**The estimator's maximum concurrency is much lower than vLLM's.** Use the `vllm` backend profile: it models vLLM's batched activations (ADR-0003) and lands within 0.83 to 0.95 of vLLM's own figure on the two models checked. The default `hf_transformers` profile charges per-sequence activations and is a conservative bound for batching engines.
 
 **`mqde fit` speed for the VLA model is far too high.** The formula counts one weight read per step; a VLA step runs ten denoising passes and vision encoding. A local `mqde bench` measurement replaces the formula for the same hardware.
 

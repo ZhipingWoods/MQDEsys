@@ -80,4 +80,4 @@ PYTHONPATH=python python -m mqde.eval.boundary vllm <CHECKPOINT_DIR> --gpu 0 --m
 
 ## 预估与实测
 
-对 Qwen2.5-0.5B FP8，vLLM 报告权重显存 0.59 GiB，与预估一致。二者不一致之处在最大并发（1024 上下文、0.3 显存利用率下预估 74，vLLM 为 509），原因是 [预估指南](estimate.md) 中说明的激活模型差异。把实测反馈给预估器（S15 阶段）为计划中。
+对 Qwen2.5-0.5B FP8，vLLM 报告权重显存 0.59 GiB，与预估一致。最大并发原先不一致（1024 上下文、0.3 显存利用率下预估 74，vLLM 为 509），因为预估器按序列计激活；使用 `vllm` 后端画像后预估为 488，是 vLLM 数值的 0.96（见 [预估指南](estimate.md)）。把实测反馈给预估器（S15 阶段）为计划中。

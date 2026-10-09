@@ -80,4 +80,4 @@ Options: `--axis concurrency|context`, `--concurrency` (for the context axis), `
 
 ## Estimator versus measurement
 
-vLLM reported a weight memory of 0.59 GiB for Qwen2.5-0.5B FP8, equal to the estimate. Maximum concurrency is where they disagree (estimate 74, vLLM 509 at 1024 context, 0.3 memory utilization) for the activation-model reason explained in [Estimation](estimate.md). Feeding measurements back into the estimator (stage S15) is planned.
+vLLM reported a weight memory of 0.59 GiB for Qwen2.5-0.5B FP8, equal to the estimate. Maximum concurrency used to disagree (estimate 74, vLLM 509 at 1024 context, 0.3 memory utilization) because the estimator charged activations per sequence; with the `vllm` backend profile it gives 488, 0.96 of vLLM's figure (see [Estimation](estimate.md)). Feeding measurements back into the estimator (stage S15) is planned.

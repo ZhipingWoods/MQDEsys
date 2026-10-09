@@ -48,7 +48,7 @@ How to read it:
 - **latency floor**: `max(FLOPs / (peak x MFU), bytes read / (bandwidth x eta))`; kernel launch overhead is not modeled. It is a floor, not a prediction.
 
 ```{warning}
-The estimator charges every concurrent sequence its own activation memory, as Hugging Face eager execution does. For batching engines such as vLLM this makes `max concurrency` a conservative lower bound: on Qwen2.5-0.5B FP8 at 1024 context, vLLM reported 509 concurrent sequences where the estimate said 74. Weight memory agreed (0.59 GiB both). The fix is a recorded open decision (D-9 in `docs/PROGRESS.md`).
+Backend profiles carry an `activation_model`. The default `per_seq` charges every concurrent sequence its own activation memory, as Hugging Face eager execution does. The `vllm` profile uses `batched` (ADR-0003): vLLM packs all sequences into one batch of at most `max_batched_tokens` tokens, so activations are charged once for `min(context x concurrency, max_batched_tokens)` tokens. Against vLLM 0.30's own startup report, with no fitted coefficient, the `vllm` profile predicts `max concurrency` at 0.83 to 0.95 of vLLM's figure on Qwen2.5-7B (1k, 8k, 32k context) and 0.92 to 0.94 on Qwen2.5-0.5B; the `per_seq` model was 7 to 8.5 times too low on the small model and could not fit even one sequence at 32k on the 7B. Two models on one GPU model and one engine version is the evidence so far; `max_num_seqs` is not modeled, and other batching engines have no data.
 ```
 
 Related commands: `mqde recipes`, `mqde hardware`, `mqde probe` (this machine), and `mqde claim <MODEL_DIR> -H <hw> --min-tps 1` (conservative and optimistic throughput bounds, plus the longest context that still meets the threshold).
