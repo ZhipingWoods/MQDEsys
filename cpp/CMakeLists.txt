@@ -23,6 +23,8 @@ if(NOT WIN32)
   mqde_add_plugin(template plugins/template/template.c)
   mqde_add_plugin(cpu plugins/cpu/cpu.c)
   mqde_add_plugin(cuda plugins/cuda/cuda.c)
+  mqde_add_plugin(rocm plugins/rocm/rocm.c)
+  target_link_libraries(mqde_plugin_rocm PRIVATE ${CMAKE_DL_LIBS})
   target_link_libraries(mqde_plugin_cuda PRIVATE ${CMAKE_DL_LIBS})
 endif()
 
@@ -114,6 +116,12 @@ if(MQDE_BUILD_TESTS)
       add_dependencies(mqde_unit_tests hal_case_${c})
     endforeach()
     add_dependencies(mqde_unit_tests mqde_plugin_template)
+    # Stand-in vendor runtimes (see tests/fakes): lets the vendor plugins run their real code without the hardware.
+    add_library(fake_hip MODULE tests/fakes/fake_hip.c)
+    set_target_properties(fake_hip PROPERTIES PREFIX "" SUFFIX ".so" OUTPUT_NAME libamdhip64
+      LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/fake_runtimes C_VISIBILITY_PRESET default)
+    add_dependencies(mqde_unit_tests fake_hip)
+    target_compile_definitions(mqde_unit_tests PRIVATE MQDE_FAKE_RUNTIME_DIR="${CMAKE_BINARY_DIR}/fake_runtimes")
     target_compile_definitions(mqde_unit_tests PRIVATE MQDE_HAL_CASE_DIR="${MQDE_HAL_CASE_DIR}"
       MQDE_TEMPLATE_PLUGIN_DIR="${CMAKE_BINARY_DIR}/bin/plugins")
   endif()

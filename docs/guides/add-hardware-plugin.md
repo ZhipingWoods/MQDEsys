@@ -101,3 +101,21 @@ and lists every GPU, while the plugin's ordinals follow the mask. Merging compar
 avoids duplicates when the plugin's ordinals happen to equal NVML indices that are the same model: on the 4090 host with
 `CUDA_VISIBLE_DEVICES=4,5` the plugin's devices 0 and 1 matched NVML entries 0 and 1 by name and index, so 8 rows were shown (not
 10), but those are not the same physical GPUs. Treat the merge as a convenience for the unmasked case, not as an identity check.
+
+## 7. Plugins for hardware you do not have, and how to check them
+
+`cpp/plugins/rocm` was written without an AMD GPU. What made that workable, and what it cannot prove:
+
+1. **Verify every constant and signature against a real header, not memory.** FlagTree vendors the HIP header in
+   `3rdpart/FlagTree/third_party/amd/backend/include/hip`. Compiling a four-line program that prints the enum values showed that two
+   attribute ids written from memory were wrong (CU count is 63, not 16; minor version is 61, not 24). A call whose signature cannot
+   be checked this way is not written: the ROCm plugin's GEMM returns a clear "not implemented" error instead, because a wrong
+   signature crashes the host process.
+2. **Test the plugin's own code against a stand-in runtime.** `cpp/tests/fakes/fake_hip.c` is a small library that exports the same
+   symbols; the tests point the plugin at it with `MQDE_ROCM_LIB_DIR`. It uses the real attribute ids and fails on a wrong one, and
+   returns different numbers for different ids, so a mistaken id changes the result and a test notices. Scenarios that change the
+   stand-in's behaviour run in a child process, because a plugin keeps its resolved runtime for the life of the process.
+3. **Mark it as unverified in the plugin version string and in TASKS.md** (`0.1.0-untested`) until it has run on the hardware.
+
+What this does not prove: that the real library returns what the code expects, the capability tables, and anything numeric. Those
+are listed in `docs/TASKS.md` per plugin as "needs a machine with ...".

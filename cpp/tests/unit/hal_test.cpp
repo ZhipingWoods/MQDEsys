@@ -34,6 +34,16 @@ struct Env {
   bool had = false;
 };
 
+// Plugins are listed in file-name order, so tests look one up by name, never by position.
+mqde_hal_plugin_info plugin_info(const char* name) {
+  for (int i = 0; i < mqde_hal_plugin_count(); ++i) {
+    mqde_hal_plugin_info p;
+    if (mqde_hal_plugin_get(i, &p) == 0 && std::string(p.name) == name) return p;
+  }
+  ADD_FAILURE() << "plugin " << name << " not in the registry";
+  return {};
+}
+
 std::map<std::string, mqde_hal_plugin_info> load_cases() {
   EXPECT_GT(mqde_hal_load_all(), 0);
   std::map<std::string, mqde_hal_plugin_info> m;
@@ -183,8 +193,7 @@ class hal_template : public ::testing::Test {
 TEST_F(hal_template, is_inactive_by_default_so_it_never_fakes_hardware_in_a_normal_probe) {
   Env none("MQDE_TEMPLATE_DEVICES", nullptr);
   ASSERT_GE(mqde_hal_load_all(), 1);
-  mqde_hal_plugin_info p;
-  ASSERT_EQ(mqde_hal_plugin_get(0, &p), 0);
+  mqde_hal_plugin_info p = plugin_info("template");
   EXPECT_STREQ(p.name, "template");
   EXPECT_EQ(p.status, MQDE_HAL_INACTIVE);
   mqde_device_info devs[32];
@@ -370,5 +379,179 @@ TEST_F(hal_cpu, capability_answers_and_bad_requests) {
   EXPECT_NE(std::string(api->last_error()).find("fp32 only"), std::string::npos);
   std::strcpy(req.kind, "teleport");
   EXPECT_NE(api->profile(0, &req, &res), 0);
+}
+#endif
+
+// ---- vendor plugins against a stand-in vendor runtime
+// --------------------------------------------------------------- The ROCm plugin's real code runs: dlopen of
+// the runtime, symbol lookup, attribute ids, memory info, timed copies and the error paths. Only the runtime
+// behind it is fake (cpp/tests/fakes/fake_hip.c), so these tests prove the plugin's logic but cannot prove
+// that real HIP behaves the same way.
+#ifndef _WIN32
+class hal_rocm : public ::testing::Test {
+ protected:
+  Env dir{"MQDE_PLUGIN_DIR", MQDE_TEMPLATE_PLUGIN_DIR};
+  Env only{"MQDE_HAL_PLUGINS", "rocm"};
+  Env off{"MQDE_HAL_DISABLE", nullptr};
+  Env lib{"MQDE_ROCM_LIB_DIR", MQDE_FAKE_RUNTIME_DIR};
+  Env fdev{"FAKE_HIP_DEVICES", nullptr};
+  Env fmaj{"FAKE_HIP_MAJOR", nullptr};
+  Env ffail{"FAKE_HIP_FAIL", nullptr};
+  Env fmem{"FAKE_HIP_MEM_MB", nullptr};
+};
+
+// The plugin keeps its resolved runtime for the life of the process, so every scenario that changes the
+// fake's environment runs in a child process (EXPECT_EXIT) and the parent stays clean.
+#define IN_CHILD(body)                                  \
+  EXPECT_EXIT(                                          \
+      {                                                 \
+        body;                                           \
+        std::exit(testing::Test::HasFailure() ? 1 : 0); \
+      },                                                \
+      ::testing::ExitedWithCode(0), "")
+
+TEST_F(hal_rocm, lists_the_fake_devices_with_the_attributes_the_plugin_reads) {
+  IN_CHILD({
+    Env n("FAKE_HIP_DEVICES", "3");
+    ASSERT_GE(mqde_hal_load_all(), 1);
+    mqde_hal_plugin_info p = plugin_info("rocm");
+    EXPECT_EQ(p.status, MQDE_HAL_LOADED);
+    EXPECT_EQ(p.devices, 3);
+    mqde_device_info devs[32];
+    int cnt = 0;
+    ASSERT_EQ(mqde_probe_all(devs, 32, &cnt), 0);
+    int found = 0;
+    for (int i = 0; i < cnt; ++i)
+      if (std::string(devs[i].vendor) == "amd") {
+        EXPECT_EQ(devs[i].kind, MQDE_DEV_GPU);
+        EXPECT_EQ(devs[i].index, found);
+        EXPECT_EQ(std::string(devs[i].name), "Fake AMD GPU " + std::to_string(found));
+        EXPECT_EQ(devs[i].compute_units, 96u) << "the CU count comes from attribute id 63";
+        EXPECT_STREQ(devs[i].arch, "hip11.4") << "major from attribute 23, minor from 61";
+        EXPECT_EQ(devs[i].mem_total_bytes, 8192ull << 20);
+        ++found;
+      }
+    EXPECT_EQ(found, 3);
+  });
+}
+
+TEST_F(hal_rocm, without_the_runtime_it_is_inactive_not_an_error) {
+  IN_CHILD({
+    Env nowhere("MQDE_ROCM_LIB_DIR", "/nonexistent");
+    ASSERT_GE(mqde_hal_load_all(), 1);
+    mqde_hal_plugin_info p = plugin_info("rocm");
+    EXPECT_EQ(p.status, MQDE_HAL_INACTIVE) << p.reason;
+    EXPECT_EQ(p.devices, 0);
+  });
+}
+
+TEST_F(hal_rocm, a_runtime_with_no_gpu_or_a_failing_init_gives_zero_devices) {
+  IN_CHILD({
+    Env fail("FAKE_HIP_FAIL", "hipInit");
+    ASSERT_GE(mqde_hal_load_all(), 1);
+    mqde_hal_plugin_info p = plugin_info("rocm");
+    EXPECT_EQ(p.status, MQDE_HAL_INACTIVE);
+  });
+  IN_CHILD({
+    Env zero("FAKE_HIP_DEVICES", "0");
+    ASSERT_GE(mqde_hal_load_all(), 1);
+    mqde_hal_plugin_info p = plugin_info("rocm");
+    EXPECT_EQ(p.status, MQDE_HAL_INACTIVE);
+  });
+}
+
+TEST_F(hal_rocm, capabilities_follow_the_architecture_generation) {
+  struct Case {
+    const char* major;
+    const char* dtype;
+    int supported;
+    int native;
+  };
+  for (const Case& c : {Case{"9", "fp8_e4m3", 1, 1}, Case{"9", "fp16", 1, 1}, Case{"11", "fp8_e4m3", 0, 0},
+                        Case{"11", "bf16", 1, 1}, Case{"10", "fp16", 1, 0}, Case{"10", "int8", 1, 0},
+                        Case{"11", "int4", 0, 0}, Case{"11", "fp32", 1, 1}}) {
+    IN_CHILD({
+      Env m("FAKE_HIP_MAJOR", c.major);
+      ASSERT_GE(mqde_hal_load_all(), 1);
+      const auto* api = mqde_hal_plugin_by_name("rocm");
+      ASSERT_NE(api, nullptr);
+      mqde_hal_capability_query q{};
+      std::strcpy(q.dtype, c.dtype);
+      mqde_hal_capability_result r{};
+      ASSERT_EQ(api->supports(&q, &r), 0);
+      EXPECT_EQ(r.supported, c.supported) << "gfx major " << c.major << " " << c.dtype;
+      EXPECT_EQ(r.native, c.native) << "gfx major " << c.major << " " << c.dtype;
+    });
+  }
+}
+
+TEST_F(hal_rocm, bandwidth_runs_the_real_copy_loop_and_reports_what_it_measured) {
+  IN_CHILD({
+    ASSERT_GE(mqde_hal_load_all(), 1);
+    const auto* api = mqde_hal_plugin_by_name("rocm");
+    ASSERT_NE(api, nullptr);
+    mqde_hal_profile_request req{};
+    std::strcpy(req.kind, "bandwidth");
+    req.bytes = 64u << 20;
+    req.iterations = 5;
+    mqde_hal_profile_result res{};
+    ASSERT_EQ(api->profile(0, &req, &res), 0) << api->last_error();
+    EXPECT_STREQ(res.unit, "GB/s");
+    EXPECT_GT(res.seconds, 0.0);
+    // 5 copies of 64 MiB, read plus write counted: the value must equal that work over the reported time
+    EXPECT_NEAR(res.value, 2.0 * (64u << 20) * 5 / res.seconds / 1e9, res.value * 1e-6);
+    EXPECT_GT(res.value, 0.5);
+  });
+}
+
+TEST_F(hal_rocm, runtime_errors_surface_with_their_message_and_do_not_leak_or_crash) {
+  for (const char* fn : {"hipMalloc", "hipMemcpyAsync", "hipSetDevice"}) {
+    IN_CHILD({
+      Env f("FAKE_HIP_FAIL", fn);
+      ASSERT_GE(mqde_hal_load_all(), 0);
+      const auto* api = mqde_hal_plugin_by_name("rocm");
+      ASSERT_NE(api, nullptr);
+      mqde_hal_profile_request req{};
+      std::strcpy(req.kind, "bandwidth");
+      req.bytes = 8u << 20;
+      mqde_hal_profile_result res{};
+      EXPECT_NE(api->profile(0, &req, &res), 0) << fn;
+      EXPECT_NE(std::string(api->last_error()).find("fake)"), std::string::npos)
+          << fn << ": " << api->last_error();
+    });
+  }
+}
+
+TEST_F(hal_rocm, gemm_says_it_is_not_implemented_instead_of_guessing) {
+  IN_CHILD({
+    ASSERT_GE(mqde_hal_load_all(), 1);
+    const auto* api = mqde_hal_plugin_by_name("rocm");
+    ASSERT_NE(api, nullptr);
+    mqde_hal_profile_request req{};
+    std::strcpy(req.kind, "gemm");
+    std::strcpy(req.dtype, "fp16");
+    mqde_hal_profile_result res{};
+    EXPECT_NE(api->profile(0, &req, &res), 0);
+    EXPECT_NE(std::string(api->last_error()).find("not implemented"), std::string::npos);
+    std::strcpy(req.kind, "nonsense");
+    EXPECT_NE(api->profile(0, &req, &res), 0);
+    req.device = 0;
+    EXPECT_NE(api->profile(7, &req, &res), 0);  // no such device
+  });
+}
+
+TEST_F(hal_rocm, alloc_and_free_go_through_the_runtime) {
+  IN_CHILD({
+    ASSERT_GE(mqde_hal_load_all(), 1);
+    const auto* api = mqde_hal_plugin_by_name("rocm");
+    ASSERT_NE(api, nullptr);
+    void* p = nullptr;
+    ASSERT_EQ(api->alloc(0, 4096, &p), 0) << api->last_error();
+    ASSERT_NE(p, nullptr);
+    std::memset(p, 7, 4096);
+    EXPECT_EQ(api->free(0, p), 0);
+    EXPECT_NE(api->alloc(9, 16, &p), 0) << "a device that does not exist";
+    EXPECT_NE(api->alloc(0, 16, nullptr), 0);
+  });
 }
 #endif
