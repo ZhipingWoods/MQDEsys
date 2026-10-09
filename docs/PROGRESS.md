@@ -180,6 +180,18 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-09（晚） · Claude · P1/P2 基础设施补完：common、storage、estimator 性能模型、planner
+
+受命"把未完成任务扫一遍做完，C++ 测试通过即可"。补完 P1（common/storage）和 P2（estimator 性能、planner）里一直空着的任务，之前的会话跳过了它们直接去做量化/部署/前端。全部走 TDD，每个模块都做了至少一次破坏性验证（改坏实现，确认对应测试变红，再还原）。4090（GCC、Linux）和 Mac（Clang）各跑了全量 `ctest`，Linux 232 个、Mac 236 个（多出的 4 个是 `#ifdef __APPLE__` 的 Metal 插件测试）。
+
+- **T-0103 common**：`Registry<Base>` 注册表（重名报错、未知名字列出可用名字）、流式 SHA-256/`content_hash`（对拍 `sha256sum`/`shasum`，标准向量）、`ThreadPool`+`CancelToken`。`MQDE_REGISTER_NAMED`+`MQDE_FORCE_LINK` 解决静态库注册被链接器丢弃的问题，用一个专门的 `tests/registry_probe` 静态库验证（不加 `MQDE_FORCE_LINK` 就真的会被丢弃）。`hub/hf.cpp` 原来自己抄了一份 SHA-256，现在改用这份共享实现。
+- **T-0104 storage（SQLite）**：WAL、带校验和的迁移（`0001_init.sql`：jobs/stages/events/artifacts/hw_profiles/bench_history/calibration/cache_refs）、`BEGIN IMMEDIATE` 事务（嵌套时并入外层）、忙等重试。真实并发测试：8 个线程共享一个连接、**8 个独立连接写同一个文件**（这是真正会触发 `SQLITE_BUSY` 的场景），零失败。
+- **T-0105 storage（CAS）**：内容寻址对象存储、pin/unpin 引用计数、按最近访问淘汰的 GC、open() 时自检修复（未完成的临时写入、孤儿对象、悬空行、内容与地址不符的对象）。**真 SIGKILL 测试**：`fork()` 一个子进程不断 `put()`，在 5 个不同延迟上 `kill -9`，每次重开后用 `verify()` 核对每一行都对应一个内容匹配的对象——不是模拟，是真杀真测。
+- **T-0209 estimator 性能模型**：TTFT/TPOT/吞吐的屋顶线模型（`estimate_perf`），建立在 `Estimate` 新增的逐 token FLOPs/字节分项之上（语言层、LM head 含 tied embedding、随上下文增长的 attention 项）。反推函数 `infer_eta_bw`/`infer_mfu`/`infer_overhead_bytes` 会在测量结果被另一个屋顶主导时拒绝给出系数（例如一次算力瓶颈的 decode 测不出带宽效率），而不是返回一个没有意义的数字。`CalibrationStore`：EMA 更新、置信度（0 个样本 low，1-2 个 medium，≥3 个 high）。
+- **T-0210 planner 兼容矩阵与校验**：`data/compat/matrix.yaml` 里每条规则都能指出来自哪里——不是拍的，是从 `python/mqde/export/int_checkpoint.py`、`compressed_tensors.py` 的真实代码里抠出来的打包/粒度约束，加上 `docs/PROGRESS.md` 里真实记录过的一条事实（vLLM 0.30.0 拒绝非对称 GPTQ，AWQ/compressed-tensors 不受影响）。`validate_jobspec` 现在接到 `POST /api/v1/jobs`，一次性列出所有静态问题（配方、算法、校准样本、导出兼容性、model.type/device），不再是报一个错就停。**过程中犯过一个错**：原打算实现"静态激活量化必须 per-tensor"的规则，写测试时才发现这其实是运行时事实（取决于某个具体模型实例是否真算出了静态 scale），C++ 的 `QuantSpec` 根本没有存这个信息，已把这条规则从矩阵和实现里去掉，写清楚原因，而不是硬编一个可能误判真实 FP8 配方的规则。**顺带发现并修了**：`JobLLM.tsx`/`Job.tsx` 在报告没有 `spec` 字段时（替身 worker、或作业提前失败）会直接崩溃。
+- **T-0211 planner 推荐**：`recommend()` 遍历配方×后端×硬件，按"可行且有原生内核"优先、再按预估最大并发、再按配方成熟度排序，排除的组合带原因。按文档验收口径验证（7B 模型、24GB 级硬件、8K 上下文、并发 8 → 推荐 W4A16/FP8，排除 bf16），并用一个手搭的 16GB Qwen2 结构的 safetensors 头在真实服务上跑通 `POST /api/v1/recommend`。**TP（张量并行）在这个代码库里完全没有建模**，没有编出一个假字段，而是在文档和代码注释里直接写明。
+- **没做的部分**：storage 的 `Db`/`Cas` 还没接进真正的作业运行器（`job_runner.cpp` 仍然用 `events.jsonl`/`report.json` 落盘）；`CalibrationStore` 还没有一个真实的反馈闭环（T-0905）在用它；`/api/v1/recommend` 还没有前端页面。这些都如实标在 TASKS.md 里，不算完成。
+
 ### 2026-10-09（下午） · Claude · ADR-0002 与 ADR-0003 获批并实施
 
 负责人批准两份 ADR，并开放 GPU 4 到 7；SGLang 先放一放，等其他任务基本完成再做。
