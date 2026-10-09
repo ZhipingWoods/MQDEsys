@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 |------|------|
-| 状态 | **Approved**（2026-10-09 负责人批准；0.5B 的两个点已实现并通过，≥ 7B 验证见第 7 节） |
+| 状态 | **Approved**（2026-10-09 负责人批准；0.5B 与 7B 的验证均通过，见第 7 节） |
 | 日期 | 2026-10-08 |
 | 作者 | Claude（Sonnet 5.5） |
 | 审核人 | 负责人（zhipingwu） |
@@ -103,3 +103,19 @@ max_batched_tokens: 8192           # 仅 batched 时使用
 破坏性验证：把 `vllm.yaml` 改回 `per_seq`，回归测试变红且预估值恰为 76 和 2，与第 1 节表格一致；让二分查找忽略 KV，两个测试变红。
 
 实现范围：`BackendProfile` 增加 `activation_model`、`max_batched_tokens`（缺省值保持旧行为）；`load_backend` 校验取值；`batched` 下语言模型激活只计一次、不计逐层隐状态保留，视觉/动作阶段仍按序列计；最大并发由二分查找得到。`max_num_seqs` 仍未建模。
+
+### 7.1 ≥ 7B 验证（第 4 节第 4 点，硬条件）
+
+Qwen2.5-7B-Instruct（bf16，约 14.2 GiB 权重），RTX 4090（GPU 5），vLLM 0.30.0，`gpu_memory_utilization` 0.9，`enforce_eager`。预估取自仓库的 `vllm` 画像，没有任何拟合系数；vLLM 一列取自它启动日志里的 `Maximum concurrency for N tokens per request`。
+
+| 上下文 | 预估并发 | vLLM 实测 | 比值 | 旧的按序列模型 |
+|---:|---:|---:|---:|---:|
+| 1024 | 110 | 115.66 | 0.95 | 16 |
+| 8192 | 13 | 14.46 | 0.90 | 2 |
+| 32768 | 3 | 3.61 | 0.83 | 0 |
+
+- 三个点都在 [0.5, 1.5] 内。预估值是向下取整的整数，所以在实测值很小时（3 对 3.61）比值显得偏低，这是取整，不是系统偏差。
+- 权重：预估 14.19 GiB，vLLM 日志 14.29 GiB（0.7% 偏低）。
+- 旧模型在 32768 上给出 0，也就是判定一个序列都放不下，而 vLLM 实际能放 3.6 个；这正是问题的最坏表现。
+- 数据点：0.5B 两个、7B 三个，两种规模，都不是为拟合而选的。只验证了 vLLM；SGLang 等其他批处理后端没有数据，仍按第 5 节不处理。
+- 原始数据：`/cache/wuzhiping/adr3_7b/`（4090），复现脚本思路见本节：对每个上下文起 vLLM、读日志、与 `core.estimate(model, "bf16", "nvidia/rtx4090", "vllm", context_tokens=N, gpu_memory_utilization=0.9)` 比较。
