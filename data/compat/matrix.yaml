@@ -1,0 +1,59 @@
+# Compatibility matrix (T-0210). Every rule here is grounded in a specific, checked fact: either a constraint already
+# enforced by an exporter (python/mqde/export/*.py), or a result recorded in docs/PROGRESS.md from actually loading a
+# checkpoint. Anything not listed here falls back to the generic native_formats membership check in planner::validate.
+#
+# export_formats: packing / granularity constraints per container format, mirrored from the exporter that writes it.
+#   bits_ok: integer bit widths the container can represent.
+#   pack_divisor: a packed dimension must be a multiple of 32 / bits (32-bit storage words).
+#   needs_in_pack / needs_out_pack: whether in_features / out_features must satisfy pack_divisor (containers differ:
+#     GPTQExporter checks both dims, AWQExporter and CompressedTensorsExporter only check specific dims).
+#   needs_in_group: in_features must be a multiple of group_size (AWQExporter.check_layer only; GPTQ's own layout
+#     does not require this).
+#   needs_out_pack_zero_point: when weights are asymmetric, out_features must also satisfy pack_divisor (zero-point
+#     packing; compressed_tensors.py only).
+export_formats:
+  gptq:
+    source: "python/mqde/export/int_checkpoint.py GPTQExporter"
+    weight_format: int
+    bits_ok: [2, 3, 4, 8]
+    needs_in_pack: true
+    needs_out_pack: true
+    rejects_per_tensor: true
+  awq:
+    source: "python/mqde/export/int_checkpoint.py AWQExporter"
+    weight_format: int
+    bits_ok: [4]
+    needs_out_pack: true
+    needs_in_group: true
+    rejects_per_tensor: true
+  compressed-tensors-int:
+    source: "python/mqde/export/compressed_tensors.py CompressedTensorsExporter (format: int)"
+    weight_format: int
+    bits_ok: [4, 8]
+    needs_in_pack: true
+    needs_out_pack_zero_point: true
+    rejects_act: true  # "integer weights with quantized activations (W4A8/W8A8-int) are not exported yet"
+  compressed-tensors-fp8:
+    source: "python/mqde/export/compressed_tensors.py CompressedTensorsExporter (format: fp8_e4m3)"
+    weight_format: fp8_e4m3
+    rejects_per_group: true
+    act_format_must_match: true  # activations, if quantized, must also be fp8_e4m3
+    # a real rule exists for static activation scales needing per-tensor granularity, but it depends on whether a
+    # static scale was computed for a specific model instance, which planner::check_export cannot see; not checked here.
+
+# Deployment backends: which export formats each one loads, and version-specific exceptions that were actually
+# observed (not inferred). "unsupported" entries here are permanent facts about the format; use known_issues for a
+# constraint tied to a specific installed version that a newer release may lift.
+backends:
+  vllm:
+    loads: [gptq, awq, compressed-tensors-int, compressed-tensors-fp8]
+    known_issues:
+      - format: gptq
+        when: {symmetric: false}
+        verdict: unsupported
+        reason: "vLLM 0.30.0 rejects asymmetric GPTQ (ValidationError on bits=4, sym=False); export as AWQ or compressed-tensors instead, or use a symmetric recipe"
+        source: "docs/PROGRESS.md 2026-10 (GPTQ load FAIL, compressed-tensors load PASS, same checkpoint)"
+  sglang:
+    loads: [compressed-tensors-int, compressed-tensors-fp8]  # per compressed_tensors.py's declared `backends`; not yet exercised end to end (T-0704)
+  hf_transformers:
+    loads: []  # fake-quant evaluation only, never a deployment target for an exported checkpoint

@@ -81,13 +81,17 @@ endif()
 add_library(mqde_hub STATIC src/hub/hf.cpp src/hub/catalog.cpp)
 target_link_libraries(mqde_hub PUBLIC mqde_modelspec PRIVATE httplib::httplib)
 
+# ---- planner (compatibility matrix + JobSpec validation) ----
+add_library(mqde_planner STATIC src/planner/validate.cpp)
+target_link_libraries(mqde_planner PUBLIC mqde_estimator)
+
 # ---- server (REST + SSE, job runner) ----
 add_library(mqde_server STATIC src/server/server.cpp src/server/job_runner.cpp)
-target_link_libraries(mqde_server PUBLIC mqde_fit mqde_hub mqde_estimator mqde_probe PRIVATE httplib::httplib)
+target_link_libraries(mqde_server PUBLIC mqde_fit mqde_hub mqde_estimator mqde_planner mqde_probe PRIVATE httplib::httplib)
 
 # ---- CLI ----
 add_executable(mqde apps/mqde_cli/main.cpp)
-target_link_libraries(mqde PRIVATE mqde_server mqde_fit mqde_hub mqde_estimator mqde_probe CLI11::CLI11)
+target_link_libraries(mqde PRIVATE mqde_server mqde_fit mqde_hub mqde_estimator mqde_planner mqde_probe CLI11::CLI11)
 set_target_properties(mqde PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # ---- Python extension mqde._core ----
@@ -117,6 +121,7 @@ if(MQDE_BUILD_TESTS)
     tests/unit/storage_cas_test.cpp
     tests/unit/storage_calibration_test.cpp
     tests/unit/estimator_perf_test.cpp
+    tests/unit/planner_validate_test.cpp
     tests/unit/modelspec_test.cpp
     tests/unit/quant_test.cpp
     tests/unit/pack_test.cpp
@@ -132,7 +137,7 @@ if(MQDE_BUILD_TESTS)
   add_library(mqde_registry_probe STATIC tests/registry_probe/shapes.cpp)
   target_include_directories(mqde_registry_probe PUBLIC tests/registry_probe)
   target_link_libraries(mqde_registry_probe PUBLIC mqde_common)
-  target_link_libraries(mqde_unit_tests PRIVATE mqde_storage mqde_registry_probe mqde_fit mqde_hub mqde_estimator mqde_probe httplib::httplib GTest::gtest_main)
+  target_link_libraries(mqde_unit_tests PRIVATE mqde_storage mqde_registry_probe mqde_fit mqde_hub mqde_estimator mqde_planner mqde_probe httplib::httplib GTest::gtest_main)
   target_compile_definitions(mqde_unit_tests PRIVATE MQDE_TEST_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures")
   # Deliberately broken plugins for the loader tests, one directory per scenario group (see hal_test.cpp).
   if(NOT WIN32)

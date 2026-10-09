@@ -1,0 +1,305 @@
+#include "mqde/planner/validate.h"
+
+#include <algorithm>
+#include <set>
+
+#include <fmt/format.h>
+#include <fmt/ranges.h>
+
+namespace mqde::planner {
+
+using quant::NumFormat;
+using quant::QuantSpec;
+
+std::string_view verdict_name(Verdict v) {
+  switch (v) {
+    case Verdict::kNative:
+      return "native";
+    case Verdict::kEmulated:
+      return "emulated";
+    default:
+      return "unsupported";
+  }
+}
+
+namespace {
+
+std::string weight_format_name(const QuantSpec& s) {
+  if (!s.enabled()) return "none";
+  if (s.fmt == NumFormat::kFp8E4M3) return "fp8_e4m3";
+  if (s.fmt == NumFormat::kFp8E5M2) return "fp8_e5m2";
+  return fmt::format("int{}", s.bits);
+}
+
+// The matrix's "weight_format" key is the format family (what the container needs), not the display name with
+// its bit count: an int4 and an int8 recipe are both "int" as far as a container's format requirement goes;
+// bits are checked separately via bits_ok.
+std::string weight_format_family(const QuantSpec& s) {
+  if (!s.enabled()) return "none";
+  if (s.fmt == NumFormat::kFp8E4M3) return "fp8_e4m3";
+  if (s.fmt == NumFormat::kFp8E5M2) return "fp8_e5m2";
+  return "int";
+}
+
+Result<Json> matrix() {
+  MQDE_ASSIGN_OR_RETURN(auto path, resolve_data_file("compat", "matrix"));
+  return load_structured_file(path);
+}
+
+}  // namespace
+
+Result<std::vector<AlgorithmInfo>> list_algorithms() {
+  MQDE_ASSIGN_OR_RETURN(auto path, resolve_data_file("", "algorithms"));
+  MQDE_ASSIGN_OR_RETURN(Json j, load_structured_file(path));
+  std::vector<AlgorithmInfo> out;
+  for (const auto& a : j.value("algorithms", Json::array()))
+    out.push_back({a.value("name", ""), a.value("label", ""), a.value("kind", ""), a.value("description", ""),
+                   a.value("needs_calibration", false)});
+  return out;
+}
+
+Result<AlgorithmInfo> load_algorithm(const std::string& name) {
+  MQDE_ASSIGN_OR_RETURN(auto all, list_algorithms());
+  for (const auto& a : all)
+    if (a.name == name) return a;
+  std::vector<std::string> names;
+  for (const auto& a : all) names.push_back(a.name);
+  return make_error(Errc::kNotFound, "unknown algorithm '{}' (known: {})", name, fmt::join(names, ", "));
+}
+
+Result<std::vector<std::string>> resolve_algorithm(const std::string& name) {
+  std::vector<std::string> parts;
+  std::string cur;
+  for (char c : name + "+") {
+    if (c == '+') {
+      std::string p = cur;
+      std::transform(p.begin(), p.end(), p.begin(), ::tolower);
+      p.erase(0, p.find_first_not_of(" \t"));
+      if (auto e = p.find_last_not_of(" \t"); e != std::string::npos) p.erase(e + 1);
+      if (!p.empty() && p != "none") parts.push_back(p);
+      cur.clear();
+    } else {
+      cur += c;
+    }
+  }
+  if (parts.empty()) return std::vector<std::string>{"rtn"};
+  MQDE_ASSIGN_OR_RETURN(auto all, list_algorithms());
+  std::set<std::string> known;
+  for (const auto& a : all) known.insert(a.name);
+  std::vector<std::string> names(known.begin(), known.end());
+  for (const auto& p : parts)
+    if (!known.count(p))
+      return make_error(Errc::kInvalidArgument, "unknown quantization algorithm '{}' (known: {})", p,
+                        fmt::join(names, ", "));
+  std::vector<std::string> transforms, quantizers;
+  for (const auto& p : parts)
+    if (p == "awq" || p == "smoothquant")
+      transforms.push_back(p);
+    else if (p == "rtn" || p == "gptq")
+      quantizers.push_back(p);
+  if (transforms.size() > 1 || quantizers.size() > 1)
+    return make_error(Errc::kInvalidArgument,
+                      "algorithm '{}': at most one transform (awq|smoothquant) and one quantizer (rtn|gptq)",
+                      name);
+  std::vector<std::string> out = transforms;
+  if (quantizers.empty())
+    out.push_back("rtn");
+  else
+    out.insert(out.end(), quantizers.begin(), quantizers.end());
+  return out;
+}
+
+CompatResult check_export(const std::string& format, const QuantSpec& weight, const QuantSpec& act,
+                          std::optional<LayerShape> shape) {
+  auto m = matrix();
+  if (!m) return {Verdict::kUnsupported, m.error().message, ""};
+  const auto& ef = (*m)["export_formats"];
+  const std::string key = format == "compressed-tensors"
+                              ? (weight.fmt == NumFormat::kFp8E4M3 || weight.fmt == NumFormat::kFp8E5M2
+                                     ? "compressed-tensors-fp8"
+                                     : "compressed-tensors-int")
+                              : format;
+  if (!ef.contains(key))
+    return {Verdict::kUnsupported, fmt::format("unknown export format '{}'", format), ""};
+  const auto& r = ef[key];
+  const std::string want_fmt = r.value("weight_format", "");
+  if (weight_format_family(weight) != want_fmt &&
+      !(key == "compressed-tensors-fp8" && weight.fmt == NumFormat::kFp8E5M2 && want_fmt == "fp8_e4m3"))
+    return {
+        Verdict::kUnsupported,
+        fmt::format("{} needs {} weights, this recipe has {}", format, want_fmt, weight_format_name(weight)),
+        ""};
+  if (r.value("rejects_per_tensor", false) && weight.gran == quant::Granularity::kPerTensor)
+    return {Verdict::kUnsupported, "per-tensor weight scales are not representable in this container", ""};
+  if (r.value("rejects_per_group", false) && weight.gran == quant::Granularity::kPerGroup)
+    return {Verdict::kUnsupported,
+            "per-group FP8 weight scales are not exported (use per-channel or per-tensor)", ""};
+  if (r.contains("bits_ok")) {
+    bool ok = false;
+    for (const auto& b : r["bits_ok"]) ok = ok || b.get<int>() == weight.bits;
+    if (!ok)
+      return {Verdict::kUnsupported,
+              fmt::format("{}-bit weights are not supported by {} (supported: {})", weight.bits, format,
+                          r["bits_ok"].dump()),
+              ""};
+  }
+  if (r.value("rejects_act", false) && act.enabled())
+    return {Verdict::kUnsupported,
+            "integer weights with quantized activations (W4A8/W8A8-int) are not exported yet", ""};
+  if (r.value("act_format_must_match", false) && act.enabled() &&
+      weight_format_family(act) != weight_format_family(weight))
+    return {Verdict::kUnsupported,
+            fmt::format("{} weights with {} activations are not a compressed-tensors scheme",
+                        weight_format_name(weight), weight_format_name(act)),
+            ""};
+  // The real rule here ("a *static* activation scale must be per-tensor", compressed_tensors.py) depends on
+  // whether a static scale was actually computed for a specific model instance (`m.act_scale is not None`),
+  // which is a per-job runtime fact, not something the recipe's QuantSpec declares (it has no "dynamic"
+  // field). It is not checked here; re-add it if QuantSpec ever gains that information.
+  if (shape) {
+    const int64_t gs = weight.gran == quant::Granularity::kPerGroup ? weight.group_size : shape->in_features;
+    if (gs > 0 && r.value("needs_in_group", false) && shape->in_features % gs)
+      return {Verdict::kUnsupported,
+              fmt::format("in_features {} is not divisible by group_size {}", shape->in_features, gs), ""};
+    const int64_t pf = weight.bits > 0 ? 32 / weight.bits : 0;
+    if (pf > 0) {
+      if (r.value("needs_in_pack", false) && shape->in_features % pf)
+        return {Verdict::kUnsupported,
+                fmt::format("in_features {} does not pack into 32-bit words at {} bit", shape->in_features,
+                            weight.bits),
+                ""};
+      if (r.value("needs_out_pack", false) && shape->out_features % pf)
+        return {Verdict::kUnsupported,
+                fmt::format("out_features {} does not pack into 32-bit words at {} bit", shape->out_features,
+                            weight.bits),
+                ""};
+      if (r.value("needs_out_pack_zero_point", false) && !weight.symmetric && shape->out_features % pf)
+        return {Verdict::kUnsupported,
+                fmt::format("out_features {} does not pack zero points into 32-bit words at {} bit",
+                            shape->out_features, weight.bits),
+                ""};
+    }
+  }
+  return {Verdict::kNative, "", format};
+}
+
+CompatResult check_deploy(const std::string& format, const estimator::Recipe& recipe,
+                          const std::string& backend, const estimator::HardwareProfile& hw) {
+  auto m = matrix();
+  if (!m) return {Verdict::kUnsupported, m.error().message, ""};
+  const auto& backends = (*m)["backends"];
+  if (!backends.contains(backend))
+    return {Verdict::kUnsupported, fmt::format("unknown backend '{}'", backend), ""};
+  const auto& b = backends[backend];
+  const auto loads = b.value("loads", Json::array());
+  const std::string key = format == "compressed-tensors" ? (recipe.weight.fmt == NumFormat::kFp8E4M3 ||
+                                                                    recipe.weight.fmt == NumFormat::kFp8E5M2
+                                                                ? "compressed-tensors-fp8"
+                                                                : "compressed-tensors-int")
+                                                         : format;
+  bool loads_it = false;
+  for (const auto& f : loads) loads_it = loads_it || f.get<std::string>() == key;
+  if (!loads_it)
+    return {Verdict::kUnsupported, fmt::format("{} does not load {} checkpoints", backend, format), ""};
+  for (const auto& issue : b.value("known_issues", Json::array())) {
+    if (issue.value("format", "") != key) continue;
+    const auto& when = issue.value("when", Json::object());
+    bool matches = true;
+    if (when.contains("symmetric"))
+      matches = matches && (recipe.weight.symmetric == when["symmetric"].get<bool>());
+    if (matches) {
+      const std::string v = issue.value("verdict", "unsupported");
+      return {v == "emulated" ? Verdict::kEmulated : Verdict::kUnsupported, issue.value("reason", ""), ""};
+    }
+  }
+  const std::string wfmt = weight_format_name(recipe.weight);
+  const bool native =
+      std::find(hw.native_formats.begin(), hw.native_formats.end(), wfmt) != hw.native_formats.end();
+  if (!native)
+    return {Verdict::kEmulated,
+            fmt::format("{} weights have no native kernel on {} ({}); accuracy can still be evaluated with "
+                        "fake quantization",
+                        wfmt, hw.name, hw.arch),
+            format};
+  return {Verdict::kNative, "", format};
+}
+
+// ---------------------------------------------------------------- validate_jobspec
+
+namespace {
+
+void add(std::vector<Problem>& out, std::string field, std::string message, std::string suggestion = "") {
+  out.push_back({std::move(field), std::move(message), std::move(suggestion)});
+}
+
+}  // namespace
+
+std::vector<Problem> validate_jobspec(const Json& job) {
+  std::vector<Problem> out;
+
+  const auto recipes = job.value(Json::json_pointer("/quant/recipe"), Json::array());
+  if (!recipes.is_array() || recipes.empty()) {
+    add(out, "/quant/recipe", "must be a non-empty list of recipe names",
+        "pick at least one of w4a16, w4a8, w2a16, w2a8, fp8, bf16");
+  } else {
+    for (const auto& r : recipes) {
+      if (!r.is_string()) {
+        add(out, "/quant/recipe", "every entry must be a string", "");
+        continue;
+      }
+      if (auto rr = estimator::load_recipe(r.get<std::string>()); !rr)
+        add(out, "/quant/recipe", rr.error().message, "run `mqde recipes` for the list of valid names");
+    }
+  }
+
+  const auto algo = job.value(Json::json_pointer("/quant/algorithm"), std::string("recipe"));
+  std::vector<std::string> algo_parts;
+  if (algo != "recipe") {
+    if (auto a = resolve_algorithm(algo); !a)
+      add(out, "/quant/algorithm", a.error().message, "run `mqde` with GET /api/v1/algorithms for the list");
+    else
+      algo_parts = *a;
+    for (const auto& p : algo_parts) {
+      auto info = load_algorithm(p);
+      if (info && info->needs_calibration) {
+        const int n = job.value(Json::json_pointer("/calibration/n_samples"), 0);
+        if (n <= 0)
+          add(out, "/calibration/n_samples",
+              fmt::format("algorithm '{}' needs calibration data ({} samples requested)", p, n),
+              "set calibration.n_samples to a positive number, or use algorithm rtn");
+      }
+    }
+  }
+
+  const auto mtype = job.value(Json::json_pointer("/model/type"), std::string("vla"));
+  if (mtype != "vla" && mtype != "llm")
+    add(out, "/model/type", fmt::format("'{}' is not 'vla' or 'llm'", mtype), "");
+  const auto device = job.value(Json::json_pointer("/deploy/device"), std::string());
+  if (device == "cpu" && mtype != "llm")
+    add(out, "/deploy/device", "cpu is only supported for model.type=llm",
+        "set deploy.device to 'gpu', or model.type to 'llm'");
+
+  if (const auto export_formats = job.value(Json::json_pointer("/export/formats"), Json::array());
+      !export_formats.empty() && mtype == "llm") {
+    // Export compatibility needs a recipe's actual weight/act spec, which needs the recipe to have loaded
+    // above.
+    for (const auto& r : recipes) {
+      if (!r.is_string()) continue;
+      auto rr = estimator::load_recipe(r.get<std::string>());
+      if (!rr) continue;  // already reported against /quant/recipe
+      for (const auto& f : export_formats) {
+        if (!f.is_string()) continue;
+        auto c = check_export(f.get<std::string>(), rr->weight, rr->act);
+        if (!c.ok())
+          add(out, "/export/formats",
+              fmt::format("recipe '{}' cannot be exported as {}: {}", rr->name, f.get<std::string>(),
+                          c.reason),
+              "pick a different export format, or a recipe whose weight format that container supports");
+      }
+    }
+  }
+
+  return out;
+}
+
+}  // namespace mqde::planner
