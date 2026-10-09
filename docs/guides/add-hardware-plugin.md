@@ -130,3 +130,8 @@ are listed in `docs/TASKS.md` per plugin as "needs a machine with ...".
 | `metal` | Apple M5 | a standalone Objective-C program was run first to confirm the API calls and typical numbers, then the plugin; its tests run on the real GPU |
 | `rocm` | **no** | stand-in HIP library; attribute ids checked against the vendored HIP header; GEMM not implemented |
 | Ascend | **not started** | no CANN header or library is available to check calls against |
+
+Across the four GPUs 4 to 7 of the development host (one GEMM run and three bandwidth repeats each): bandwidth is 886 to 919 GB/s on
+GPUs 4, 5 and 7, and **764 to 796 GB/s on GPU 6**, which also reports less memory (22554 MiB against 24080 MiB). Compute is the same
+on all four (fp16 168 to 174 TFLOPS). So "an RTX 4090" is not one performance number: a pool of cards can differ, which is a reason
+to measure the card a job will actually run on.
