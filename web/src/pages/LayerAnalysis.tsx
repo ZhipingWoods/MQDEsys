@@ -8,6 +8,8 @@ export function LayerAnalysis({ layers, strip = "vlm.model." }: { layers: LayerT
   const comps = useMemo(() => [...new Set(layers.map((l) => l.component))], [layers]);
   const [comp, setComp] = useState(comps[0] ?? "language");
   const [metric, setMetric] = useState<"out_sqnr_db" | "w_sqnr_db">("out_sqnr_db");
+  const [picked, setPicked] = useState<string | null>(null);
+  const detail = layers.find((l) => l.name === picked) ?? null;
   const worst = useMemo(() => [...layers].filter((l) => l.out_sqnr_db != null).sort((a, b) => a.out_sqnr_db! - b.out_sqnr_db!).slice(0, 15), [layers]);
   return (
     <>
@@ -28,6 +30,7 @@ export function LayerAnalysis({ layers, strip = "vlm.model." }: { layers: LayerT
         </div>
         <LayerHeatmap layers={r.layers.filter((l) => l.component === comp)} metric={metric} />
       </div>
+      {detail && <LayerDetail layer={detail} layers={layers} strip={strip} onClose={() => setPicked(null)} />}
       <div className="grid-2">
         <div className="card">
           <h2>各块平均输出 SQNR（误差沿网络的分布）</h2>
@@ -105,7 +108,7 @@ export function LayerAnalysis({ layers, strip = "vlm.model." }: { layers: LayerT
           </thead>
           <tbody>
             {worst.map((l) => (
-              <tr key={l.name}>
+              <tr key={l.name} onClick={() => setPicked(l.name)} style={{ cursor: "pointer" }} data-testid="worst-row">
                 <td className="mono small">{l.name.replace(strip, "")}</td>
                 <td>{l.component}</td>
                 <td className="num">{l.block}</td>
@@ -182,3 +185,59 @@ function LayerHeatmap({ layers, metric }: { layers: LayerTrace[]; metric: "out_s
   );
 }
 
+
+const rank = (layers: LayerTrace[], l: LayerTrace, key: keyof LayerTrace, lowIsWorse: boolean) => {
+  const xs = layers.map((x) => x[key]).filter((v): v is number => typeof v === "number");
+  const v = l[key];
+  if (typeof v !== "number") return null;
+  const worse = xs.filter((x) => (lowIsWorse ? x < v : x > v)).length;
+  return { place: worse + 1, of: xs.length };
+};
+
+/** Detail card for one layer: every recorded metric plus where it stands among all layers (1 = worst). */
+function LayerDetail({ layer: l, layers, strip, onClose }: { layer: LayerTrace; layers: LayerTrace[]; strip: string; onClose: () => void }) {
+  const rows: [string, string, ReturnType<typeof rank>][] = [
+    ["输出 SQNR", `${fmt(l.out_sqnr_db, 2)} dB`, rank(layers, l, "out_sqnr_db", true)],
+    ["输出余弦相似度", fmt(l.out_cosine, 5), rank(layers, l, "out_cosine", true)],
+    ["输出相对 L2", fmt(l.out_rel_l2, 5), rank(layers, l, "out_rel_l2", false)],
+    ["权重 SQNR", `${fmt(l.w_sqnr_db, 2)} dB`, rank(layers, l, "w_sqnr_db", true)],
+    ["权重相对 L2", fmt(l.w_rel_l2, 5), rank(layers, l, "w_rel_l2", false)],
+    ["权重峰度", fmt(l.w_kurtosis, 2), rank(layers, l, "w_kurtosis", false)],
+    ["激活 |max|", fmt(l.act_absmax, 2), rank(layers, l, "act_absmax", false)],
+    ["激活峰度", fmt(l.act_kurtosis, 2), rank(layers, l, "act_kurtosis", false)],
+    ["激活离群比例", l.act_outlier_ratio != null ? `${(l.act_outlier_ratio * 100).toFixed(4)}%` : "–", rank(layers, l, "act_outlier_ratio", false)],
+  ];
+  return (
+    <div className="card" data-testid="layer-detail">
+      <div className="form-row" style={{ justifyContent: "space-between" }}>
+        <h2 style={{ margin: 0 }}>
+          层详情：<span className="mono">{l.name.replace(strip, "")}</span>
+        </h2>
+        <button onClick={onClose}>关闭</button>
+      </div>
+      <p className="note">
+        {l.component} · 块 {l.block} · {l.shape[0]}×{l.shape[1]}
+        {l.algorithm ? ` · ${l.algorithm}` : ""}。“排名”为在全部 {layers.length} 层中的位置，1 表示最差。
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>指标</th>
+            <th className="num">值</th>
+            <th className="num">排名（1 = 最差）</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([k, v, rk]) => (
+            <tr key={k}>
+              <td>{k}</td>
+              <td className="num">{v}</td>
+              <td className="num">{rk ? `${rk.place} / ${rk.of}` : "–"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="note">权重 / 激活直方图和 QParams 分布需要作业额外保存张量统计，目前报告里没有这部分数据，所以这里不画。</p>
+    </div>
+  );
+}

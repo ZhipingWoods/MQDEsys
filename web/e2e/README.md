@@ -8,6 +8,8 @@ through the real REST API but no GPU, model or quantization is involved. The fin
 
 `newjob_live_estimate.mjs` (T-0304): the new-job page's live estimate sidebar must show the C++ estimator's numbers (weights, peak, feasibility, capacity) for every picked recipe, follow recipe / hardware changes, send few requests while typing (300 ms debounce) and show the server's error for a bad path. It builds a header-only Qwen2-style model directory in the temp dir; no GPU or weights needed. Run it the same way: `node web/e2e/newjob_live_estimate.mjs`. Checked on macOS + Chrome: 10/10, and 2 mutations of the page (wrong column, no debounce) each turn checks red (wrong column: the two value checks; no debounce: the request-count check).
 
+`layer_detail.mjs` (T-0903): clicking a worst-layer row opens the layer detail card; metrics and ranks are compared with values computed from the report JSON (12 checks; reversing the rank direction turns 2 red).
+
 ```bash
 cd web && npm run build && cd ..          # the test serves web/dist
 (cd demo && npm install)                  # Playwright; Google Chrome must be installed
