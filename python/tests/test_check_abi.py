@@ -45,7 +45,8 @@ def test_the_committed_header_matches_its_golden_file(repo: Path) -> None:
     ("old", "new", "what"),
     [
         ("  char name[128];\n  char arch[32];", "  char name[64];\n  char arch[32];", "a string shrinks"),
-        ("  int32_t kind;           /* mqde_hal_dev_kind */\n  int32_t index;", "  int32_t index;\n  int32_t kind;", "two fields swap"),
+        ("  int32_t kind;           /* mqde_hal_dev_kind */\n  int32_t index;", "  int32_t index;\n  int32_t kind;",
+         "two fields swap"),
         ("  uint64_t mem_total_bytes;\n  uint64_t mem_free_bytes;", "  uint64_t mem_free_bytes;\n  uint64_t mem_total_bytes;", "memory fields swap"),
         ("  int (*alloc)(int device, size_t bytes, void** ptr);\n  int (*free)(int device, void* ptr);",
          "  int (*free)(int device, void* ptr);\n  int (*alloc)(int device, size_t bytes, void** ptr);", "function pointers swap"),

@@ -10,7 +10,8 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def run(root: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, str(REPO / "scripts/check_deps.py"), "--root", str(root)], capture_output=True, text=True, check=False)
+    cmd = [sys.executable, str(REPO / "scripts/check_deps.py"), "--root", str(root)]
+    return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
 
 def tree(tmp: Path, files: dict[str, str]) -> Path:
