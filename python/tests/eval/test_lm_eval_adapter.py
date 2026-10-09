@@ -115,3 +115,24 @@ def test_binary_lookup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     with pytest.raises(FileNotFoundError, match="MQDE_LM_EVAL_BIN"):
         lm_eval_bin()
+
+
+REAL = Path(__file__).parent.parent / "fixtures" / "lm_eval" / "results_gsm8k_qwen05b_limit20.json"
+
+
+def test_real_lm_eval_output_is_parsed() -> None:
+    """A results file written by lm-eval 0.4.13 itself (Qwen2.5-0.5B-Instruct behind vLLM, gsm8k, 5-shot, limit 20)."""
+    r = parse_results(json.loads(REAL.read_text()))
+    g = r["tasks"]["gsm8k"]
+    assert set(g["metrics"]) == {"exact_match,strict-match", "exact_match,flexible-extract"}, "sample_len is not a metric"
+    assert g["metrics"]["exact_match,strict-match"]["value"] == 0.05 and g["metrics"]["exact_match,flexible-extract"]["value"] == 0.1
+    assert g["metrics"]["exact_match,flexible-extract"]["stderr"] == pytest.approx(0.06882472016116853)
+    assert g["samples"] == {"original": 1319, "effective": 20}
+    assert r["version"] == "0.4.13" and r["git_hash"] is None and r["n_shot"] == {"gsm8k": 5}
+    # 20 samples: the standard error is as large as the score itself, which is why the report says so
+    assert g["metrics"]["exact_match,strict-match"]["stderr"] >= g["metrics"]["exact_match,strict-match"]["value"] * 0.99
+
+
+def test_real_output_through_the_adapter_path(tmp_path: Path) -> None:
+    out = run_lm_eval(1, "m", "t", ["gsm8k"], tmp_path / "o", binary=fake_cli(tmp_path, json.loads(REAL.read_text())))
+    assert out["tasks"]["gsm8k"]["metrics"]["exact_match,flexible-extract"]["value"] == 0.1

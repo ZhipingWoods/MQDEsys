@@ -1,0 +1,60 @@
+{
+ "results": {
+  "gsm8k": {
+   "name": "gsm8k",
+   "alias": "gsm8k",
+   "sample_len": 20,
+   "exact_match,strict-match": 0.05,
+   "exact_match_stderr,strict-match": 0.04999999999999999,
+   "exact_match,flexible-extract": 0.1,
+   "exact_match_stderr,flexible-extract": 0.06882472016116853
+  }
+ },
+ "versions": {
+  "gsm8k": 3.0
+ },
+ "n-shot": {
+  "gsm8k": 5
+ },
+ "n-samples": {
+  "gsm8k": {
+   "original": 1319,
+   "effective": 20
+  }
+ },
+ "higher_is_better": {
+  "gsm8k": {
+   "exact_match": true
+  }
+ },
+ "config": {
+  "model": "local-completions",
+  "model_args": {
+   "model": "<MODEL_DIR>/Qwen2.5-0.5B-Instruct",
+   "base_url": "http://127.0.0.1:50151/v1/completions",
+   "num_concurrent": 4,
+   "tokenizer_backend": "huggingface",
+   "tokenizer": "<MODEL_DIR>/Qwen2.5-0.5B-Instruct",
+   "max_retries": 3
+  },
+  "batch_size": 1,
+  "batch_sizes": [],
+  "device": "cuda:0",
+  "use_cache": null,
+  "limit": 20.0,
+  "bootstrap_iters": 100000,
+  "gen_kwargs": {},
+  "random_seed": 1234,
+  "numpy_seed": 1234,
+  "torch_seed": 1234,
+  "fewshot_seed": 1234
+ },
+ "git_hash": null,
+ "lm_eval_version": "0.4.13",
+ "transformers_version": "5.19.0",
+ "total_evaluation_time_seconds": "23.565887603908777",
+ "model_source": "local-completions",
+ "model_name": "<MODEL_DIR>/Qwen2.5-0.5B-Instruct",
+ "task_hashes": {},
+ "group_subtasks": {}
+}

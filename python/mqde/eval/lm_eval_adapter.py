@@ -67,7 +67,8 @@ def parse_results(doc: dict[str, Any]) -> dict[str, Any]:
     for task, res in doc["results"].items():
         metrics: dict[str, dict[str, float | None]] = {}
         for key, val in res.items():
-            if key == "alias" or "_stderr," in key or not isinstance(val, (int, float)):
+            # "name" / "alias" are strings; "sample_len" is the number of samples scored, not a metric
+            if key in ("alias", "name", "sample_len") or "_stderr," in key or not isinstance(val, (int, float)):
                 continue
             name, _, flt = key.partition(",")
             err = res.get(f"{name}_stderr,{flt}")
