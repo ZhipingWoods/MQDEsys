@@ -40,13 +40,16 @@ export function baseOption(): echarts.EChartsOption {
 }
 
 // Builders return loosely-typed objects: ECharts' option union types reject typed formatter callbacks.
-export function Chart({ option, height = 280 }: { option: () => object; height?: number }) {
+export function Chart({ option, height = 280, onClick }: { option: () => object; height?: number; onClick?: (p: { data?: unknown }) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const inst = useRef<echarts.ECharts | null>(null);
   const theme = useThemeVersion();
+  const clickRef = useRef(onClick);
+  clickRef.current = onClick;
   useEffect(() => {
     if (!ref.current) return;
     inst.current = echarts.init(ref.current, undefined, { renderer: "svg" });
+    inst.current.on("click", (p) => clickRef.current?.(p as { data?: unknown }));
     const ro = new ResizeObserver(() => inst.current?.resize());
     ro.observe(ref.current);
     return () => {

@@ -28,7 +28,7 @@ export function LayerAnalysis({ layers, strip = "vlm.model." }: { layers: LayerT
             </select>
           </div>
         </div>
-        <LayerHeatmap layers={r.layers.filter((l) => l.component === comp)} metric={metric} />
+        <LayerHeatmap layers={r.layers.filter((l) => l.component === comp)} metric={metric} onPick={setPicked} />
       </div>
       {detail && <LayerDetail layer={detail} layers={layers} strip={strip} onClose={() => setPicked(null)} />}
       <div className="grid-2">
@@ -136,7 +136,7 @@ function roleOf(name: string): string {
   return tail.replace(/^(self_attn|mlp|linear_attn|attn1|ff\.net|net)\./, "").replace(/^\d+\./, "");
 }
 
-function LayerHeatmap({ layers, metric }: { layers: LayerTrace[]; metric: "out_sqnr_db" | "w_sqnr_db" }) {
+function LayerHeatmap({ layers, metric, onPick }: { layers: LayerTrace[]; metric: "out_sqnr_db" | "w_sqnr_db"; onPick: (name: string) => void }) {
   const rows = [...new Set(layers.map((l) => roleOf(l.name)))];
   const blocks = [...new Set(layers.map((l) => l.block))].sort((a, b) => a - b);
   const vals = layers.map((l) => l[metric]).filter((v): v is number => v != null && isFinite(v));
@@ -147,6 +147,10 @@ function LayerHeatmap({ layers, metric }: { layers: LayerTrace[]; metric: "out_s
   return (
     <Chart
       height={70 + rows.length * 26}
+      onClick={(p) => {
+        const d = p.data as number[] | undefined;
+        if (d && shown[d[3]]) onPick(shown[d[3]].name);
+      }}
       option={() => {
         const o = baseOption();
         return {

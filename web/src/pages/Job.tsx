@@ -272,6 +272,19 @@ function Overview({ rep }: { rep: JobReport }) {
               };
             }}
           />
+          <ul className="note" data-testid="attribution-largest" style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+            {rs.map((r) => {
+              const big = (r.attribution ?? []).filter((a) => a.action_rel_l2 != null).sort((a, b) => b.action_rel_l2! - a.action_rel_l2!)[0];
+              if (!big) return null;
+              const all = r.eval.action_rel_l2;
+              return (
+                <li key={r.recipe}>
+                  <b>{r.recipe}</b>：只量化 <b>{big.modality}</b> 的误差最大，rel-L2 {fmt(big.action_rel_l2, 4)}
+                  {all ? `，为全部量化时（${fmt(all, 4)}）的 ${((100 * big.action_rel_l2!) / all).toFixed(0)}%` : ""}。
+                </li>
+              );
+            })}
+          </ul>
         </div>
       </div>
       <div className="card table-wrap">

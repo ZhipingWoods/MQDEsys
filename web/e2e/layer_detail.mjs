@@ -95,6 +95,24 @@ try {
   check('an old report (no distributions) says so instead of drawing empty charts',
     (await page.getByTestId('layer-detail').innerText()).includes('没有该层的权重 / 激活分布') && (await page.getByTestId('hist-weight').count()) === 0);
   await page.getByRole('button', { name: '关闭' }).click();
+  // heatmap: clicking a cell opens that layer. Geometry mirrors LayerHeatmap (grid left 130 / right 70 / top 10 / bottom 34, rows bottom-up).
+  const comp = layers[0].component;
+  const inComp = layers.filter((l) => l.component === comp && l.out_sqnr_db != null);
+  const roleOf = (n) => n.split('.').slice(-2).join('.').replace(/^(self_attn|mlp|linear_attn|attn1|ff\.net|net)\./, '').replace(/^\d+\./, '');
+  const roles = [...new Set(inComp.map((l) => roleOf(l.name)))];
+  const blocks = [...new Set(inComp.map((l) => l.block))].sort((a, b) => a - b);
+  const hm = page.locator('.card', { hasText: '逐层量化误差热力图' }).locator('svg').first();
+  const hb = await hm.boundingBox();
+  for (const target of [inComp.find((l) => l.block === blocks[2] && roleOf(l.name) === roles[0]), inComp.find((l) => l.block === blocks[blocks.length - 3] && roleOf(l.name) === roles[roles.length - 1])]) {
+    const gw = hb.width - 130 - 70, gh = hb.height - 10 - 34;
+    const x = hb.x + 130 + (blocks.indexOf(target.block) + 0.5) * (gw / blocks.length);
+    const y = hb.y + 10 + gh - (roles.indexOf(roleOf(target.name)) + 0.5) * (gh / roles.length);
+    await page.mouse.click(x, y);
+    await page.getByTestId('layer-detail').waitFor({ timeout: 5000 });
+    const t = (await page.getByTestId('layer-detail').innerText()).replace(/\s+/g, ' ');
+    check(`clicking heatmap cell (block ${target.block}, ${roleOf(target.name)}) opens ${target.name}`, t.includes(target.name.replace(/^model\./, '')), t.slice(0, 60));
+    await page.getByRole('button', { name: '关闭' }).click();
+  }
   await page.goto(`${base}/jobs/${STATS_JOB}?tab=W4A16`, { waitUntil: 'load' });
   await page.getByTestId('worst-row').first().click();
   await page.getByTestId('hist-weight').waitFor({ timeout: 10000 });
