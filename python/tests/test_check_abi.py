@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -29,10 +30,16 @@ def run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def edit(repo: Path, old: str, new: str) -> None:
+    """Replace one declaration. Matching ignores the comments and the spacing the formatter chooses, so reformatting the
+    header never breaks these tests, but the line that is replaced must still exist exactly once."""
     p = repo / HDR
-    s = p.read_text()
-    assert s.count(old) == 1, old
-    p.write_text(s.replace(old, new))
+    lines = p.read_text().split("\n")
+    want = [x.strip() for x in old.split("\n")]
+    hits = [k for k in range(len(lines) - len(want) + 1)
+            if [re.sub(r"\s*/\*.*?\*/", "", ln).strip() for ln in lines[k : k + len(want)]] == want]
+    assert len(hits) == 1, f"{old!r} matched {len(hits)} times"
+    lines[hits[0] : hits[0] + len(want)] = new.split("\n")
+    p.write_text("\n".join(lines))
 
 
 def test_the_committed_header_matches_its_golden_file(repo: Path) -> None:
@@ -44,14 +51,14 @@ def test_the_committed_header_matches_its_golden_file(repo: Path) -> None:
 @pytest.mark.parametrize(
     ("old", "new", "what"),
     [
-        ("  char name[128];\n  char arch[32];", "  char name[64];\n  char arch[32];", "a string shrinks"),
-        ("  int32_t kind;           /* mqde_hal_dev_kind */\n  int32_t index;", "  int32_t index;\n  int32_t kind;",
-         "two fields swap"),
-        ("  uint64_t mem_total_bytes;\n  uint64_t mem_free_bytes;", "  uint64_t mem_free_bytes;\n  uint64_t mem_total_bytes;", "memory fields swap"),
-        ("  int (*alloc)(int device, size_t bytes, void** ptr);\n  int (*free)(int device, void* ptr);",
-         "  int (*free)(int device, void* ptr);\n  int (*alloc)(int device, size_t bytes, void** ptr);", "function pointers swap"),
+        ("char name[128];\nchar arch[32];", "char name[64];\nchar arch[32];", "a string shrinks"),
+        ("int32_t kind;\nint32_t index;", "int32_t index;\nint32_t kind;", "two fields swap"),
+        ("uint64_t mem_total_bytes;\nuint64_t mem_free_bytes;", "uint64_t mem_free_bytes;\nuint64_t mem_total_bytes;",
+         "memory fields swap"),
+        ("int (*alloc)(int device, size_t bytes, void** ptr);\nint (*free)(int device, void* ptr);",
+         "int (*free)(int device, void* ptr);\nint (*alloc)(int device, size_t bytes, void** ptr);", "function pointers swap"),
         ("#define MQDE_HAL_ABI_VERSION 1", "#define MQDE_HAL_ABI_VERSION 2", "the version number changes"),
-        ("  double peak_tflops;     /* 0 when unknown */", "  float peak_tflops;      /* 0 when unknown */", "a field changes type"),
+        ("double peak_tflops;", "float peak_tflops;", "a field changes type"),
     ],
 )
 def test_every_kind_of_layout_change_fails_the_check(repo: Path, old: str, new: str, what: str) -> None:
@@ -62,12 +69,12 @@ def test_every_kind_of_layout_change_fails_the_check(repo: Path, old: str, new: 
 
 
 def test_a_comment_only_edit_is_not_an_abi_change(repo: Path) -> None:
-    edit(repo, "  double peak_tflops;     /* 0 when unknown */", "  double peak_tflops;     /* reworded comment */")
+    edit(repo, "double peak_tflops;", "double peak_tflops; /* reworded comment */")
     assert run(repo).returncode == 0
 
 
 def test_update_rewrites_the_golden_file_and_a_missing_golden_is_an_error(repo: Path) -> None:
-    edit(repo, "  char name[128];\n  char arch[32];", "  char name[64];\n  char arch[32];")
+    edit(repo, "char name[128];\nchar arch[32];", "char name[64];\nchar arch[32];")
     assert run(repo).returncode == 1
     assert run(repo, "--update").returncode == 0
     assert run(repo).returncode == 0, "after an approved update the new layout is the reference"
