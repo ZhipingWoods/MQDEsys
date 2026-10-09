@@ -204,6 +204,40 @@ Result<void> serve(const ServerOptions& o) {
   svr.Get("/api/v1/health", [](const httplib::Request&, httplib::Response& res) {
     send_json(res, {{"status", "ok"}, {"version", MQDE_VERSION}});
   });
+  // Prometheus text exposition format (T-1205). Counters/gauges come from the in-process JobRunner, which is
+  // the live view of jobs this process launched; a job submitted to a different server process (or before a
+  // restart) is not reflected here (the filesystem under runs_dir is the durable source of truth, this is a
+  // cheap live view).
+  const double start_time =
+      std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+  svr.Get("/metrics", [&, start_time](const httplib::Request&, httplib::Response& res) {
+    const auto jobs = runner.list();
+    std::map<std::string, int> by_state;
+    for (const auto& j : jobs) ++by_state[j.state];
+    const auto gpus = runner.gpu_status();
+    const int gpu_total = static_cast<int>(o.gpus.size());
+    int gpu_busy = 0;
+    for (const auto& p : gpus.value("pool", Json::array()))
+      if (!p.value("job", Json(nullptr)).is_null()) ++gpu_busy;
+    const double now =
+        std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+    std::string out;
+    auto line = [&](std::string_view name, std::string_view help, std::string_view type) {
+      out += fmt::format("# HELP {} {}\n# TYPE {} {}\n", name, help, name, type);
+    };
+    line("mqde_uptime_seconds", "seconds since this server process started", "gauge");
+    out += fmt::format("mqde_uptime_seconds {:.3f}\n", now - start_time);
+    line("mqde_jobs_total", "jobs known to this process, by state", "gauge");
+    for (const char* s : {"QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"})
+      out += fmt::format("mqde_jobs_total{{state=\"{}\"}} {}\n", s, by_state.count(s) ? by_state.at(s) : 0);
+    line("mqde_gpu_pool_size", "GPUs configured with --gpus", "gauge");
+    out += fmt::format("mqde_gpu_pool_size {}\n", gpu_total);
+    line("mqde_gpu_busy", "GPUs currently running a job", "gauge");
+    out += fmt::format("mqde_gpu_busy {}\n", gpu_busy);
+    line("mqde_queue_length", "jobs waiting for a free GPU or CPU slot", "gauge");
+    out += fmt::format("mqde_queue_length {}\n", gpus.value("queued", 0));
+    res.set_content(out, "text/plain; version=0.0.4; charset=utf-8");
+  });
   svr.Get("/api/v1/hardware", [&](const httplib::Request&, httplib::Response& res) {
     mqde_device_info devs[32];
     int n = 0;
