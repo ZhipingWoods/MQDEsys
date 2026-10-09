@@ -115,3 +115,25 @@ def test_logits_probe_yaml_forms() -> None:
 
     assert _opt_dict(None) is None and _opt_dict(False) is None
     assert _opt_dict(True) == {} and _opt_dict({"k": 8}) == {"k": 8}
+
+
+def test_lm_eval_stage_records_results_skips_without_the_binary_and_never_fails_the_job(
+    job_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sys.path.insert(0, str(Path(__file__).parent / "eval"))
+    from test_lm_eval_adapter import DOC, fake_cli
+
+    job = LLMJob(spec(tmp_path), job_dir=tmp_path / "j")
+    ckpt = tmp_path / "ckpt"
+    ckpt.mkdir()
+    monkeypatch.setenv("MQDE_LM_EVAL_BIN", str(fake_cli(tmp_path, DOC)))
+    ok = job._lm_eval(8123, ckpt, {"tasks": ["gsm8k"], "limit": 10, "num_fewshot": 5})
+    assert ok["status"] == "succeeded" and ok["tasks"]["gsm8k"]["metrics"]["exact_match,strict-match"]["value"] == 0.5
+    argv = json.loads((tmp_path / "argv.json").read_text())
+    assert "--limit" in argv and argv[argv.index("--limit") + 1] == "10" and "gsm8k" in argv  # the config reaches the CLI
+    monkeypatch.setenv("MQDE_LM_EVAL_BIN", str(fake_cli(tmp_path, None, code=2)))
+    bad = job._lm_eval(8123, ckpt, {})
+    assert bad["status"] == "failed" and "exited with 2" in bad["error"]
+    monkeypatch.setenv("MQDE_LM_EVAL_BIN", str(tmp_path / "missing"))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    assert job._lm_eval(8123, ckpt, {})["status"] == "skipped"

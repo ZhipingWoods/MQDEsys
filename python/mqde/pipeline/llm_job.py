@@ -69,6 +69,8 @@ class LLMJobSpec:
                                                                            "prompt_len": 256, "n_predict": 64})
     # S11/S12 on vLLM per exported checkpoint (needs a CUDA device and a vLLM binary, else skipped): {} for defaults, or
     # max_model_len, gpu_memory_utilization, enforce_eager, concurrency, requests, prompt_len, n_predict, ppl_windows
+    # and lm_eval: {tasks: [gsm8k], limit: 50, num_fewshot, concurrency, seed, max_gen_toks, timeout} runs the official lm-eval CLI
+    # against the served model (ADR-0002; skipped when MQDE_LM_EVAL_BIN / lm-eval is not found)
     vllm: dict[str, Any] | None = None
     # Output-distribution check next to PPL (eval/logits_probe.py): KL and Top-1 agreement against the unquantized model.
     # {} turns it on with defaults, or {windows: 8, k: 256, exact: false}; None = off. top-k KL is a lower bound of the exact KL
@@ -328,6 +330,7 @@ class LLMJob:
                                                    prompt_len=prompt_len, n_predict=n_predict))
                 sp = served_perplexity(srv.port, ids.tolist(), s.eval_seq_len, int(cfg.get("ppl_windows", s.eval_windows)),
                                        concurrency=conc)
+                lm = self._lm_eval(srv.port, ckpt, cfg["lm_eval"]) if cfg.get("lm_eval") else None
                 props, engine = srv.props(), srv.engine_info()
         except Exception as e:
             self.ev.log(f"vLLM {ckpt.name}: failed: {e}", level="warning")
@@ -338,7 +341,28 @@ class LLMJob:
         good = bool(sm["ok"]) and load.get("ok") == load["spec"]["requests"]
         return {"status": "succeeded" if good else "degraded", "startup_s": srv.startup_s, "args": srv.args, "props": props,
                 "engine": engine, "smoke": sm, "load": load, "served_ppl": sp["ppl"], "served_windows": sp["windows"],
-                "served_vs_real_ppl_pct": 100.0 * (sp["ppl"] / real_ppl - 1.0)}
+                "served_vs_real_ppl_pct": 100.0 * (sp["ppl"] / real_ppl - 1.0), **({"lm_eval": lm} if lm is not None else {})}
+
+    def _lm_eval(self, port: int, ckpt: Path, cfg: dict[str, Any]) -> dict[str, Any]:
+        """S12 task accuracy: the official lm-eval CLI against the server that is already up (ADR-0002). Never fails the job."""
+        from mqde.eval.lm_eval_adapter import run_lm_eval
+
+        tasks = [str(t) for t in cfg.get("tasks", ["gsm8k"])]
+        try:
+            res = run_lm_eval(port, ckpt.name, ckpt, tasks, ckpt.parent / f"lm-eval-{ckpt.name}", limit=cfg.get("limit", 50),
+                              num_fewshot=cfg.get("num_fewshot"), concurrency=int(cfg.get("concurrency", 8)),
+                              seed=int(cfg.get("seed", 1234)), max_gen_toks=cfg.get("max_gen_toks"),
+                              timeout=float(cfg.get("timeout", 7200)))
+        except FileNotFoundError as e:
+            self.ev.log(f"lm-eval {ckpt.name}: skipped ({e})")
+            return {"status": "skipped", "reason": str(e)}
+        except Exception as e:
+            self.ev.log(f"lm-eval {ckpt.name}: failed: {e}", level="warning")
+            return {"status": "failed", "error": str(e)[:1500]}
+        for task, t in res["tasks"].items():
+            for key, m in t["metrics"].items():
+                self.ev.emit("metric", name=f"lm_eval.{ckpt.name}.{task}.{key}", value=m["value"], msg=f"lm-eval {task}")
+        return {"status": "succeeded", **res}
 
     def _run(self) -> None:
         s = self.spec

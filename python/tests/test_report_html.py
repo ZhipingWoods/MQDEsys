@@ -161,3 +161,26 @@ def test_logits_section_appears_only_with_data_and_says_when_kl_is_a_lower_bound
     assert "lower bound" not in render_html(r, "en")
     del r["recipes"]["W4A16"]["logits"]
     assert "Output distribution" not in render_html(r, "en")
+
+
+def test_accuracy_section_shows_values_stderr_samples_and_failures() -> None:
+    import copy
+
+    r = copy.deepcopy(json.loads((FIX / "llm_vllm.json").read_text()))
+    assert "lm-eval" not in render_html(r, "en"), "no lm_eval data, no section"
+    ok = {"status": "succeeded", "version": "0.4.14", "limit": 50, "num_fewshot": 5,
+          "tasks": {"gsm8k": {"alias": "gsm8k", "samples": {"original": 1319, "effective": 50},
+                              "metrics": {
+                                  "exact_match,strict-match": {
+                                      "metric": "exact_match", "filter": "strict-match", "value": 0.4321, "stderr": 0.0711},
+                                  "acc,none": {"metric": "acc", "filter": "none", "value": 0.5, "stderr": None}}}}}
+    rec = r["recipes"]["W4A16"]["export"]
+    names = list(rec)
+    rec[names[0]]["vllm"]["lm_eval"] = ok
+    rec[names[1]]["vllm"]["lm_eval"] = {"status": "failed", "error": "RuntimeError: boom\nmore"}
+    en, zh = render_html(r, "en"), render_html(r, "zh")
+    assert "Task accuracy" in en and "任务精度" in zh
+    assert "0.4321 ± 0.0711" in en and "lm-eval 0.4.14 · limit 50 · 5-shot" in en and ">50<" in en
+    assert ">0.5000<" in en, "a missing standard error is shown as the value alone"
+    assert "RuntimeError: boom" in en and "more" not in en.split("RuntimeError: boom")[1][:20]
+    assert "standard error is wide" in en and "标准误" in zh
