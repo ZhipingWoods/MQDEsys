@@ -124,6 +124,15 @@ estimator::RuntimeParams runtime_from(const Json& j) {
 Result<void> serve(const ServerOptions& o) {
   httplib::Server svr;
   JobRunner runner(o.runs_dir, o.repo_root, o.python, o.gpus);
+
+  // T-1303: background HF catalog refresh. refresh_fn wraps the same hub::update_catalog the CLI's
+  // `mqde catalog update` uses, so a running server stays current without a human running that command.
+  // catalog_refresh_interval_s == 0 means CatalogRefresher starts no thread at all (see its constructor).
+  hub::CatalogRefresher catalog_refresher(
+      hub::default_catalog_path(), std::chrono::seconds(o.catalog_refresh_interval_s),
+      [](hub::Catalog base) -> Result<hub::Catalog> {
+        return hub::update_catalog(hub::HfOptions{}, hub::UpdateOptions{}, std::move(base));
+      });
   std::mutex spec_mu;
   std::map<std::string, modelspec::ModelSpec> spec_cache;  // model path -> spec
 
@@ -914,9 +923,14 @@ Result<void> serve(const ServerOptions& o) {
     for (const auto* e : hits) arr.push_back(hub::to_json(*e));
     size_t demoted = 0;
     for (const auto& e : c.entries) demoted += e.demoted;
-    send_json(
-        res,
-        {{"updated_at", c.updated_at}, {"total", c.entries.size()}, {"demoted", demoted}, {"models", arr}});
+    const auto rs = catalog_refresher.status();
+    send_json(res, {{"updated_at", c.updated_at},
+                   {"total", c.entries.size()},
+                   {"demoted", demoted},
+                   {"models", arr},
+                   {"refresh_interval_s", rs.interval_s},
+                   {"last_refresh_ok", rs.last_refresh_ok},
+                   {"last_refresh_at", rs.last_refresh_at}});
   });
 
   // Live Hub search (llmfit hf-search). Needs network; the token (if any) comes from HF_TOKEN.

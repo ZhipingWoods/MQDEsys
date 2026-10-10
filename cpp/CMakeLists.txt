@@ -132,6 +132,7 @@ if(MQDE_BUILD_TESTS)
     tests/unit/feedback_test.cpp
     tests/unit/job_runner_test.cpp
     tests/unit/estimator_domain_test.cpp
+    tests/unit/hub_catalog_refresh_test.cpp
     tests/unit/modelspec_test.cpp
     tests/unit/quant_test.cpp
     tests/unit/pack_test.cpp

@@ -105,6 +105,55 @@ TEST(hub, hygiene_demotes_draft_mismatch_and_missing) {
   EXPECT_TRUE(e.demoted);
 }
 
+// ---- classify (T-1303: category/family_group, called from entry_from_hub) ----
+
+TEST(hub, classify_maps_pipeline_tag_to_category) {
+  auto llm = entry_from_hub(qwen7_info(), qwen7_config());
+  EXPECT_EQ(llm.category, "LLM");
+  auto vlm_info = qwen7_info();
+  vlm_info["pipeline_tag"] = "image-text-to-text";
+  auto vlm = entry_from_hub(vlm_info, qwen7_config());
+  EXPECT_EQ(vlm.category, "VLM");
+  auto other_info = qwen7_info();
+  other_info["pipeline_tag"] = "text-to-image";
+  auto diffusion = entry_from_hub(other_info, qwen7_config());
+  EXPECT_EQ(diffusion.category, "Diffusion");
+  auto unknown_info = qwen7_info();
+  unknown_info["pipeline_tag"] = "something-nobody-registered";
+  auto other = entry_from_hub(unknown_info, qwen7_config());
+  EXPECT_EQ(other.category, "Other");
+}
+
+TEST(hub, classify_collapses_same_series_different_size_variants_into_one_family_group) {
+  auto make = [](const std::string& name) {
+    auto e = entry_from_hub(qwen7_info(), qwen7_config());
+    e.name = name;
+    classify(e);
+    return e;
+  };
+  const auto a = make("Qwen/Qwen2.5-7B-Instruct");
+  const auto b = make("Qwen/Qwen2.5-0.5B-Instruct");
+  const auto c = make("Qwen/Qwen2.5-1.5B-Instruct");
+  EXPECT_EQ(a.family_group, "Qwen2.5");
+  EXPECT_EQ(a.family_group, b.family_group);
+  EXPECT_EQ(a.family_group, c.family_group);
+}
+
+TEST(hub, classify_keeps_a_name_with_no_size_token_as_its_own_singleton_group) {
+  auto e = entry_from_hub(qwen7_info(), qwen7_config());
+  e.name = "hf-internal-testing/tiny-random-gpt2";
+  classify(e);
+  EXPECT_EQ(e.family_group, "tiny-random-gpt2");
+}
+
+TEST(hub, classify_ignores_a_bare_version_number_with_no_size_suffix) {
+  // "gemma-4-26B-A4B-it": "4" alone (no B/M/K suffix) must not be mistaken for the size token; "26B" is.
+  auto e = entry_from_hub(qwen7_info(), qwen7_config());
+  e.name = "google/gemma-4-26B-A4B-it";
+  classify(e);
+  EXPECT_EQ(e.family_group, "gemma-4");
+}
+
 TEST(hub, to_spec_matches_hub_param_count) {
   const auto e = entry_from_hub(qwen7_info(), qwen7_config());
   auto s = to_spec(e);

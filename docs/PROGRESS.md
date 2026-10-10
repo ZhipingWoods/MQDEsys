@@ -180,6 +180,17 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-10（再再再续） · Claude · T-1303 HF 目录后台定时刷新 + 二级分类分组
+
+按 P13 阶段顺序，T-1305 之后做 T-1303（后端数据工程，和 T-1302 可并行，先挑这个因为 T-1304 更需要它）。
+
+- **做了什么**：`hub::CatalogRefresher`（`JobRunner::loop()` 同一模式——定时线程 + `cv_.wait_for`——但关键区别是它的"要做什么"是注入的 `RefreshFn`，不是硬编码的真实网络调用，这样单测完全不碰网络）；`mqde serve --catalog-refresh-interval <秒>`，默认 0（关闭，不改变任何现有行为）；`CatalogEntry.category`/`family_group`，和已有的 `demoted`/`demote_reason` 一样"不落盘、加载时重新计算"；`GET /api/v1/catalog` 加三个状态字段。
+- **分类规则**：`category` 只看 `pipeline_tag`——查了一下真实的 200 条目录数据，只有 `text-generation`/`image-text-to-text` 两种值，原计划想加的 `architecture` 参数在这两个值上没有任何区分力，加了也是死参数，所以简化了签名，没按原计划接。`family_group` 的切词规则（按 `-`/`_` 分词，找第一个"数字(.数字)?[BMK]"形状的尺寸词，取之前部分）在真实数据上手推演了好几个例子（Qwen2.5 三个尺寸、gemma-4 系列、没有尺寸词的测试模型名）确认合理，写测试时又加了一个专门防"裸数字（没有 B/M/K 后缀）被误当成尺寸词切断"的用例（"gemma-4-26B-A4B-it" 不能在"4"这里切断，必须在"26B"这里切）。
+- **范围修正**：原计划说要把这两级分组接到前端目录浏览组件做成下拉——这个工作量挪给了 T-1304。回头看用户原话"下拉选择"说的是新建作业向导里的模型选择器，而那玩意儿今天压根不存在（NewJob.tsx 现在是纯自由文本框），不是已经存在的 `Catalog.tsx` 整页表格。T-1303 只把数据做出来、做对，T-1304 再做成真正的下拉。
+- **测试**：`cpp/tests/unit/hub_catalog_refresh_test.cpp`（5 个用例，注入假 `RefreshFn`，不碰网络：真的被调用并落盘、状态字段正确、失败后继续重试不罢工、注入函数抛异常不把进程带崩、`interval<=0` 完全不起线程）；`cpp/tests/unit/hub_test.cpp` 新增 5 个 `classify` 用例。6 处破坏性验证全部先正确变红再恢复，其中最值得记的一处：把"`interval<=0` 不该起线程"那行判断删掉后，测试没有简单地变红，而是在 100ms 内让假 `RefreshFn` 被调用了 **570 次**（忙轮询），这比"该调用但没调用"这种常规 mutation 更能说明测试确实在验证真实行为，不是摆设。
+- **校验**：`ctest --test-dir build/mac` 281/281；`cmake --build build/mac` 整个项目（含 CLI/server）无警告；`scripts/check_deps.py` 102 files 0 violation；手动起服务确认默认 `refresh_interval_s=0`、`last_refresh_at=""`（不影响现有行为），`curl /api/v1/catalog` 返回的真实样例（Qwen3-0.6B）`category=LLM, family_group=Qwen3` 符合预期。4090 验证见下一条。
+- **未完成 / 下一步**：T-1302（可插拔加固）按计划接下来做；真实网络下的"24 小时增量刷新"本身无法在一次会话里等够 24 小时验证，只验证了调度机制本身（假函数）+ `update_catalog` 的增量合并逻辑本来就有自己的测试覆盖（T-R25 时期写的），组合起来可信但没有端到端实跑一次真实 24 小时周期。
+
 ### 2026-10-10（再再续） · Claude · T-1305 JobSpec 正式契约（T-0007 最小切片）
 
 延续 P13 阶段顺序（T-1301 之后背靠背做 T-1305）。先读了 `NewJob.tsx` 提交的两种真实 job 对象（VLA/LLM 分支字段完全不同）和两个真实 `examples/jobs/*.yaml`，确认两件之前没意识到的事：`qwen25_05b_wikitext.yaml` 没有 `model.type` 字段（它是直接 `python -m mqde.pipeline.llm_job` 跑的，不走 HTTP 校验路径，所以这个缺口不是 bug）；`model.modality` 这个字段 NewJob.tsx 的 VLA 分支在发但服务端哪里都没读（`validate_jobspec`/`job_runner.cpp` 都只认 `model.type`），是个遗留的没用字段。schema 按这些真实现状写，不是凭空设计。

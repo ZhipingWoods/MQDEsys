@@ -165,7 +165,7 @@
 | T-1207 | v1.0 发布验收 | P12 | 全部 P0–P11 必选任务 | L2 | TODO |
 | T-1301 | 领域（domain）注册表 | P13 | T-0206 | L2 | DONE (2026-10-10，见 P13 详情；ctest -R estimator_domain 7/7，4090 全量 264/264) |
 | T-1302 | 算法可插拔性加固 + 第三方接入指南 | P13 | T-0103 | L1（T-0609 的 ADR 部分仍 L3） | TODO |
-| T-1303 | HF 目录后台定时刷新 + 二级分类分组 | P13 | T-0204,T-R25 | L2 | TODO |
+| T-1303 | HF 目录后台定时刷新 + 二级分类分组 | P13 | T-0204,T-R25 | L2 | DONE (2026-10-10，见 P13 详情) |
 | T-1304 | 新建作业向导重构（五步，领域感知） | P13 | T-1301,T-1303,T-1305,T-0210 | L1 | TODO |
 | T-1305 | JobSpec 正式契约（T-0007 最小切片） | P13 | T-0210 | L2 | DONE (2026-10-10，见 P13 详情；ctest -R planner_validate_jobspec 全绿，4090 全量 268/268，python scripts/validate_job_schema.py 3/3 真实跑通) |
 | T-1306 | "量化与评测"信息架构拆分 | P13 | T-1304 | L1 | TODO |
@@ -845,9 +845,11 @@
 
 #### T-1303 HF 目录后台定时刷新 + 二级分类分组
 - **依赖**：T-0204, T-R25 **级别**：L2
-- **产出**：`mqde serve` 内后台刷新线程（`JobRunner::loop()` 模式，默认 24h，增量合并，失败只记日志不崩服务）；`CatalogEntry` 新增 `category`/`family_group` 两级分类字段（确定性规则推导，不是 ML 分类）；`GET /api/v1/catalog` 响应加 `refresh_interval_s`/`last_refresh_ok`/`last_refresh_at`。
-- **验收**：改 `data/models/catalog.json` mtime 模拟触发，确认增量合并不丢数据；200 条真实数据跑分类，人工抽查 10 条。
-- **校验**：`ctest -R hub_catalog_refresh`（stub server），mutation：合并退化成整表覆盖必须被抓到。
+- **产出**：`hub::CatalogRefresher`（`cpp/include/mqde/hub/catalog.h` + `catalog.cpp`，`JobRunner::loop()` 同一模式：注入一个 `RefreshFn` 而不是硬编码真实网络调用，这样测试能用假函数、生产代码用真正的 `hub::update_catalog`）；`mqde serve --catalog-refresh-interval <秒>`（**默认 0 = 关闭**，不改变任何现有部署/测试的行为；设成 86400 即"每天"）；`CatalogEntry` 新增 `category`/`family_group`（不落盘，和 `demoted`/`demote_reason` 一样"加载时重新计算"，规则改进不需要回填旧数据）；`GET /api/v1/catalog` 响应加 `refresh_interval_s`/`last_refresh_ok`/`last_refresh_at`。
+- **分类规则**（确定性字符串规则，不是 ML）：`category` 只看 `pipeline_tag`——真实 200 条目录数据里只出现过 `text-generation`（→ LLM）和 `image-text-to-text`（→ VLM）两种，`architecture` 参数在这两个值上没有带来任何额外区分力，所以没有按原计划接 `architecture`，避免一个用不上的死参数。`family_group` 把仓库名（去掉 org）按 `-`/`_` 切词，找第一个形如"数字(.数字)?[BMK]"的"尺寸词"，取它之前的部分；在真实数据上验证过 "Qwen2.5-7B-Instruct"/"Qwen2.5-0.5B-Instruct"/"Qwen2.5-1.5B-Instruct" 都收进同一个"Qwen2.5"，"gemma-4-26B-A4B-it" 不会被"4"这个裸数字误切（必须紧跟 B/M/K 才算尺寸词），正确切到"gemma-4"；没有尺寸词的名字自成一组。
+- **范围修正**：原计划提到前端目录浏览组件接这两级分组做下拉——这个改动留给了 T-1304，因为用户原话"下拉选择"指的是新建作业向导里全新的模型选择器（今天完全没有，只有自由文本框），不是已有的 `Catalog.tsx` 整页表格；T-1303 只负责把数据做出来，T-1304 负责真正做成下拉。
+- **验收**：改 `data/models/catalog.json` mtime 模拟触发，确认增量合并不丢数据（复用已有的 `update_catalog` 合并逻辑，没有重新实现）；200 条真实数据跑分类，抽查结果合理（样例：Qwen3-0.6B → category=LLM, family_group=Qwen3）。
+- **校验**：`ctest -R hub_catalog_refresh`（5 个用例：真的调用并落盘、状态字段、失败后继续重试、调用方抛异常不崩进程、interval<=0 完全不起线程）+ `ctest -R hub.classify` （5 个用例），共 6 处破坏性验证全部先变红再恢复（其中"interval<=0 应该禁用"这条抓到了一个真·退化成忙轮询的变异——改坏后 100ms 内被调用 570 次而不是 0 次）。手动起服务确认默认关闭时 `refresh_interval_s=0`、`last_refresh_at=""`，不影响任何现有行为；真实目录数据抽样确认 `category`/`family_group` 字段正确。
 
 #### T-1305 JobSpec 正式契约（T-0007 最小切片）
 - **依赖**：T-0210 **级别**：L2

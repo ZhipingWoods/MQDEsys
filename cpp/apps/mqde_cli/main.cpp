@@ -649,6 +649,9 @@ int main(int argc, char** argv) {
   serve->add_option("--python", so.python, "python executable for the executor");
   serve->add_option("--gpus", gpus, "GPU pool for jobs, e.g. 2,3");
   serve->add_option("--allow", allow, "allowed root for model/dataset paths (repeatable)");
+  serve->add_option("--catalog-refresh-interval", so.catalog_refresh_interval_s,
+                    "seconds between automatic HF catalog refreshes (0 = disabled, the default); "
+                    "e.g. 86400 for daily");
 
   // HF token: --token or HF_TOKEN. Never printed.
   mqde::hub::HfOptions ho;

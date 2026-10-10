@@ -1,5 +1,7 @@
 #include "mqde/hub/catalog.h"
 
+#include "mqde/common/log.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -120,6 +122,59 @@ void apply_hygiene(CatalogEntry& e) {
   }
 }
 
+namespace {
+
+std::string infer_category(const std::string& pipeline_tag) {
+  if (pipeline_tag == "text-generation") return "LLM";
+  if (pipeline_tag == "image-text-to-text" || pipeline_tag == "visual-question-answering") return "VLM";
+  if (pipeline_tag == "text-to-image" || pipeline_tag == "image-to-image" || pipeline_tag == "text-to-video")
+    return "Diffusion";
+  if (pipeline_tag == "feature-extraction" || pipeline_tag == "sentence-similarity") return "Embedding";
+  return "Other";
+}
+
+// Same-series different-size variants (e.g. "Qwen/Qwen2.5-7B-Instruct" and "Qwen/Qwen2.5-0.5B-Instruct")
+// collapse to one group ("Qwen2.5") by cutting the repo name (without org) at its first "<digits>[BMK]"
+// size token and keeping everything before it. A name with no such token is its own singleton group.
+// Deterministic string splitting, not ML; imperfect on names that encode size differently is expected and
+// acceptable (documented in docs/TASKS.md T-1303).
+std::string infer_family_group(const std::string& name) {
+  static const std::regex size_token(R"(^\d+(\.\d+)?[BMKbmk]$)");
+  const auto slash = name.rfind('/');
+  const std::string base = slash == std::string::npos ? name : name.substr(slash + 1);
+  std::vector<std::string> parts;
+  std::vector<char> delims;
+  std::string cur;
+  for (char c : base) {
+    if (c == '-' || c == '_') {
+      parts.push_back(cur);
+      delims.push_back(c);
+      cur.clear();
+    } else {
+      cur += c;
+    }
+  }
+  parts.push_back(cur);
+  for (size_t i = 0; i < parts.size(); ++i) {
+    if (!std::regex_match(parts[i], size_token)) continue;
+    std::string group;
+    for (size_t j = 0; j < i; ++j) {
+      group += parts[j];
+      if (j < delims.size()) group += delims[j];
+    }
+    if (!group.empty() && (group.back() == '-' || group.back() == '_')) group.pop_back();
+    return group.empty() ? base : group;
+  }
+  return base;
+}
+
+}  // namespace
+
+void classify(CatalogEntry& e) {
+  e.category = infer_category(e.pipeline_tag);
+  e.family_group = infer_family_group(e.name);
+}
+
 CatalogEntry entry_from_hub(const Json& info, const Json& config) {
   CatalogEntry e;
   e.name = info.value("id", info.value("modelId", ""));
@@ -186,6 +241,7 @@ CatalogEntry entry_from_hub(const Json& info, const Json& config) {
     e.capabilities.push_back("moe");
   e.use_case = e.pipeline_tag == "image-text-to-text" ? "multimodal" : "general";
   apply_hygiene(e);
+  classify(e);
   return e;
 }
 
@@ -206,7 +262,9 @@ Json to_json(const CatalogEntry& e, bool with_config) {
             {"hf_downloads", e.hf_downloads},
             {"hf_likes", e.hf_likes},
             {"demoted", e.demoted},
-            {"demote_reason", e.demote_reason}};
+            {"demote_reason", e.demote_reason},
+            {"category", e.category},
+            {"family_group", e.family_group}};
   if (with_config) {
     j["config"] = e.config;
     j.erase("demoted");
@@ -245,6 +303,7 @@ Result<Catalog> load_catalog(const fs::path& p) {
     e.hf_likes = r.value("hf_likes", int64_t{0});
     e.config = r.value("config", Json::object());
     apply_hygiene(e);
+    classify(e);
     c.entries.push_back(std::move(e));
   }
   return c;
@@ -410,6 +469,65 @@ Result<Catalog> update_catalog(const HfOptions& o, const UpdateOptions& u, Catal
     if (!fresh_names.contains(lower(e.name))) out.entries.push_back(std::move(e));
   out.updated_at = now_iso();
   return out;
+}
+
+// ---------------------------------------------------------------- CatalogRefresher
+
+CatalogRefresher::CatalogRefresher(fs::path catalog_path, std::chrono::milliseconds interval,
+                                   RefreshFn refresh_fn)
+    : catalog_path_(std::move(catalog_path)), interval_(interval), refresh_fn_(std::move(refresh_fn)) {
+  status_.interval_s =
+      interval_.count() > 0 ? std::chrono::duration_cast<std::chrono::seconds>(interval_).count() : 0;
+  if (interval_.count() > 0) thread_ = std::thread([this] { loop(); });
+}
+
+CatalogRefresher::~CatalogRefresher() {
+  if (!thread_.joinable()) return;
+  {
+    std::lock_guard lk(mu_);
+    stop_ = true;
+  }
+  cv_.notify_all();
+  thread_.join();
+}
+
+CatalogRefresher::Status CatalogRefresher::status() const {
+  std::lock_guard lk(mu_);
+  return status_;
+}
+
+void CatalogRefresher::loop() {
+  std::unique_lock lk(mu_);
+  while (!stop_) {
+    if (cv_.wait_for(lk, interval_, [this] { return stop_; })) break;  // woken by the destructor, not a timeout
+    lk.unlock();
+    Catalog base;
+    if (auto c = load_catalog(catalog_path_)) base = std::move(*c);
+    // This runs with no lock held and on a thread of its own; nothing above it (httplib's handler-thread
+    // exception handler) protects it, so a thrown exception here must not be allowed to escape and take
+    // the whole server down over one bad network response.
+    Result<Catalog> fresh;
+    try {
+      fresh = refresh_fn_(base);
+    } catch (const std::exception& e) {
+      fresh = make_error(Errc::kExternal, "catalog refresh threw: {}", e.what());
+    } catch (...) {
+      fresh = make_error(Errc::kExternal, "catalog refresh threw a non-exception value");
+    }
+    lk.lock();
+    status_.last_refresh_at = now_iso();
+    if (!fresh) {
+      status_.last_refresh_ok = false;
+      MQDE_LOG_WARN("catalog background refresh failed: {}", fresh.error().message);
+      continue;
+    }
+    status_.last_refresh_ok = true;
+    lk.unlock();
+    if (auto saved = save_catalog(*fresh, catalog_path_); !saved)
+      MQDE_LOG_WARN("catalog background refresh: could not save {}: {}", catalog_path_.string(),
+                    saved.error().message);
+    lk.lock();
+  }
 }
 
 }  // namespace mqde::hub

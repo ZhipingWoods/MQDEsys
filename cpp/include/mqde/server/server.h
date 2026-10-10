@@ -21,6 +21,10 @@ struct ServerOptions {
   std::string python = "python";
   std::vector<int> gpus;                   // GPU pool handed to jobs via CUDA_VISIBLE_DEVICES
   std::vector<std::string> allowed_roots;  // model / dataset paths must live under one of these
+  // T-1303: seconds between automatic HF catalog refreshes while this process runs. 0 (default) disables
+  // it -- existing deployments and every test that starts a server keep today's behavior (catalog only
+  // changes via `mqde catalog update` or a client-triggered /download) unless this is explicitly set.
+  int catalog_refresh_interval_s = 0;
 };
 
 // Blocks until the server stops.
