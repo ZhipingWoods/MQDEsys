@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <random>
@@ -50,11 +51,26 @@ YAML::Node to_yaml(const Json& j) {
 
 }  // namespace
 
-JobRunner::JobRunner(fs::path runs_dir, fs::path repo_root, std::string python, std::vector<int> gpus)
+std::string merged_state(const std::string& from_events, const std::optional<JobProc>& p) {
+  if (!p) return from_events;
+  if (p->state == "CANCELLED") return "CANCELLED";
+  // Mid-retry (requeued after a failed attempt) or already relaunched: the live process view is ground
+  // truth, since events.jsonl may still hold the previous attempt's terminal SUCCEEDED/FAILED line.
+  if (p->state == "QUEUED" || p->state == "RUNNING") return p->state;
+  const bool terminal = from_events == "SUCCEEDED" || from_events == "FAILED";
+  if (terminal) return from_events;
+  if (p->state == "SUCCEEDED" || p->state == "FAILED") return p->exit_code == 0 ? "SUCCEEDED" : "FAILED";
+  return p->state;
+}
+
+JobRunner::JobRunner(fs::path runs_dir, fs::path repo_root, std::string python, std::vector<int> gpus,
+                      int max_attempts, double base_backoff_s)
     : runs_(std::move(runs_dir)),
       repo_(std::move(repo_root)),
       python_(std::move(python)),
-      gpus_(std::move(gpus)) {
+      gpus_(std::move(gpus)),
+      max_attempts_(max_attempts),
+      base_backoff_s_(base_backoff_s) {
   fs::create_directories(runs_);
   thread_ = std::thread([this] { loop(); });
 }
@@ -78,6 +94,7 @@ std::string JobRunner::submit(const Json& job) {
   out << to_yaml(j);
   std::ofstream(dir / "job.yaml") << out.c_str() << "\n";
   JobProc proc{.id = id, .state = "QUEUED", .submitted_at = now_s()};
+  proc.max_attempts = max_attempts_;
   proc.cpu = job.value("/deploy/device"_json_pointer, std::string()) == "cpu";
   if (job.value("/model/type"_json_pointer, std::string()) == "llm") proc.module = "mqde.pipeline.llm_job";
   {
@@ -165,6 +182,11 @@ void JobRunner::launch(JobProc& j, int gpu) {
                 j.module);
 }
 
+double JobRunner::backoff_seconds(int next_attempt) const {
+  // next_attempt is the attempt about to run (2, 3, ...): attempt 2 waits 1x base, attempt 3 waits 2x, ...
+  return base_backoff_s_ * std::pow(2.0, static_cast<double>(next_attempt - 2));
+}
+
 void JobRunner::reap() {
   int status = 0;
   pid_t pid;
@@ -172,11 +194,29 @@ void JobRunner::reap() {
     for (auto& [id, j] : jobs_) {
       if (j.pid != pid) continue;
       j.exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
-      if (j.state != "CANCELLED") j.state = j.exit_code == 0 ? "SUCCEEDED" : "FAILED";
-      j.finished_at = now_s();
       if (j.gpu >= 0) busy_.erase(j.gpu);
       if (cpu_busy_ == id) cpu_busy_.clear();
-      MQDE_LOG_INFO("job {} finished: {} (exit {})", id, j.state, j.exit_code);
+      j.pid = -1;
+      if (j.state == "CANCELLED") {
+        j.finished_at = now_s();
+        MQDE_LOG_INFO("job {} finished: CANCELLED (exit {})", id, j.exit_code);
+      } else if (j.exit_code == 0) {
+        j.state = "SUCCEEDED";
+        j.finished_at = now_s();
+        MQDE_LOG_INFO("job {} finished: SUCCEEDED (exit 0)", id);
+      } else if (j.attempt < j.max_attempts) {
+        ++j.attempt;
+        j.retry_after = now_s() + backoff_seconds(j.attempt);
+        j.state = "QUEUED";
+        queue_.push_back(id);
+        MQDE_LOG_INFO("job {} failed (exit {}), retrying as attempt {}/{} after {:.1f}s", id, j.exit_code,
+                      j.attempt, j.max_attempts, backoff_seconds(j.attempt));
+      } else {
+        j.state = "FAILED";
+        j.finished_at = now_s();
+        MQDE_LOG_INFO("job {} finished: FAILED (exit {}, attempt {}/{}, giving up)", id, j.exit_code,
+                      j.attempt, j.max_attempts);
+      }
     }
   }
 }
@@ -185,9 +225,16 @@ void JobRunner::loop() {
   std::unique_lock lk(mu_);
   while (!stop_) {
     reap();
-    // FIFO per resource: a CPU job does not wait behind GPU jobs that cannot start yet, and vice versa.
+    const double now = now_s();
+    // FIFO per resource: a CPU job does not wait behind GPU jobs that cannot start yet, and vice versa. A
+    // job retrying after a failure is skipped (not launched, not blocking anything behind it) until its
+    // backoff elapses.
     for (auto it = queue_.begin(); it != queue_.end();) {
       JobProc& j = jobs_[*it];
+      if (j.retry_after > now) {
+        ++it;
+        continue;
+      }
       int slot = -2;
       if (j.cpu) {
         if (cpu_busy_.empty()) slot = -1;

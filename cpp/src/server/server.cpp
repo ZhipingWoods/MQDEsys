@@ -107,17 +107,6 @@ Json summarize_events(const fs::path& p) {
   return s;
 }
 
-// Terminal states written by the worker win; otherwise the process view (queued / running /
-// crashed before writing a terminal event / cancelled) is authoritative.
-std::string merged_state(const std::string& from_events, const std::optional<JobProc>& p) {
-  const bool terminal = from_events == "SUCCEEDED" || from_events == "FAILED";
-  if (!p) return from_events;
-  if (p->state == "CANCELLED") return "CANCELLED";
-  if (terminal) return from_events;
-  if (p->state == "SUCCEEDED" || p->state == "FAILED") return p->exit_code == 0 ? "SUCCEEDED" : "FAILED";
-  return p->state;
-}
-
 estimator::RuntimeParams runtime_from(const Json& j) {
   estimator::RuntimeParams rt;
   rt.concurrency = j.value("concurrency", rt.concurrency);
@@ -1101,7 +1090,11 @@ Result<void> serve(const ServerOptions& o) {
       const auto id = e.path().filename().string();
       Json j = {{"job_id", id}};
       j.update(summarize_events(e.path() / "events.jsonl"));
-      if (auto p = runner.get(id)) j["gpu"] = p->gpu;
+      if (auto p = runner.get(id)) {
+        j["gpu"] = p->gpu;
+        j["attempt"] = p->attempt;
+        j["max_attempts"] = p->max_attempts;
+      }
       j["state"] = merged_state(j["state"].get<std::string>(), runner.get(id));
       const auto rep = read_json_file(e.path() / "report.json");
       auto spec_yaml = load_structured_file(e.path() / "job.yaml");
@@ -1137,6 +1130,8 @@ Result<void> serve(const ServerOptions& o) {
     if (auto p = runner.get(id)) {
       j["gpu"] = p->gpu;
       j["exit_code"] = p->exit_code;
+      j["attempt"] = p->attempt;
+      j["max_attempts"] = p->max_attempts;
     }
     j["state"] = merged_state(j["state"].get<std::string>(), runner.get(id));
     if (auto spec = load_structured_file(dir / "job.yaml")) j["job"] = *spec;

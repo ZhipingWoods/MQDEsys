@@ -26,12 +26,26 @@ struct JobProc {
   pid_t pid = -1;
   int exit_code = 0;
   double submitted_at = 0, started_at = 0, finished_at = 0;
+  int attempt = 1;       // 1-based: which launch this is
+  int max_attempts = 3;  // stop retrying once attempt reaches this
+  double retry_after = 0;  // while QUEUED again after a failure: epoch seconds before it may be relaunched
 };
+
+// Merges the worker-written `events.jsonl` state (`from_events`) with JobRunner's own live process view
+// (`p`). A terminal line in events.jsonl (SUCCEEDED/FAILED) only wins when the process view agrees the job
+// has actually finished: once a failed attempt is requeued for retry, `p->state` goes back to QUEUED (or
+// RUNNING once the next attempt starts), and that must be reported over a stale terminal line left behind
+// by the attempt that already failed. CANCELLED always wins.
+std::string merged_state(const std::string& from_events, const std::optional<JobProc>& p);
 
 class JobRunner {
  public:
+  // max_attempts: total launch attempts per job before giving up (1 = no retry). base_backoff_s: delay
+  // before attempt N+1 is (attempt - 1)-th power-of-two multiples of this, e.g. with the default 2.0s:
+  // attempt 2 waits 2s, attempt 3 waits 4s. There is no per-error-code retry classification yet (the Python
+  // workers don't emit one): any non-zero exit that wasn't a user cancellation is retried the same way.
   JobRunner(std::filesystem::path runs_dir, std::filesystem::path repo_root, std::string python,
-            std::vector<int> gpus);
+            std::vector<int> gpus, int max_attempts = 3, double base_backoff_s = 2.0);
   ~JobRunner();
 
   // Writes runs/<id>/job.yaml and enqueues it. Returns the job id.
@@ -45,11 +59,14 @@ class JobRunner {
   void loop();
   void launch(JobProc& j, int gpu);
   void reap();
+  double backoff_seconds(int next_attempt) const;
 
   std::filesystem::path runs_;
   std::filesystem::path repo_;
   std::string python_;
   std::vector<int> gpus_;
+  int max_attempts_;
+  double base_backoff_s_;
   mutable std::mutex mu_;
   std::condition_variable cv_;
   std::deque<std::string> queue_;

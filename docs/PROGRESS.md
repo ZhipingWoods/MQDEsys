@@ -180,6 +180,20 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-10 · Claude · T-0504 重试/恢复（JobRunner 的重试那一半）
+
+延续上一条（T-0905）用的方式：没走 Skill 工具（插件在本会话里始终没被识别，用户已经说过不用纠结），改为直接读 `using-superpowers`/`test-driven-development`/`systematic-debugging`/`verification-before-completion` 四个 SKILL.md 照做。
+
+- **做了什么**：`JobRunner`（`cpp/src/server/job_runner.{h,cpp}`）原来完全没有重试——任何非零退出码直接判 FAILED。现在 `JobProc` 带 `attempt`/`max_attempts`（默认 3）/`retry_after`；`reap()` 里，非取消、非零退出且 `attempt < max_attempts` 时改为重新入队（状态回 QUEUED），退避时间是 `base_backoff_s * 2^(attempt-2)`（默认 2s、4s、...）；调度循环里一个还在退避期的作业会被跳过但不挡住队列里其它作业。`GET /api/v1/jobs`、`GET /api/v1/jobs/:id` 新增 `attempt`/`max_attempts` 字段。没有按错误码区分"可重试/不可重试"——Python worker 现在所有失败都走同一个非零退出码，没有机器可读的失败分类，编了也是猜，所以统一按同一策略重试，在代码注释和本条里都写清楚了。
+- **顺手修了一个重试会直接暴露的真 bug**：`server.cpp` 里的 `merged_state()` 原来是"events.jsonl 写了终态就认那个终态"，但重试场景下，一次失败的 attempt 会在 events.jsonl 里留一行 `FAILED`，而作业其实已经被重新排队/在跑下一次尝试——旧逻辑会一直把它显示成 FAILED，哪怕 `JobRunner` 自己的状态已经是 QUEUED/RUNNING。把这个函数挪到 `job_runner.h`（之前是 `server.cpp` 匿名命名空间里的私有函数，测试够不到）加了判断：`JobProc` 自己说还在 QUEUED/RUNNING 时，直接信它，不看 events.jsonl 里的旧终态。
+- **测试**：新文件 `cpp/tests/unit/job_runner_test.cpp`，11 个用例——4 个用一个会计数自己被调用次数的 shell 脚本当"python"（不需要真 worker）: 重试 2 次后成功、重试耗尽后停在 FAILED、第一次就成功不重试、取消一个正在退避等待的重试不会把它重新拉起来；1 个用 `sleep 30` 当 worker 验证取消正在跑的作业不会被重试;6 个直接测 `merged_state` 这个纯函数的各种分支。
+- **破坏性验证抓到的东西**（这是本条最值得记的部分）：
+  1. 把 `attempt < max_attempts` 改成 `<=`（差一错误）——`a_job_that_keeps_failing_stops_after_max_attempts` 正确变红（`attempt` 变成 4 而不是 3）。
+  2. 删掉 `merged_state` 里"QUEUED/RUNNING 直接信"这条判断——两个"陈旧 FAILED 事件不该盖掉重试中状态"的用例都正确变红。
+  3. 删掉 `reap()` 里 `state == CANCELLED` 这个分支——**第一次跑结果是全绿，但这是假阳性**：`cancel()` 自己会在调用的同一时刻把状态同步设成 CANCELLED，而我写的测试只检查了 `cancel()` 返回后立刻看到的状态，根本没等到 `reap()` 真正收割那个被杀掉的进程（每 500ms 一次）就已经判定通过了，所以这条变异根本没被执行到就已经"通过"了。按系统化调试的原则没有将就，重写了这个测试：取消之后继续轮询 1.5 秒（覆盖至少 2-3 次 `reap()` 周期和重试的退避时间），断言状态全程没有离开过 CANCELLED。重做这个变异后测试正确变红（状态变成 QUEUED，attempt 变成 2），恢复实现后又变绿。这个坑和 T-0905 那次"看着全绿但没覆盖到关键分支"是同一类问题，再次确认了"写完测试后必须真的跑一次破坏性验证"不是走形式。
+- **校验**：`ctest --test-dir build/mac`，Mac 上全量 255/255（新增 11 个）；`cmake --build build/mac` 整个项目（含 `mqde` CLI/server 二进制）无警告无错误；`scripts/check_deps.py` 99 files 0 violation；web e2e `node web/e2e/clone_from_suggestion.mjs` 仍 14/14（现有 e2e 作业都是一次成功，从没触发过重试路径，新增字段是纯增量不影响断言）。4090 验证见下一条（若本条之后未见对应记录，说明还没来得及推上去验证，以 TASKS.md 的 T-0504 行为准）。
+- **没做**（已如实写进 TASKS.md T-0504 行）：按错误码分类可重试性（无数据支撑，见上）；调度按 EstimateReport 显存需求选 GPU（现在还是 FIFO 任意空闲 GPU）；服务重启后恢复排队中/运行中的作业（`JobRunner` 的队列和作业表完全在内存里，没有落到 `storage::Db` 的 `jobs` 表）。
+
 ### 2026-10-09（深夜） · Claude · 真实作业验收：整条链路一次跑通
 
 4090，GPU 池 4-7，`build/dev/bin/mqde serve`（启动时导出 `MQDE_VLLM_BIN`/`MQDE_LM_EVAL_BIN`/`HF_ENDPOINT`，子进程才能继承）。通过 `POST /api/v1/jobs` 提交一个真实作业（Qwen2.5-0.5B-Instruct，W4A16 GPTQ，导出 AWQ，开 logits 探针，vLLM 部署 + lm-eval gsm8k），`planner::validate_jobspec` 先接受了它，然后全程跑完，中途没有人工介入：
