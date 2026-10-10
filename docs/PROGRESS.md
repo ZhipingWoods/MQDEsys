@@ -191,7 +191,7 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
   1. 把 `attempt < max_attempts` 改成 `<=`（差一错误）——`a_job_that_keeps_failing_stops_after_max_attempts` 正确变红（`attempt` 变成 4 而不是 3）。
   2. 删掉 `merged_state` 里"QUEUED/RUNNING 直接信"这条判断——两个"陈旧 FAILED 事件不该盖掉重试中状态"的用例都正确变红。
   3. 删掉 `reap()` 里 `state == CANCELLED` 这个分支——**第一次跑结果是全绿，但这是假阳性**：`cancel()` 自己会在调用的同一时刻把状态同步设成 CANCELLED，而我写的测试只检查了 `cancel()` 返回后立刻看到的状态，根本没等到 `reap()` 真正收割那个被杀掉的进程（每 500ms 一次）就已经判定通过了，所以这条变异根本没被执行到就已经"通过"了。按系统化调试的原则没有将就，重写了这个测试：取消之后继续轮询 1.5 秒（覆盖至少 2-3 次 `reap()` 周期和重试的退避时间），断言状态全程没有离开过 CANCELLED。重做这个变异后测试正确变红（状态变成 QUEUED，attempt 变成 2），恢复实现后又变绿。这个坑和 T-0905 那次"看着全绿但没覆盖到关键分支"是同一类问题，再次确认了"写完测试后必须真的跑一次破坏性验证"不是走形式。
-- **校验**：`ctest --test-dir build/mac`，Mac 上全量 255/255（新增 11 个）；`cmake --build build/mac` 整个项目（含 `mqde` CLI/server 二进制）无警告无错误；`scripts/check_deps.py` 99 files 0 violation；web e2e `node web/e2e/clone_from_suggestion.mjs` 仍 14/14（现有 e2e 作业都是一次成功，从没触发过重试路径，新增字段是纯增量不影响断言）。4090 验证见下一条（若本条之后未见对应记录，说明还没来得及推上去验证，以 TASKS.md 的 T-0504 行为准）。
+- **校验**：`ctest --test-dir build/mac`，Mac 上全量 255/255（新增 11 个）；`cmake --build build/mac` 整个项目（含 `mqde` CLI/server 二进制）无警告无错误；`scripts/check_deps.py` 99 files 0 violation；web e2e `node web/e2e/clone_from_suggestion.mjs` 仍 14/14（现有 e2e 作业都是一次成功，从没触发过重试路径，新增字段是纯增量不影响断言）。推送后在 4090（GCC，`cmake --build --preset dev`）重新拉取、全量重编无警告，`ctest --test-dir build/dev` 251/251（Mac 的 255 减去 4 个 Mac 独有的 `hal_metal` 用例，其余一致），`job_runner` 相关 11 个单独跑也全绿——达到 `/goal` 要求的"真实机器测试通过=100%"。
 - **没做**（已如实写进 TASKS.md T-0504 行）：按错误码分类可重试性（无数据支撑，见上）；调度按 EstimateReport 显存需求选 GPU（现在还是 FIFO 任意空闲 GPU）；服务重启后恢复排队中/运行中的作业（`JobRunner` 的队列和作业表完全在内存里，没有落到 `storage::Db` 的 `jobs` 表）。
 
 ### 2026-10-09（深夜） · Claude · 真实作业验收：整条链路一次跑通
