@@ -163,7 +163,7 @@
 | T-1205 | 可观测性（/metrics、可复现重放） | P12 | T-0511 | L1 | PARTIAL (2026-10-09, GET /metrics in Prometheus text exposition format (mqde_uptime_seconds, mqde_jobs_total{state}, mqde_gpu_pool_size, mqde_gpu_busy, mqde_queue_length) from the live JobRunner; verified by hand against a running server (submitted a job, watched FAILED go 0 to 1). Not covered by ctest: serve() blocks forever and has no in-process stop(), so testing it would need a lifecycle refactor that was out of scope here; verified manually instead. `mqde run --reproduce <job_id>` is not started at all: there is no `mqde run` subcommand (jobs are submitted through the server, not executed by the CLI directly), so this needs a real design decision, not just an implementation |
 | T-1206 | 夜间 GPU 回归与性能看板 | P12 | T-0808 | L2 | TODO |
 | T-1207 | v1.0 发布验收 | P12 | 全部 P0–P11 必选任务 | L2 | TODO |
-| T-1301 | 领域（domain）注册表 | P13 | T-0206 | L2 | DOING (2026-10-10，见 P13 详情) |
+| T-1301 | 领域（domain）注册表 | P13 | T-0206 | L2 | DONE (2026-10-10，见 P13 详情；ctest -R estimator_domain 7/7，4090 全量 264/264) |
 | T-1302 | 算法可插拔性加固 + 第三方接入指南 | P13 | T-0103 | L1（T-0609 的 ADR 部分仍 L3） | TODO |
 | T-1303 | HF 目录后台定时刷新 + 二级分类分组 | P13 | T-0204,T-R25 | L2 | TODO |
 | T-1304 | 新建作业向导重构（五步，领域感知） | P13 | T-1301,T-1303,T-1305,T-0210 | L1 | TODO |

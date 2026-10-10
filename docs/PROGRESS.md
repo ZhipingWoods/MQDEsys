@@ -191,7 +191,7 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 发现并纠正了计划里的一处细节：`modelspec::ModelFamily.modality` 的既有代码注释写的是 `llm | vlm | vla | world`（不是 "wm"），批准的计划草稿里写的是 "wm" —— 实现时改用 `world` 以匹配已有约定，没有引入和既有代码不一致的新缩写。另外 L2/L1 分级核对了 `docs/STRUCTURE.md`：`data/model_families`/`data/recipes`/`data/hardware_db` 本身是 L1，但新增 `cpp/include/**` 公共头文件这条规则本身就是 L2，所以 T-1301 维持计划里写的 L2（原因是新头文件，不是数据文件本身）。
 
 - **测试**：`cpp/tests/unit/estimator_domain_test.cpp`，7 个用例，加载真实的 `data/domains/*.yaml`（不是合成 fixture，和 `estimator_test.cpp` 一贯做法一致）。3 处破坏性验证全部正确变红：`pipeline_status` 校验逻辑删掉、`classic_algorithms` 的 push_back 删掉（两个测试同时抓到，其中一个是 `.at()` 越界）、都恢复后验证全绿。
-- **校验**：`ctest --test-dir build/mac` 268/268；`cmake --build build/mac` 整个项目无警告；`scripts/check_deps.py` 101 files 0 violation；手动起一个本地 server 实测 `curl /api/v1/domains` 返回全部 5 个领域、字段齐全。4090 验证见下一条。
+- **校验**：`ctest --test-dir build/mac` 268/268；`cmake --build build/mac` 整个项目无警告；`scripts/check_deps.py` 101 files 0 violation；手动起一个本地 server 实测 `curl /api/v1/domains` 返回全部 5 个领域、字段齐全。推送后 4090（GCC）拉取、全量重编无警告，`ctest --test-dir build/dev` 264/264——100% 机器验证口径达标。
 - **未完成 / 下一步**：T-1305（JobSpec 契约）按计划下一个做；T-1302/T-1303/T-1304/T-1306/T-1307/T-1308 均为 TODO，状态登记在 TASKS.md P13。
 
 ### 2026-10-10（续） · Claude · T-0505 并发分块下载（顺手让 ThreadPool 第一次被真正用上）
