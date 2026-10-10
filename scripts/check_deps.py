@@ -10,6 +10,7 @@ the CMake link graph; adding an edge here means changing the architecture, so it
     estimator <- fit, hub
     fit, hub, estimator, probe <- server <- apps/bindings
     planner: compatibility matrix + JobSpec validation; uses estimator (Recipe/HardwareProfile), not the reverse
+    feedback: ties estimator's infer_* functions to storage::CalibrationStore; nothing else depends on it but server
     storage: SQLite metadata and the artifact cache; uses only common
     hal: a pure C leaf (plugin ABI header); it includes nothing of ours, and the probe library and everything above may use it
 
@@ -28,16 +29,17 @@ ALLOWED: dict[str, set[str]] = {
     "hal": set(),
     "storage": {"common"},
     "planner": {"common", "modelspec", "quant", "estimator"},
+    "feedback": {"common", "modelspec", "quant", "estimator", "storage"},
     "quant": {"common"},
     "modelspec": {"common"},
     "estimator": {"common", "modelspec", "quant"},
     "fit": {"common", "modelspec", "quant", "estimator"},
     "hub": {"common", "modelspec", "quant", "estimator"},
-    "server": {"common", "modelspec", "quant", "estimator", "fit", "hub", "hal", "storage", "planner"},
+    "server": {"common", "modelspec", "quant", "estimator", "fit", "hub", "hal", "storage", "planner", "feedback"},
 }
 
 # Entry points and tests may use every module.
-EVERYTHING = {"common", "modelspec", "quant", "estimator", "fit", "hub", "server", "hal", "storage", "planner"}
+EVERYTHING = {"common", "modelspec", "quant", "estimator", "fit", "hub", "server", "hal", "storage", "planner", "feedback"}
 ALLOWED.update({"apps": EVERYTHING, "bindings": EVERYTHING, "tests": EVERYTHING})
 
 INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]mqde/([a-z_]+)/')
