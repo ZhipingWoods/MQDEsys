@@ -191,7 +191,7 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
   2. 分块探测请求（1 字节 Range）本身也会命中 `drop_after` 这个"只生效一次"的桩逻辑，把名额提前消耗掉——加了一行判断：1 字节的 0-0 探测请求不消耗这个一次性标记。
 - **破坏性验证**：把"文件太小/不支持 Range 就回退"这行判断强制改成"永远回退"——3 个用例正确变红（字节重组、断线恢复、持续失败清理，因为这些语义本来就是分块路径特有的）；把"收集各块错误"那行改成永远不记错误——"持续性失败"用例正确变红（显示下载"成功"了）；把某一段的 Range 终点算错一个字节（相邻两段重叠 1 字节）——进度总字节数对不上（3145854 对 3145851）被 `EXPECT_EQ(last_done, s.blob.size())` 抓到，文件内容碰巧还是对的（因为两段写的是同一个源字节到同一个位置），这提醒了我：光比较文件内容不够，进度总量的断言也要留着。三处改完都恢复，重新跑干净。
 - **没做**：跨进程/跨调用的分块续传（分块下载的 `.part` 文件不像单流那样能在重新调用时续传，这次调用总是从头全量分块下载——已在 TASKS.md 写清楚）；对真实 HF Hub 的网络验证（只验证了本地桩；本想用 CLI 对 `hf-internal-testing/tiny-random-gpt2` 跑一次真实下载当 sanity check，这条命令本身被拒绝执行，没有重试，就以本地桩的验证为准）。
-- **校验**：`ctest --test-dir build/mac` 全量 261/261；`cmake --build build/mac` 整个项目（含 CLI、server）无警告无错误；`scripts/check_deps.py` 99 files 0 violation。4090 验证见下一条。
+- **校验**：`ctest --test-dir build/mac` 全量 261/261；`cmake --build build/mac` 整个项目（含 CLI、server）无警告无错误；`scripts/check_deps.py` 99 files 0 violation。推送后 4090（GCC）拉取、全量重编无警告，`ctest --test-dir build/dev` 257/257——达到 100% 机器验证的口径。
 
 ### 2026-10-10 · Claude · T-0504 重试/恢复（JobRunner 的重试那一半）
 
