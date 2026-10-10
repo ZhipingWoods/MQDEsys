@@ -274,6 +274,20 @@ std::vector<Problem> validate_jobspec(const Json& job) {
   const auto mtype = job.value(Json::json_pointer("/model/type"), std::string("vla"));
   if (mtype != "vla" && mtype != "llm")
     add(out, "/model/type", fmt::format("'{}' is not 'vla' or 'llm'", mtype), "");
+
+  // domain (T-1301/T-1305): optional today (every existing caller keys off model.type instead), but when
+  // present it must name a registered domain whose pipeline actually exists -- rejecting here, before
+  // JobRunner ever picks a Python module to launch, is how a domain with no backend yet (vlm/world/ewm)
+  // fails with a clear reason instead of silently running the wrong pipeline or crashing deep inside it.
+  if (job.contains("domain")) {
+    const auto domain_id = job.value(Json::json_pointer("/domain"), std::string());
+    if (auto d = estimator::load_domain(domain_id); !d) {
+      add(out, "/domain", fmt::format("'{}' is not a registered domain", domain_id),
+          "GET /api/v1/domains for the list of valid ids");
+    } else if (d->pipeline_status != "implemented") {
+      add(out, "/domain", fmt::format("domain '{}' has no real quantization pipeline yet", domain_id), "");
+    }
+  }
   const auto device = job.value(Json::json_pointer("/deploy/device"), std::string());
   if (device == "cpu" && mtype != "llm")
     add(out, "/deploy/device", "cpu is only supported for model.type=llm",

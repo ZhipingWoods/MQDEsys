@@ -320,6 +320,42 @@ TEST(planner_validate_jobspec, missing_fields_default_sensibly_and_do_not_crash)
   EXPECT_NO_FATAL_FAILURE(validate_jobspec({{"quant", {{"recipe", "not an array"}}}}));
 }
 
+// ---- domain (T-1305, uses T-1301's data/domains/*.yaml registry) ----
+
+TEST(planner_validate_jobspec, an_unknown_domain_id_is_a_problem) {
+  Json job = {{"domain", "not-a-real-domain"},
+              {"model", {{"type", "llm"}}},
+              {"quant", {{"recipe", Json::array({"w4a16"})}}}};
+  auto p = validate_jobspec(job);
+  ASSERT_EQ(p.size(), 1u);
+  EXPECT_EQ(p[0].field, "/domain");
+}
+
+TEST(planner_validate_jobspec, a_domain_with_no_real_pipeline_is_rejected_with_a_clear_reason) {
+  for (const char* id : {"vlm", "world", "ewm"}) {
+    Json job = {{"domain", id}, {"model", {{"type", "llm"}}}, {"quant", {{"recipe", Json::array({"w4a16"})}}}};
+    auto p = validate_jobspec(job);
+    ASSERT_EQ(p.size(), 1u) << id;
+    EXPECT_EQ(p[0].field, "/domain") << id;
+    EXPECT_NE(p[0].message.find("no"), std::string::npos) << id << ": " << p[0].message;
+  }
+}
+
+TEST(planner_validate_jobspec, llm_and_vla_domains_have_a_real_pipeline_and_add_no_problem) {
+  Json llm_job = {{"domain", "llm"}, {"model", {{"type", "llm"}}}, {"quant", {{"recipe", Json::array({"w4a16"})}}}};
+  EXPECT_TRUE(validate_jobspec(llm_job).empty());
+  Json vla_job = {{"domain", "vla"},
+                  {"model", {{"type", "vla"}}},
+                  {"quant", {{"recipe", Json::array({"w4a16"})}}},
+                  {"deploy", {{"device", "gpu"}}}};
+  EXPECT_TRUE(validate_jobspec(vla_job).empty());
+}
+
+TEST(planner_validate_jobspec, domain_is_entirely_optional_and_omitting_it_adds_no_problem) {
+  Json job = {{"model", {{"type", "llm"}}}, {"quant", {{"recipe", Json::array({"w4a16"})}}}};
+  EXPECT_TRUE(validate_jobspec(job).empty());
+}
+
 // ---------------------------------------------------------------- recommend
 
 namespace {

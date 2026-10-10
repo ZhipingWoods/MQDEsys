@@ -180,6 +180,17 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-10（再再续） · Claude · T-1305 JobSpec 正式契约（T-0007 最小切片）
+
+延续 P13 阶段顺序（T-1301 之后背靠背做 T-1305）。先读了 `NewJob.tsx` 提交的两种真实 job 对象（VLA/LLM 分支字段完全不同）和两个真实 `examples/jobs/*.yaml`，确认两件之前没意识到的事：`qwen25_05b_wikitext.yaml` 没有 `model.type` 字段（它是直接 `python -m mqde.pipeline.llm_job` 跑的，不走 HTTP 校验路径，所以这个缺口不是 bug）；`model.modality` 这个字段 NewJob.tsx 的 VLA 分支在发但服务端哪里都没读（`validate_jobspec`/`job_runner.cpp` 都只认 `model.type`），是个遗留的没用字段。schema 按这些真实现状写，不是凭空设计。
+
+**范围修正**：批准的计划里写"服务端在 validate_jobspec 之外加一层 schema 校验"，写的时候以为可以直接拿个 C++ JSON Schema 校验库——检查了一下，仓库里压根没有这个库（`3rdpart/` 子模块都是引用源码而非运行时依赖），引入一个新的 C++ 运行时依赖是 L3，需要 ADR，这件事不该为了一个校验器就做。改成了直接扩展已有的 `planner::validate_jobspec`（和它一直用的手写 nlohmann::json 检查完全同一个模式，零新依赖）：新增 `/domain` 字段检查——不认识的 id 报错，`pipeline_status != "implemented"` 的领域（vlm/world/ewm）明确拒绝并说明理由。`jsonschema` 这个 Python 包加进了 `python/pyproject.toml` 的 `dev` extras（和已有的 pytest/ruff/mypy 同类对待，纯开发期工具，没有单独写 ADR——如果这个判断不对，用户可以指出来纠正）。
+
+- **做了什么**：`schemas/job_spec.schema.json`（JSON Schema 2020-12，`model`/`quant` 两个必填，其余字段宽松，新增可选 `domain` 枚举 llm/vla/vlm/world/ewm）；`scripts/validate_job_schema.py`（跑 `examples/jobs/*.yaml` 对照 schema）；`web/src/types/job_spec.ts`（手写 TS 类型，先独立存在，**没有**接入 `NewJob.tsx` 现在的 object literal——那段代码马上要被 T-1304 整体重写，提前接只是白做）；`planner::validate_jobspec` 新增 domain 检查（见上）。
+- **测试**：`cpp/tests/unit/planner_validate_test.cpp` 新增 4 个用例（未注册 domain 报错、vlm/world/ewm 明确拒绝、llm/vla 不报问题、省略 domain 完全不受影响）；2 处破坏性验证（domain 检查整体删掉、pipeline_status 判断删掉）都正确变红后恢复。
+- **校验**：`ctest --test-dir build/mac` 272/272；`cmake --build build/mac` 整个项目无警告；`scripts/check_deps.py` 101 files 0 violation；`cd web && npm run build` 干净（`job_spec.ts` 独立存在，没人导入，tsc 仍正常编译）；`bash -n scripts/check_all.sh` 语法检查通过（加了一个 `schema` 检查组，装了 `jsonschema` 才跑，否则报 SKIP 不报错）。`scripts/validate_job_schema.py` 本身需要 `jsonschema`，Mac 系统 Python 是 externally-managed（`pip install` 会被拒绝），按本项目一贯做法（Python 测试在 4090 的 conda 环境里跑）留到 4090 验证。
+- **未完成 / 下一步**：T-1303（目录刷新+分类）按计划顺序接下来做；`job_spec.ts` 真正接入 `NewJob.tsx` 留给 T-1304。
+
 ### 2026-10-10（再续） · Claude · 用户提出 8 条改进意见 → 规划为 P13（T-1301~T-1308），开始 T-1301
 
 用户给了一批体量很大的改进意见（HF 目录定时刷新+分类、按领域的量化参数面板、第三方算法可插拔、新建作业流程重排、"量化与评测"页面拆分、硬件页视觉改版、多硬件对比闭环），明确要求"规划一下，然后逐项完成"。用了一次 plan mode：先并行派 3 个 Explore agent 摸清现状（前端 NewJob/Job/Hardware 现状、hub/catalog+注册表模式+数据契约现状、TASKS.md 里已有的相关任务），确认了几个关键缺口（`NewJob.tsx` 是固定顺序单页表单不是真向导；HF 目录零后台刷新机制；`data/algorithms.yaml` 和 Python `ALGO_REGISTRY` 两份手动维护无同步检查；C++ `Registry<Base>` 零生产调用点；硬件页零图片）。用 `AskUserQuestion` 确认了两处真正无法猜的点：**EWM = 具身世界模型**（带动作条件的机器人变体，与通用 World Model 不同，而不是 WM 的重复项）；硬件页图片**先用通用占位图标**（非任何公司真实 LOGO，用户以后自己替换真实素材）。

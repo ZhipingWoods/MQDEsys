@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mqdesys/schemas/job_spec.schema.json",
+  "title": "MQDEsys JobSpec",
+  "description": "The JSON/YAML document POSTed to /api/v1/jobs (T-1305, the minimal slice of T-0007 needed by the new-job wizard, T-1304). This documents the contract; the authoritative runtime enforcement stays in mqde::planner::validate_jobspec (cpp/src/planner/validate.cpp), which this schema does not replace -- validate_jobspec checks things (recipe/algorithm names, calibration requirements, export compatibility) that depend on data loaded at runtime (data/recipes, data/algorithms.yaml, data/compat/matrix.yaml) and cannot be expressed as a static schema. This schema instead catches structural mistakes early (wrong types, missing essential fields) and is the source the frontend TS type (web/src/types/job_spec.ts) and Python example validation (scripts/validate_job_schema.py) are kept in sync with. Deliberately permissive (additionalProperties: true almost everywhere) so it does not reject fields this slice has not enumerated yet; the two real example fixtures (examples/jobs/*.yaml) and the live NewJob.tsx submission are what this schema was written against, not the other way around.",
+  "type": "object",
+  "properties": {
+    "apiVersion": { "type": "string" },
+    "kind": { "type": "string" },
+    "domain": {
+      "description": "Optional (T-1301). One of the registered data/domains/*.yaml ids. Omitted today by every existing caller, which key off model.type instead; present so T-1304's wizard has somewhere to put the user's explicit domain choice without a breaking change.",
+      "enum": ["llm", "vla", "vlm", "world", "ewm"]
+    },
+    "metadata": {
+      "type": "object",
+      "properties": { "name": { "type": "string", "minLength": 1 } }
+    },
+    "model": {
+      "type": "object",
+      "properties": {
+        "source": { "type": "string" },
+        "path": { "type": "string", "minLength": 1 },
+        "type": { "enum": ["llm", "vla"] },
+        "modality": { "type": "string" }
+      },
+      "required": ["path"],
+      "additionalProperties": true
+    },
+    "quant": {
+      "type": "object",
+      "properties": {
+        "recipe": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "algorithm": { "type": "string" },
+        "act_static": { "type": ["string", "null"] },
+        "also_quantize": { "type": "array", "items": { "type": "string" } },
+        "kv": {
+          "type": "object",
+          "properties": {
+            "format": { "type": "string" },
+            "bits": { "type": "integer" },
+            "symmetric": { "type": "boolean" },
+            "method": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
+        "mixed_precision": {
+          "type": "object",
+          "properties": {
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "match": { "type": "string" },
+                  "bits": { "type": "integer" },
+                  "skip": { "type": "boolean" }
+                },
+                "required": ["match"],
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      },
+      "required": ["recipe"],
+      "additionalProperties": true
+    },
+    "calibration": {
+      "type": "object",
+      "properties": {
+        "dataset": { "type": "string" },
+        "n_samples": { "type": "integer" },
+        "seq_len": { "type": "integer" },
+        "custom_samples": {
+          "description": "T-1304: free-form calibration text the user typed instead of picking a known dataset. Not yet consumed by any pipeline stage (see T-1304's acceptance).",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "evaluation": {
+      "type": "object",
+      "properties": {
+        "dataset": { "type": "string" },
+        "n_samples": { "type": "integer" },
+        "seq_len": { "type": "integer" },
+        "max_windows": { "type": "integer" },
+        "concurrency": { "type": "array", "items": { "type": "integer" } },
+        "attribution": { "type": "boolean" },
+        "device": {
+          "description": "T-1304: the evaluation device, independent of deploy.device/quant_device -- today's JobSpec has only one shared device field; this is additive and not yet read by any pipeline stage.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "quant_device": {
+      "description": "T-1304: the device the quantization stage itself runs on, independent of evaluation.device. Not yet consumed by any pipeline stage.",
+      "type": "string"
+    },
+    "deploy": {
+      "type": "object",
+      "properties": {
+        "hardware": { "type": "string" },
+        "device": { "type": "string" },
+        "backend": {
+          "description": "T-1304: explicit backend choice (hf_transformers | vllm | sglang | llama.cpp); today's export.formats / deploy.llamacpp / deploy.vllm are set independently of this field.",
+          "type": "string"
+        },
+        "llamacpp": {
+          "type": "object",
+          "properties": { "types": { "type": "array", "items": { "type": "string" } } }
+        },
+        "vllm": {
+          "type": "object",
+          "properties": {
+            "gpu_memory_utilization": { "type": "number" },
+            "lm_eval": {
+              "type": "object",
+              "properties": {
+                "tasks": { "type": "array", "items": { "type": "string" } },
+                "limit": { "type": "integer" },
+                "num_fewshot": { "type": "integer" }
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "export": {
+      "type": "object",
+      "properties": { "formats": { "type": "array", "items": { "type": "string" } } }
+    },
+    "analysis": {
+      "type": "object",
+      "properties": {
+        "sensitivity": { "type": "string" },
+        "sensitivity_windows": { "type": "integer" },
+        "logits_probe": {
+          "type": "object",
+          "properties": { "exact": { "type": "boolean" } }
+        }
+      },
+      "additionalProperties": true
+    },
+    "output_dir": { "type": "string" }
+  },
+  "required": ["model", "quant"],
+  "additionalProperties": true
+}

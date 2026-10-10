@@ -35,6 +35,11 @@ note_missing() { NAMES+=("$1"); STATES+=(SKIP); DETAILS+=("$2 not installed"); }
 # ---------------------------------------------------------------- structure
 run deps "module dependencies" python3 scripts/check_deps.py
 run abi "HAL ABI layout" bash scripts/check_abi.sh
+if python3 -c "import jsonschema" 2>/dev/null; then
+  run schema "example job schema" python3 scripts/validate_job_schema.py
+else
+  note_missing "example job schema" "jsonschema (pip install -e '.[dev]' in python/)"
+fi
 
 # ---------------------------------------------------------------- formatting
 if have clang-format; then

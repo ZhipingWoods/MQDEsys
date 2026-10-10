@@ -167,7 +167,7 @@
 | T-1302 | 算法可插拔性加固 + 第三方接入指南 | P13 | T-0103 | L1（T-0609 的 ADR 部分仍 L3） | TODO |
 | T-1303 | HF 目录后台定时刷新 + 二级分类分组 | P13 | T-0204,T-R25 | L2 | TODO |
 | T-1304 | 新建作业向导重构（五步，领域感知） | P13 | T-1301,T-1303,T-1305,T-0210 | L1 | TODO |
-| T-1305 | JobSpec 正式契约（T-0007 最小切片） | P13 | T-0210 | L2 | TODO |
+| T-1305 | JobSpec 正式契约（T-0007 最小切片） | P13 | T-0210 | L2 | DONE (2026-10-10，见 P13 详情) |
 | T-1306 | "量化与评测"信息架构拆分 | P13 | T-1304 | L1 | TODO |
 | T-1307 | 硬件与后端页面视觉改版 | P13 | T-0306 | L1 | TODO |
 | T-1308 | 多硬件部署/推理/误差对比闭环 | P13 | T-1101,T-1102,T-1103 | L1 | TODO |
@@ -851,9 +851,10 @@
 
 #### T-1305 JobSpec 正式契约（T-0007 最小切片）
 - **依赖**：T-0210 **级别**：L2
-- **产出**：`schemas/job_spec.schema.json`（覆盖 T-1304 向导字段）；前端 `web/src/types/job_spec.ts`；`POST /api/v1/jobs` 加一层 schema 校验（在 `planner::validate_jobspec` 之外，不取代）。
-- **验收**：`examples/jobs/*.yaml` 全部通过；删必填字段的 fixture 被拒绝。
-- **校验**：`python -m jsonschema`，新增 Python/C++ 单测。
+- **产出**：`schemas/job_spec.schema.json`（JSON Schema 2020-12，文档化现有 JobSpec 契约——以 `NewJob.tsx` 实际提交的两种形态和两个真实 `examples/jobs/*.yaml` 为准，不是凭空设计；新增可选 `domain` 字段，枚举 T-1301 的 5 个 id）；`web/src/types/job_spec.ts`（手写 TS 类型，先独立存在，不急着接入 `NewJob.tsx` 的 object literal 构造——那部分马上要被 T-1304 整体重写，提前接等于白接）；`scripts/validate_job_schema.py` + `python/pyproject.toml` 的 `dev` extras 加 `jsonschema`（当成和已有的 pytest/ruff/mypy 同类的纯开发期工具，没有单独走 ADR）。
+- **范围修正（相对最初批准的计划）**：没有给 C++ 服务端加通用 JSON Schema 校验器——那会引入一个新的 C++ 第三方依赖（L3，需要 ADR），本任务没有这个必要；改为直接扩展已有的 `planner::validate_jobspec`（纯 nlohmann::json 手写检查，零新依赖）：新增对 `/domain` 字段的检查——未注册的 domain id 报错；`pipeline_status != "implemented"`（vlm/world/ewm）的 domain 明确拒绝并给出理由，而不是让 `JobRunner` 悄悄用错模块或者深层崩溃。`domain` 字段本身完全可选，省略不报任何问题（向后兼容，不是破坏性变更）。
+- **验收**：`examples/jobs/*.yaml` 全部通过 schema 校验；提交 `domain: vlm` 的作业被 `validate_jobspec` 挡住并给出清晰理由。
+- **校验**：`ctest -R planner_validate_jobspec`（新增 4 个用例，2 处 mutation 验证）；`scripts/validate_job_schema.py`（需要在装了 `jsonschema` 的环境跑，按本项目惯例在 4090 的 conda 环境 `mqde` 里验证，Mac 系统 Python 是 externally-managed，没有为这一步装包）。
 
 #### T-1304 新建作业向导重构（五步，领域感知）
 - **依赖**：T-1301, T-1303, T-1305, T-0210 **级别**：L1
