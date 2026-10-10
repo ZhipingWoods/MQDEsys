@@ -44,9 +44,33 @@ struct BackendProfile {
   int64_t max_batched_tokens = 8192;  // only used by "batched"
 };
 
+// Domain registry (T-1301): the top-level problem domain a JobSpec targets, one data/domains/<id>.yaml per
+// domain. `id` matches modelspec::ModelFamily.modality ("llm" | "vlm" | "vla" | "world") plus any new
+// domains added purely as data (e.g. "ewm", the embodied/action-conditioned world-model variant) without
+// needing a matching ModelFamily yet. This only centralizes domain *metadata* (which recipes/algorithms are
+// relevant, whether a real pipeline exists); it does not replace the finer-grained per-component modality
+// checks already in fit.cpp (vision/audio/tts/mtp capability flags), which are a different, unrelated axis.
+struct Domain {
+  std::string id;
+  std::string display_name;
+  std::vector<std::string> model_families;      // data/model_families/<id> entries this domain covers
+  std::vector<std::string> applicable_recipes;   // data/recipes/<id> entries; empty = no restriction
+  struct ClassicAlgorithm {
+    std::string name, note;
+  };
+  std::vector<ClassicAlgorithm> classic_algorithms;  // reference list (docs/REFERENCES.md-style); an entry
+                                                     // here does not imply it is implemented
+  std::string default_eval_dataset;
+  // "implemented": a real quantization pipeline exists for this domain (see python/mqde/pipeline/*).
+  // "ui_only_pending_backend": the domain is selectable but submitting a job for it is rejected with a
+  // clear reason, not silently accepted.
+  std::string pipeline_status = "ui_only_pending_backend";
+};
+
 Result<Recipe> load_recipe(std::string_view name_or_path);
 Result<HardwareProfile> load_hardware(std::string_view id_or_path);
 Result<BackendProfile> load_backend(std::string_view id_or_path);
+Result<Domain> load_domain(std::string_view id_or_path);
 Result<std::vector<std::string>> list_data_entries(std::string_view sub);  // recipes, hardware_db, ...
 // Finds the hardware_db profile whose match_names occur in a probed device name ("NVIDIA GeForce RTX 4090").
 Result<HardwareProfile> match_hardware(std::string_view device_name);
@@ -163,6 +187,7 @@ std::vector<CurvePoint> memory_vs_images(const modelspec::ModelSpec&, const Reci
 
 Json to_json(const Recipe& r);
 Json to_json(const HardwareProfile& h);
+Json to_json(const Domain& d);
 Json to_json(const Estimate& e);
 Json to_json(const std::vector<CurvePoint>& c);
 

@@ -163,9 +163,18 @@
 | T-1205 | 可观测性（/metrics、可复现重放） | P12 | T-0511 | L1 | PARTIAL (2026-10-09, GET /metrics in Prometheus text exposition format (mqde_uptime_seconds, mqde_jobs_total{state}, mqde_gpu_pool_size, mqde_gpu_busy, mqde_queue_length) from the live JobRunner; verified by hand against a running server (submitted a job, watched FAILED go 0 to 1). Not covered by ctest: serve() blocks forever and has no in-process stop(), so testing it would need a lifecycle refactor that was out of scope here; verified manually instead. `mqde run --reproduce <job_id>` is not started at all: there is no `mqde run` subcommand (jobs are submitted through the server, not executed by the CLI directly), so this needs a real design decision, not just an implementation |
 | T-1206 | 夜间 GPU 回归与性能看板 | P12 | T-0808 | L2 | TODO |
 | T-1207 | v1.0 发布验收 | P12 | 全部 P0–P11 必选任务 | L2 | TODO |
+| T-1301 | 领域（domain）注册表 | P13 | T-0206 | L2 | DOING (2026-10-10，见 P13 详情) |
+| T-1302 | 算法可插拔性加固 + 第三方接入指南 | P13 | T-0103 | L1（T-0609 的 ADR 部分仍 L3） | TODO |
+| T-1303 | HF 目录后台定时刷新 + 二级分类分组 | P13 | T-0204,T-R25 | L2 | TODO |
+| T-1304 | 新建作业向导重构（五步，领域感知） | P13 | T-1301,T-1303,T-1305,T-0210 | L1 | TODO |
+| T-1305 | JobSpec 正式契约（T-0007 最小切片） | P13 | T-0210 | L2 | TODO |
+| T-1306 | "量化与评测"信息架构拆分 | P13 | T-1304 | L1 | TODO |
+| T-1307 | 硬件与后端页面视觉改版 | P13 | T-0306 | L1 | TODO |
+| T-1308 | 多硬件部署/推理/误差对比闭环 | P13 | T-1101,T-1102,T-1103 | L1 | TODO |
 
 > 标注“扩展/实验”的任务（T-0610、T-0706、T-1004、T-1005、T-1103~T-1105）不阻塞 v1.0，其余均为必选。
 > 注意：T-0805 依赖 T-1101（HAL），可在 P8 前提前完成 T-1101。
+> P13 来自用户 2026-10-10 提出的 8 条改进意见（见 docs/PROGRESS.md 对应会话记录及 `/Users/zhipingwu/.claude/plans/abstract-frolicking-sun.md` 计划文件），明确不包含：T-1002/T-1003/T-1005 的真实 pipeline 实现、T-0610 的 QuaRot、T-0609 的 GPTQModel 实际引入（仅 ADR）。
 
 ---
 
@@ -813,6 +822,62 @@
 - **产出**：`CHANGELOG.md` v1.0.0、发布说明、tag `v1.0.0`。
 - **验收**：M0–M7 全部演示场景复现通过；A§11.2 CI 门禁全绿；A§11.4 精度阈值达标；已知问题列表。
 - **校验**：发布检查清单（`docs/guides/release-checklist.md`）逐项勾选。
+
+---
+
+### P13 —— 领域泛化与前端重构
+
+> 来自用户 2026-10-10 提出的 8 条改进意见，完整设计见 `docs/PROGRESS.md` 对应会话记录。阶段顺序建议：
+> T-1301+T-1305（基础）→ T-1303+T-1302（后端数据工程，可并行）→ T-1304+T-1306（前端主体）→ T-1307（视觉，随时可插入）→ T-1308（收尾验证）。
+
+#### T-1301 领域（domain）注册表
+- **依赖**：T-0206 **级别**：L2
+- **产出**：`data/domains/{llm,vla,vlm,world,ewm}.yaml`（每个领域一个文件：`id, display_name, model_families, applicable_recipes, classic_algorithms[{name,note}], default_eval_dataset, pipeline_status`）；C++ `estimator::Domain` + `load_domain()`（`cpp/include/mqde/estimator/estimator.h` + `cpp/src/estimator/domain.cpp`，与 `load_recipe`/`load_hardware` 同一模式）；`GET /api/v1/domains`。`ewm`（具身世界模型，带动作条件，与通用 `world` 不同）与 `world` 均标注 `pipeline_status: ui_only_pending_backend`（没有编造不存在的 pipeline）。
+- **验收**：新增一个领域只需加一个 yaml 文件，不需要改 C++ 分支逻辑或前端硬编码开关。
+- **校验**：`ctest -R estimator_domain`，7 个测试，3 处 mutation 验证（pipeline_status 校验、classic_algorithms 解析、list_data_entries 覆盖所有 5 个文件）；手动起服务验证 `GET /api/v1/domains` 返回全部 5 个领域。
+- **范围说明**：本任务只建立领域元数据登记这个槛；不改动 `cpp/src/fit/fit.cpp` 里已有的 `modality == "vla"/"vlm"` 能力推断分支（那是另一个更细粒度的"组件 modality → 能力标记"逻辑，和这里的顶层领域注册表是两件事，强行合并风险大于收益）；不建 EWM/World 的真实 Python pipeline（见 T-1002/T-1003/T-1005）。
+
+#### T-1302 算法可插拔性加固 + 第三方接入指南
+- **依赖**：T-0103 **级别**：L1（T-0609 的 ADR 起草部分仍 L3）
+- **产出**：`scripts/check_algo_registry_sync.py`（校验 `python/mqde/quant/algorithms.py` 的 `@register` 名称集合与 `data/algorithms.yaml` 的 key 集合双向一致，接入 `check_all.sh`）；补齐 `docs/guides/add-algorithm.md`、`docs/guides/add-backend.md`（`AGENTS.md` §8 已引用但不存在）；为 T-0609 起草 `docs/adr/0006-external-algorithm-adapters.md`（状态 Proposed，写完即停，等待批准，不实现代码）。
+- **验收**：故意加一个不同步的 `@register` 能被脚本抓到；照着新 guide 从零接入一个假算法。
+- **校验**：`python scripts/check_algo_registry_sync.py`（正反例）。
+
+#### T-1303 HF 目录后台定时刷新 + 二级分类分组
+- **依赖**：T-0204, T-R25 **级别**：L2
+- **产出**：`mqde serve` 内后台刷新线程（`JobRunner::loop()` 模式，默认 24h，增量合并，失败只记日志不崩服务）；`CatalogEntry` 新增 `category`/`family_group` 两级分类字段（确定性规则推导，不是 ML 分类）；`GET /api/v1/catalog` 响应加 `refresh_interval_s`/`last_refresh_ok`/`last_refresh_at`。
+- **验收**：改 `data/models/catalog.json` mtime 模拟触发，确认增量合并不丢数据；200 条真实数据跑分类，人工抽查 10 条。
+- **校验**：`ctest -R hub_catalog_refresh`（stub server），mutation：合并退化成整表覆盖必须被抓到。
+
+#### T-1305 JobSpec 正式契约（T-0007 最小切片）
+- **依赖**：T-0210 **级别**：L2
+- **产出**：`schemas/job_spec.schema.json`（覆盖 T-1304 向导字段）；前端 `web/src/types/job_spec.ts`；`POST /api/v1/jobs` 加一层 schema 校验（在 `planner::validate_jobspec` 之外，不取代）。
+- **验收**：`examples/jobs/*.yaml` 全部通过；删必填字段的 fixture 被拒绝。
+- **校验**：`python -m jsonschema`，新增 Python/C++ 单测。
+
+#### T-1304 新建作业向导重构（五步，领域感知）
+- **依赖**：T-1301, T-1303, T-1305, T-0210 **级别**：L1
+- **产出**：`NewJob.tsx` 从单页长表单改为五步向导（领域+模型 → 量化算法 → 配方+校准 → 评估数据+设备 → 部署与导出）；模型选择接入 T-1303 的目录浏览（保留自定义路径兜底）；量化/评估设备拆成两个独立选择器；"不量化/保持原始精度"与"仅量化不评测"两个显式开关；选后端自动从扩展后的 `data/compat/matrix.yaml`（新增 llama.cpp/GGUF、sglang 条目）建议导出格式。
+- **验收**：LLM/VLA 各走一遍真实提交，JobSpec 字段与重构前等价；选 llama.cpp 后端自动勾好 GGUF 格式。
+- **校验**：新 Playwright e2e，至少 2 处 mutation 验证变红。
+
+#### T-1306 "量化与评测"信息架构拆分
+- **依赖**：T-1304 **级别**：L1
+- **产出**：把"误差分析"（T-0903）、"优化建议"（T-0904）从作业详情页深处提升为独立一级导航条目。
+- **验收**：任意作业详情页一步跳到带上下文的独立"误差分析"页。
+- **校验**：回归 `layer_detail.mjs`/`attribution_highlight.mjs`/`clone_from_suggestion.mjs`。
+
+#### T-1307 硬件与后端页面视觉改版
+- **依赖**：T-0306 **级别**：L1
+- **产出**：`web/src/assets/vendors/*.svg`（通用占位图标，非真实厂商 LOGO，用户已确认此方案）；`Hardware.tsx` 三张表格加图标列；硬件画像条目点击打开详情视图。
+- **验收**：三张表格可见图标；详情视图展示比表格行更完整的信息。
+- **校验**：Playwright 扩展 `hardware_plugin.mjs`。
+
+#### T-1308 多硬件部署/推理/误差对比闭环
+- **依赖**：T-1101, T-1102, T-1103 **级别**：L1
+- **产出**：真实跑通同一量化模型在 ≥2 种硬件上的部署+推理；报告/`Compare.tsx` 新增按硬件分面的吞吐/误差对比维度。
+- **验收**：真实数据证明同一配方在 4090 和 Mac 上能在一张表里对比。
+- **校验**：手工集成验证（同 T-0701/T-0805 的既有做法）+ 数据聚合逻辑单测。
 
 ---
 

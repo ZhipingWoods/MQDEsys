@@ -1,0 +1,15 @@
+# T-1301: top-level domain registry. id must match modelspec::ModelFamily.modality for families this
+# domain covers (see cpp/include/mqde/modelspec/model_spec.h).
+id: llm
+display_name: LLM（纯语言模型）
+model_families: [generic_decoder]
+applicable_recipes: []  # empty = no domain-specific restriction today; every data/recipes/*.yaml applies
+classic_algorithms:
+  - name: rtn
+    note: round-to-nearest baseline, no calibration needed (implemented, python/mqde/quant/algorithms.py)
+  - name: gptq
+    note: per-layer OBS-style reconstruction (implemented, T-0602)
+  - name: awq
+    note: activation-aware per-channel scaling (implemented, T-0601)
+default_eval_dataset: wikitext2
+pipeline_status: implemented  # python/mqde/pipeline/llm_job.py

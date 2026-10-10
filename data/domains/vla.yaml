@@ -1,0 +1,13 @@
+id: vla
+display_name: VLA（视觉-语言-动作）
+model_families: [minicpm_vla]
+applicable_recipes: []
+classic_algorithms:
+  - name: rtn
+    note: used today on the language backbone and vision tower; action head kept FP by default (implemented, python/mqde/models/minicpm_vla.py)
+  - name: gptq
+    note: applied to the language backbone component only (implemented, T-0602, exercised via T-1004)
+  - name: awq
+    note: applied to the language backbone component only (implemented, T-0601)
+default_eval_dataset: synthetic
+pipeline_status: implemented  # python/mqde/pipeline/vla_job.py

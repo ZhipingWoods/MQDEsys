@@ -1,0 +1,17 @@
+# Embodied World Model (EWM): action-conditioned world/state prediction for robotics, distinct from the
+# generic "world" domain -- it is conditioned on an agent's actions rather than predicting unconditioned
+# video continuations. Shares the same underlying DiT-style numerics as `world` but needs its own entry
+# because calibration/evaluation data and action-conditioning are domain-specific. No model_families entry
+# or python pipeline exists yet; this is a placeholder so the domain is selectable in the UI (T-1304) and
+# clearly marked as not yet backed by a real pipeline, rather than silently absent.
+id: ewm
+display_name: EWM（具身世界模型，动作条件）
+model_families: []
+applicable_recipes: []
+classic_algorithms:
+  - name: ptq-diffusion
+    note: >-
+      reference only, same literature family as `world`; action-conditioning variant not implemented in
+      this repo
+default_eval_dataset: ""
+pipeline_status: ui_only_pending_backend

@@ -180,6 +180,20 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-10（再续） · Claude · 用户提出 8 条改进意见 → 规划为 P13（T-1301~T-1308），开始 T-1301
+
+用户给了一批体量很大的改进意见（HF 目录定时刷新+分类、按领域的量化参数面板、第三方算法可插拔、新建作业流程重排、"量化与评测"页面拆分、硬件页视觉改版、多硬件对比闭环），明确要求"规划一下，然后逐项完成"。用了一次 plan mode：先并行派 3 个 Explore agent 摸清现状（前端 NewJob/Job/Hardware 现状、hub/catalog+注册表模式+数据契约现状、TASKS.md 里已有的相关任务），确认了几个关键缺口（`NewJob.tsx` 是固定顺序单页表单不是真向导；HF 目录零后台刷新机制；`data/algorithms.yaml` 和 Python `ALGO_REGISTRY` 两份手动维护无同步检查；C++ `Registry<Base>` 零生产调用点；硬件页零图片）。用 `AskUserQuestion` 确认了两处真正无法猜的点：**EWM = 具身世界模型**（带动作条件的机器人变体，与通用 World Model 不同，而不是 WM 的重复项）；硬件页图片**先用通用占位图标**（非任何公司真实 LOGO，用户以后自己替换真实素材）。
+
+规划结果：8 条意见映射为新的 **P13** 一节，`T-1301`–`T-1308`（完整设计见 `docs/TASKS.md` P13 详情区和 `/Users/zhipingwu/.claude/plans/abstract-frolicking-sun.md`），建议阶段顺序：基础（T-1301 领域注册表 + T-1305 JobSpec 契约）→ 后端数据工程（T-1303 目录刷新 + T-1302 可插拔加固）→ 前端主体（T-1304 五步向导 + T-1306 导航拆分）→ 视觉（T-1307）→ 收尾验证（T-1308）。明确登记"本批次不做"：T-1002/T-1003/T-1005 的真实 pipeline、T-0610 的 QuaRot、T-0609 的 GPTQModel 实际引入（仍 L3，只起草 ADR-0006）——这些都已有自己的任务号，不会被当作这批的副作用抄近路实现。
+
+**T-1301（领域注册表）本次完成**：`data/domains/{llm,vla,vlm,world,ewm}.yaml`（每个领域登记 model_families/classic_algorithms/pipeline_status，`world`/`ewm` 如实标注 `ui_only_pending_backend`，不编造不存在的 pipeline）；C++ `estimator::Domain` + `load_domain()`（`cpp/src/estimator/domain.cpp`，和 `load_recipe`/`load_hardware`/`load_backend` 完全同一模式：`resolve_data_file`+`list_data_entries`，零新增模块依赖边）；`GET /api/v1/domains`。
+
+发现并纠正了计划里的一处细节：`modelspec::ModelFamily.modality` 的既有代码注释写的是 `llm | vlm | vla | world`（不是 "wm"），批准的计划草稿里写的是 "wm" —— 实现时改用 `world` 以匹配已有约定，没有引入和既有代码不一致的新缩写。另外 L2/L1 分级核对了 `docs/STRUCTURE.md`：`data/model_families`/`data/recipes`/`data/hardware_db` 本身是 L1，但新增 `cpp/include/**` 公共头文件这条规则本身就是 L2，所以 T-1301 维持计划里写的 L2（原因是新头文件，不是数据文件本身）。
+
+- **测试**：`cpp/tests/unit/estimator_domain_test.cpp`，7 个用例，加载真实的 `data/domains/*.yaml`（不是合成 fixture，和 `estimator_test.cpp` 一贯做法一致）。3 处破坏性验证全部正确变红：`pipeline_status` 校验逻辑删掉、`classic_algorithms` 的 push_back 删掉（两个测试同时抓到，其中一个是 `.at()` 越界）、都恢复后验证全绿。
+- **校验**：`ctest --test-dir build/mac` 268/268；`cmake --build build/mac` 整个项目无警告；`scripts/check_deps.py` 101 files 0 violation；手动起一个本地 server 实测 `curl /api/v1/domains` 返回全部 5 个领域、字段齐全。4090 验证见下一条。
+- **未完成 / 下一步**：T-1305（JobSpec 契约）按计划下一个做；T-1302/T-1303/T-1304/T-1306/T-1307/T-1308 均为 TODO，状态登记在 TASKS.md P13。
+
 ### 2026-10-10（续） · Claude · T-0505 并发分块下载（顺手让 ThreadPool 第一次被真正用上）
 
 继续扫 TASKS.md 里标了"未完成"的小块。T-0505 留的口子之一是"并发分块下载"没做；T-0103 留的口子是 `ThreadPool`/`CancelToken` 写完之后没人用。这两个凑在一起正好是一个任务：给 `hub::download_file` 加一个并发版本。

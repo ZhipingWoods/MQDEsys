@@ -1,0 +1,13 @@
+id: vlm
+display_name: VLM（视觉-语言）
+model_families: [qwen3_5]
+applicable_recipes: []
+classic_algorithms:
+  - name: rtn
+    note: vision tower typically kept FP or RTN-only; reference only, no VLM pipeline exists yet (see T-1002)
+  - name: gptq
+    note: would apply to the language backbone component only; reference only, not wired for VLM yet (T-1002)
+  - name: awq
+    note: reference only, not wired for VLM yet (T-1002)
+default_eval_dataset: ""
+pipeline_status: ui_only_pending_backend  # no python/mqde/pipeline/vlm_job.py exists; see T-1002

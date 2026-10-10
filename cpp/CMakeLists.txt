@@ -61,7 +61,7 @@ target_compile_options(mqde_quant PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-ffp-co
 
 # ---- estimator (memory / KV / state / concurrency) ----
 add_library(mqde_estimator STATIC src/estimator/recipe.cpp src/estimator/hardware.cpp
-                                  src/estimator/estimator.cpp)
+                                  src/estimator/domain.cpp src/estimator/estimator.cpp)
 target_link_libraries(mqde_estimator PUBLIC mqde_modelspec mqde_quant)
 
 # ---- fit (llmfit-style deployment pre-evaluation) ----
@@ -131,6 +131,7 @@ if(MQDE_BUILD_TESTS)
     tests/unit/planner_validate_test.cpp
     tests/unit/feedback_test.cpp
     tests/unit/job_runner_test.cpp
+    tests/unit/estimator_domain_test.cpp
     tests/unit/modelspec_test.cpp
     tests/unit/quant_test.cpp
     tests/unit/pack_test.cpp

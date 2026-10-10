@@ -1,0 +1,14 @@
+# World model (generic video/world generation, DiT-based). No data/model_families/*.yaml entry exists yet
+# for this domain (see T-1005) -- model_families is intentionally empty rather than pointing at something
+# that does not exist.
+id: world
+display_name: World Model（通用世界模型 / 视频生成）
+model_families: []
+applicable_recipes: []
+classic_algorithms:
+  - name: ptq-diffusion
+    note: >-
+      reference only (literature family: PTQ4DM / Q-Diffusion style post-training quantization for
+      diffusion/video models); not implemented in this repo
+default_eval_dataset: ""
+pipeline_status: ui_only_pending_backend  # no python pipeline exists; see T-1005
