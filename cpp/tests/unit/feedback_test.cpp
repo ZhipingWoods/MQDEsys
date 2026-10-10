@@ -126,7 +126,9 @@ TEST(feedback_calibrate, a_memory_bound_decode_measurement_updates_eta_bw_only) 
                                    p);
   ASSERT_EQ(truth.decode_bound, "memory")
       << "the test needs a memory-bound decode to exercise eta_bw inference";
-  auto r = calibrate(store, kKey, defaults_cal(be), e, hw, be, p, Observation{.tpot_ms = truth.tpot_ms});
+  auto r =
+      calibrate(store, kKey, defaults_cal(be), e, hw, be, p,
+                Observation{.peak_bytes = std::nullopt, .ttft_ms = std::nullopt, .tpot_ms = truth.tpot_ms});
   ASSERT_TRUE(r) << r.error().message;
   EXPECT_EQ(r->applied, (std::vector<std::string>{"eta_bw"}));
   EXPECT_TRUE(r->skipped.empty()) << (r->skipped.empty() ? std::string() : r->skipped[0]);
@@ -147,7 +149,8 @@ TEST(feedback_calibrate,
   const auto e = est_of(dense(3), hw, be, 16, 1);
   const auto pr = estimate_perf(e, hw, be, p);
   ASSERT_EQ(pr.prefill_bound, "memory");
-  auto r = calibrate(store, kKey, defaults_cal(be), e, hw, be, p, Observation{.ttft_ms = pr.ttft_ms});
+  auto r = calibrate(store, kKey, defaults_cal(be), e, hw, be, p,
+                     Observation{.peak_bytes = std::nullopt, .ttft_ms = pr.ttft_ms, .tpot_ms = std::nullopt});
   ASSERT_TRUE(r) << r.error().message;
   EXPECT_TRUE(r->applied.empty());
   ASSERT_EQ(r->skipped.size(), 1u);
@@ -169,7 +172,8 @@ TEST(feedback_calibrate, a_compute_bound_decode_measurement_skips_eta_bw_with_a_
   const auto e = est_of(dense(20.0), weak, be, 128, 2048);
   const auto pr = estimate_perf(e, weak, be, p);
   ASSERT_EQ(pr.decode_bound, "compute");
-  auto r = calibrate(store, kKey, defaults_cal(be), e, weak, be, p, Observation{.tpot_ms = pr.tpot_ms});
+  auto r = calibrate(store, kKey, defaults_cal(be), e, weak, be, p,
+                     Observation{.peak_bytes = std::nullopt, .ttft_ms = std::nullopt, .tpot_ms = pr.tpot_ms});
   ASSERT_TRUE(r) << r.error().message;
   EXPECT_TRUE(r->applied.empty());
   ASSERT_EQ(r->skipped.size(), 1u);
@@ -186,8 +190,9 @@ TEST(feedback_calibrate, overhead_bytes_is_inferred_from_a_measured_peak) {
   const auto e = est_of(dense(3), hw, be, 2048, 2);
   const double modelled = static_cast<double>(e.weights_bytes + e.kv_bytes + e.activation_bytes);
   const double true_overhead = 700e6;
-  auto r = calibrate(store, kKey, defaults_cal(be), e, hw, be, {2048, 64},
-                     Observation{.peak_bytes = modelled + true_overhead});
+  auto r = calibrate(
+      store, kKey, defaults_cal(be), e, hw, be, {2048, 64},
+      Observation{.peak_bytes = modelled + true_overhead, .ttft_ms = std::nullopt, .tpot_ms = std::nullopt});
   ASSERT_TRUE(r) << r.error().message;
   EXPECT_EQ(r->applied, (std::vector<std::string>{"overhead_bytes"}));
   EXPECT_NEAR(r->calibration.overhead_bytes,
@@ -220,8 +225,9 @@ TEST(
     const auto measured = estimate_perf(e, hw, truth, p);
     ASSERT_EQ(measured.decode_bound, "memory") << params_b;
     ASSERT_EQ(measured.prefill_bound, "compute") << params_b;
-    auto r = calibrate(store, kKey, defaults_cal(be), e, hw, be, p,
-                       Observation{.ttft_ms = measured.ttft_ms, .tpot_ms = measured.tpot_ms});
+    auto r = calibrate(
+        store, kKey, defaults_cal(be), e, hw, be, p,
+        Observation{.peak_bytes = std::nullopt, .ttft_ms = measured.ttft_ms, .tpot_ms = measured.tpot_ms});
     ASSERT_TRUE(r) << r.error().message;
     EXPECT_EQ(r->applied.size(), 2u) << "both eta_bw and mfu should be inferable at this context/concurrency";
     cal = r->calibration;
@@ -273,8 +279,9 @@ TEST(feedback_calibrate, propagates_a_store_error_instead_of_silently_losing_the
   ASSERT_TRUE(bad_mfu) << bad_mfu.error().message;
   ASSERT_GT(*bad_mfu, 1.5)
       << "the fixture does not actually produce an out-of-range value; adjust the factor above";
-  auto r = calibrate(store, kKey, defaults_cal(be), e, hw, be, p,
-                     Observation{.ttft_ms = implausibly_fast_ttft_ms});
+  auto r = calibrate(
+      store, kKey, defaults_cal(be), e, hw, be, p,
+      Observation{.peak_bytes = std::nullopt, .ttft_ms = implausibly_fast_ttft_ms, .tpot_ms = std::nullopt});
   ASSERT_FALSE(r) << "an inferred mfu far outside (0, 1.5] must surface as an error, not vanish";
   EXPECT_NE(r.error().message.find("mfu"), std::string::npos) << r.error().message;
 }
