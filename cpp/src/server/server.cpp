@@ -1010,13 +1010,15 @@ Result<void> serve(const ServerOptions& o) {
     }
     std::thread([d, files = g->files] {
       d->set("running");
+      constexpr int kDownloadChunks = 4;  // download_file_chunked falls back to a single stream on its own
+                                          // for small files or a server that does not support Range
       for (const auto& f : files) {
         const uint64_t base = d->done.load();
-        auto r = hub::download_file({}, d->repo, f.path, std::filesystem::path(d->dir) / f.path,
-                                    [&](uint64_t cur, uint64_t) {
-                                      d->done = base + cur;
-                                      return !d->cancel.load();
-                                    });
+        auto r = hub::download_file_chunked({}, d->repo, f.path, std::filesystem::path(d->dir) / f.path,
+                                            kDownloadChunks, [&](uint64_t cur, uint64_t) {
+                                              d->done = base + cur;
+                                              return !d->cancel.load();
+                                            });
         if (!r) return d->set(d->cancel ? "cancelled" : "failed", r.error().message);
         d->done = base + *r;
         ++d->files_done;

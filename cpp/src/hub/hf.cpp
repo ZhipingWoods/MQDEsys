@@ -1,8 +1,10 @@
 #include "mqde/hub/hf.h"
 
 #include "mqde/common/hash.h"
+#include "mqde/common/thread_pool.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
@@ -247,6 +249,155 @@ Result<uint64_t> download_file(const HfOptions& o, const std::string& repo, cons
     return final_size;
   }
   return make_error(Errc::kIo, "download of {}/{} failed after restarting", repo, file);
+}
+
+namespace {
+
+// Below this size per chunk it is not worth paying for extra connections and seeks.
+constexpr uint64_t kMinBytesPerChunk = 256ull << 10;
+
+struct RangeProbe {
+  bool range_ok = false;
+  uint64_t total = 0;
+  std::string sha256_hex;  // from X-Linked-ETag, empty if the server did not send one
+};
+
+// A tiny (1-byte) Range request that reads only the response headers: whether the server honours Range
+// (206 with Content-Range) and the file's total size, without transferring any of the body.
+Result<RangeProbe> probe_range(httplib::Client& cli, const std::string& path) {
+  RangeProbe info;
+  bool got_headers = false;
+  auto r = cli.Get(
+      path, httplib::Headers{httplib::make_range_header({{0, 0}})},
+      [&](const httplib::Response& resp) {
+        got_headers = true;
+        info.range_ok = resp.status == 206;
+        std::string etag = resp.get_header_value("X-Linked-ETag");
+        etag.erase(std::remove(etag.begin(), etag.end(), '"'), etag.end());
+        if (is_hex64(etag)) info.sha256_hex = etag;
+        if (info.range_ok) {
+          const std::string cr = resp.get_header_value("Content-Range");
+          if (const auto slash = cr.rfind('/'); slash != std::string::npos)
+            info.total = std::strtoull(cr.c_str() + slash + 1, nullptr, 10);
+        } else if (resp.status == 200) {
+          info.total = std::strtoull(resp.get_header_value("Content-Length").c_str(), nullptr, 10);
+        }
+        return false;  // headers are all we need; never read the body
+      },
+      [](const char*, size_t) { return false; });
+  if (!got_headers) return std::unexpected(http_error(r, path));
+  return info;
+}
+
+// Fetches [start, end] (inclusive) into `part` at the matching offset. Retries once on a transient
+// failure; on any other failure sets *cancel so sibling chunks stop promptly.
+Result<void> fetch_range(const HfOptions& o, const std::string& repo, const std::string& file,
+                        const fs::path& part, uint64_t start, uint64_t end, std::atomic<uint64_t>& done,
+                        uint64_t total, const std::function<bool(uint64_t, uint64_t)>& progress,
+                        std::mutex& progress_mu, CancelToken cancel) {
+  std::fstream out(part, std::ios::binary | std::ios::in | std::ios::out);
+  if (!out) return make_error(Errc::kIo, "cannot open {} for chunk {}-{}", part.string(), start, end);
+  out.seekp(static_cast<std::streamoff>(start));
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    auto cli = make_client(o, o.endpoint);
+    cli->set_read_timeout(std::max(o.timeout_s, 120), 0);
+    bool ok = false;
+    bool aborted = false;
+    uint64_t got = 0;
+    auto r = cli->Get(
+        resolve_path(repo, file), httplib::Headers{httplib::make_range_header({{start, end}})},
+        [&](const httplib::Response& resp) {
+          ok = resp.status == 206;
+          return ok;
+        },
+        [&](const char* data, size_t n) {
+          if (cancel.cancelled()) return false;
+          out.seekp(static_cast<std::streamoff>(start + got));
+          out.write(data, static_cast<std::streamsize>(n));
+          if (!out) return false;
+          got += n;
+          const uint64_t now = done.fetch_add(n, std::memory_order_relaxed) + n;
+          if (progress) {
+            std::lock_guard lk(progress_mu);
+            if (!progress(now, total)) aborted = true;
+          }
+          return !aborted;
+        });
+    if (aborted) {
+      cancel.cancel();
+      return make_error(Errc::kCancelled, "download of {} cancelled", file);
+    }
+    if (ok && r && r->status == 206 && got == end - start + 1) return {};
+    if (attempt == 0) continue;  // one retry on a transient mid-chunk failure
+    cancel.cancel();
+    return r ? std::unexpected(http_error(r, fmt::format("{}/{} range {}-{}", repo, file, start, end)))
+             : make_error(Errc::kExternal, "{}/{} range {}-{}: incomplete chunk ({} of {} bytes)", repo,
+                         file, start, end, got, end - start + 1);
+  }
+  cancel.cancel();
+  return make_error(Errc::kExternal, "{}/{} range {}-{}: failed", repo, file, start, end);
+}
+
+}  // namespace
+
+Result<uint64_t> download_file_chunked(const HfOptions& o, const std::string& repo, const std::string& file,
+                                       const fs::path& dest, int num_chunks,
+                                       const std::function<bool(uint64_t, uint64_t)>& progress) {
+  if (num_chunks <= 1) return download_file(o, repo, file, dest, progress);
+  auto probe_cli = make_client(o, o.endpoint);
+  MQDE_ASSIGN_OR_RETURN(RangeProbe probe, probe_range(*probe_cli, resolve_path(repo, file)));
+  if (!probe.range_ok || probe.total < static_cast<uint64_t>(num_chunks) * kMinBytesPerChunk)
+    return download_file(o, repo, file, dest, progress);  // not worth splitting, or can't be split
+
+  std::error_code ec;
+  fs::create_directories(dest.parent_path(), ec);
+  const fs::path part = dest.string() + ".part";
+  {
+    std::ofstream presize(part, std::ios::binary | std::ios::trunc);
+    if (!presize) return make_error(Errc::kIo, "cannot create {}", part.string());
+    presize.seekp(static_cast<std::streamoff>(probe.total - 1));
+    presize.put('\0');
+  }
+
+  const uint64_t total = probe.total;
+  const uint64_t per_chunk = total / static_cast<uint64_t>(num_chunks);
+  ThreadPool pool(static_cast<size_t>(num_chunks));
+  CancelToken cancel;
+  std::atomic<uint64_t> done{0};
+  std::mutex progress_mu;
+  std::vector<std::future<Result<void>>> futs;
+  for (int i = 0; i < num_chunks; ++i) {
+    const uint64_t start = static_cast<uint64_t>(i) * per_chunk;
+    const uint64_t end = (i == num_chunks - 1) ? total - 1 : start + per_chunk - 1;
+    futs.push_back(pool.submit([&, start, end] {
+      return fetch_range(o, repo, file, part, start, end, done, total, progress, progress_mu, cancel);
+    }));
+  }
+  Result<void> first_error;
+  bool has_error = false;
+  for (auto& f : futs) {
+    auto r = f.get();
+    if (!r && !has_error) {
+      first_error = r;
+      has_error = true;
+    }
+  }
+  if (has_error) {
+    fs::remove(part, ec);
+    return std::unexpected(first_error.error());
+  }
+  if (!probe.sha256_hex.empty()) {
+    auto have = sha256_file(part);
+    if (!have) return std::unexpected(have.error());
+    if (*have != probe.sha256_hex) {
+      fs::remove(part, ec);
+      return make_error(Errc::kIo, "{}/{}: sha256 mismatch (expected {}, got {}); partial file removed", repo,
+                        file, probe.sha256_hex, *have);
+    }
+  }
+  fs::rename(part, dest, ec);
+  if (ec) return make_error(Errc::kIo, "rename {} -> {}: {}", part.string(), dest.string(), ec.message());
+  return total;
 }
 
 // ---- safetensors headers over HTTP Range ----

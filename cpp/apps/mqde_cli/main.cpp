@@ -547,12 +547,15 @@ int cmd_download(const mqde::hub::HfOptions& ho, const DownloadArgs& a, bool jso
     fmt::print(stderr, "note: nothing fits {} — downloading the smallest group ({})\n", a.budget, g->key);
   const auto dir = std::filesystem::path(a.output_dir) / repo.substr(repo.find('/') + 1);
   uint64_t done = 0;
+  constexpr int kDownloadChunks = 4;  // download_file_chunked falls back to a single stream on its own for
+                                      // small files or a server that does not support Range
   for (const auto& f : g->files) {
-    auto r = mqde::hub::download_file(ho, repo, f.path, dir / f.path, [&](uint64_t cur, uint64_t) {
-      fmt::print(stderr, "\r{} / {}  {:<40}", format_bytes(done + cur), format_bytes(g->bytes),
-                 f.path.substr(0, 40));
-      return true;
-    });
+    auto r = mqde::hub::download_file_chunked(
+        ho, repo, f.path, dir / f.path, kDownloadChunks, [&](uint64_t cur, uint64_t) {
+          fmt::print(stderr, "\r{} / {}  {:<40}", format_bytes(done + cur), format_bytes(g->bytes),
+                     f.path.substr(0, 40));
+          return true;
+        });
     if (!r) {
       fmt::print(stderr, "\n");
       return fail(r.error());

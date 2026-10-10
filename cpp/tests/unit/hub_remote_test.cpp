@@ -167,6 +167,7 @@ struct DlStub {
   std::string etag;                 // sent as X-Linked-ETag when not empty
   bool honor_range = true;          // false: always answer 200 with the full body
   std::atomic<int> drop_after{-1};  // >= 0: send this many bytes then cut the connection (once)
+  std::atomic<int> always_drop_after{-1};  // like drop_after, but every request, not just the first
   std::atomic<int> requests{0};
   std::atomic<long long> first_range{-1};
   std::atomic<uint64_t> bytes_sent{0};
@@ -178,7 +179,14 @@ struct DlStub {
         const_cast<httplib::Request&>(req).ranges.clear();  // behave like a server without Range support
       if (!req.ranges.empty()) first_range = static_cast<long long>(req.ranges[0].first);
       if (!etag.empty()) res.set_header("X-Linked-ETag", "\"" + etag + "\"");
-      const int cut = drop_after.exchange(-1);
+      // A 1-byte Range probe (bytes=0-0, used by download_file_chunked's size/Range-support check) only
+      // reads headers; it must not consume the one-shot drop_after meant for a real chunk's data transfer.
+      const bool is_probe = req.ranges.size() == 1 && req.ranges[0].first == 0 && req.ranges[0].second == 0;
+      const int one_shot_cut = is_probe ? -1 : drop_after.exchange(-1);
+      const int persistent_cut = always_drop_after.load();
+      const int cut = one_shot_cut >= 0           ? one_shot_cut
+                     : persistent_cut >= 0 && !is_probe ? persistent_cut
+                                                        : -1;
       auto delivered = std::make_shared<size_t>(0);
       // httplib turns this into 200 or 206 and calls the provider with absolute offsets inside the requested
       // range
@@ -336,4 +344,75 @@ TEST(hub_download, cancelling_keeps_the_partial_file_for_a_later_resume) {
   EXPECT_EQ(r.error().code, Errc::kCancelled);
   EXPECT_TRUE(std::filesystem::exists(d / "w.bin.part"));
   EXPECT_FALSE(std::filesystem::exists(d / "w.bin"));
+}
+
+// ---- download_file_chunked (T-0505 concurrent chunked download) ----
+
+TEST(hub_download_chunked, reassembles_the_exact_bytes_from_several_concurrent_range_requests) {
+  DlStub s;
+  const auto d = tmpdir("chunked_ok");
+  std::atomic<uint64_t> last_done{0}, last_total{0};
+  auto n = download_file_chunked(s.opts(), "org/m", "w.bin", d / "w.bin", 4,
+                                 [&](uint64_t cur, uint64_t total) {
+                                   last_done = cur;
+                                   last_total = total;
+                                   return true;
+                                 });
+  ASSERT_TRUE(n) << n.error().message;
+  EXPECT_EQ(*n, s.blob.size());
+  EXPECT_EQ(slurp(d / "w.bin"), s.blob) << "every byte must land at the right offset, not just the right count";
+  EXPECT_FALSE(std::filesystem::exists(d / "w.bin.part"));
+  EXPECT_EQ(last_total.load(), s.blob.size());
+  EXPECT_EQ(last_done.load(), s.blob.size()) << "progress must reach the full size, summed across chunks";
+  EXPECT_GE(s.requests.load(), 4) << "at least one request per chunk (plus the size probe)";
+}
+
+TEST(hub_download_chunked, one_chunk_behaves_like_a_plain_download) {
+  DlStub s;
+  const auto d = tmpdir("chunked_one");
+  auto n = download_file_chunked(s.opts(), "org/m", "w.bin", d / "w.bin", 1);
+  ASSERT_TRUE(n) << n.error().message;
+  EXPECT_EQ(slurp(d / "w.bin"), s.blob);
+}
+
+TEST(hub_download_chunked, falls_back_to_a_single_stream_when_the_server_ignores_range) {
+  DlStub s;
+  s.honor_range = false;
+  const auto d = tmpdir("chunked_fallback");
+  auto n = download_file_chunked(s.opts(), "org/m", "w.bin", d / "w.bin", 4);
+  ASSERT_TRUE(n) << n.error().message;
+  EXPECT_EQ(slurp(d / "w.bin"), s.blob);
+}
+
+TEST(hub_download_chunked, checksum_is_verified_over_the_whole_reassembled_file) {
+  DlStub s;
+  s.etag = sha256_hex(s.blob);
+  const auto d = tmpdir("chunked_sha_ok");
+  ASSERT_TRUE(download_file_chunked(s.opts(), "org/m", "w.bin", d / "w.bin", 4));
+  s.etag = std::string(64, 'a');  // wrong
+  const auto d2 = tmpdir("chunked_sha_bad");
+  auto bad = download_file_chunked(s.opts(), "org/m", "w.bin", d2 / "w.bin", 4);
+  ASSERT_FALSE(bad);
+  EXPECT_NE(bad.error().message.find("sha256 mismatch"), std::string::npos) << bad.error().message;
+  EXPECT_FALSE(std::filesystem::exists(d2 / "w.bin"));
+}
+
+TEST(hub_download_chunked, a_one_shot_connection_drop_on_one_chunk_is_retried_and_still_succeeds) {
+  DlStub s;
+  s.drop_after = 1000;  // whichever chunk's request happens to arrive first is cut short, once
+  const auto d = tmpdir("chunked_drop_once");
+  auto r = download_file_chunked(s.opts(), "org/m", "w.bin", d / "w.bin", 4);
+  ASSERT_TRUE(r) << r.error().message;
+  EXPECT_EQ(slurp(d / "w.bin"), s.blob) << "the cut chunk's own retry must recover it, like a single-stream "
+                                       "download recovers from one dropped connection";
+}
+
+TEST(hub_download_chunked, a_persistent_range_failure_fails_the_whole_download_and_removes_the_partial_file) {
+  DlStub s;
+  s.always_drop_after = 1000;  // every request for this file is cut short, not just the first -- no retry helps
+  const auto d = tmpdir("chunked_drop_persistent");
+  auto r = download_file_chunked(s.opts(), "org/m", "w.bin", d / "w.bin", 4);
+  ASSERT_FALSE(r) << "a chunk that can never complete must not be silently reported as success";
+  EXPECT_FALSE(std::filesystem::exists(d / "w.bin"));
+  EXPECT_FALSE(std::filesystem::exists(d / "w.bin.part")) << "the broken partial file must not be left behind";
 }

@@ -78,6 +78,17 @@ Result<uint64_t> download_file(const HfOptions& o, const std::string& repo, cons
                                const std::filesystem::path& dest,
                                const std::function<bool(uint64_t, uint64_t)>& progress = {});
 
+// Same as download_file, but fetches up to `num_chunks` byte ranges of the file concurrently for higher
+// throughput on a fast link. Falls back to a plain download_file (same resumable-by-restart behaviour) when
+// num_chunks <= 1, the server does not answer Range requests, or the file is too small to be worth
+// splitting. Unlike download_file, an existing "<dest>.part" from an earlier *chunked* attempt is not
+// resumed -- it is overwritten and the whole file is re-fetched; chunking targets throughput on a fresh
+// fetch, not resumability (use download_file for that). progress(done, total) sums bytes written to the
+// output file across every chunk so far; returning false from it cancels all chunks.
+Result<uint64_t> download_file_chunked(const HfOptions& o, const std::string& repo, const std::string& file,
+                                       const std::filesystem::path& dest, int num_chunks,
+                                       const std::function<bool(uint64_t, uint64_t)>& progress = {});
+
 // ---- file selection for `download` (A.13) ----
 
 struct FileGroup {
