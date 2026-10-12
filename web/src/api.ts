@@ -273,9 +273,10 @@ export interface LLMExport {
   real_ppl?: number;
   real_vs_fake_ppl_pct?: number;
   vllm?: VllmDeploy;
+  sglang?: VllmDeploy; // same shape: SGLang's engine info just has no quant_kernel / max_concurrency fields
 }
 
-/** S11 + S12 on vLLM: serve the exported checkpoint, load-test it, and score it with its own prompt logprobs. */
+/** S11 + S12 on vLLM or SGLang: serve the exported checkpoint, load-test it, and score it with its own prompt logprobs. */
 export interface VllmDeploy {
   status: "succeeded" | "degraded" | "failed" | "skipped";
   reason?: string;
@@ -290,6 +291,9 @@ export interface VllmDeploy {
     kv_cache_gib?: number;
     quant_kernel?: string;
     init_s?: number;
+    weight_load_s?: number;
+    avail_after_pool_gib?: number;
+    cuda_graph_s?: number;
   };
   smoke?: { ok: boolean; text?: string };
   load?: {

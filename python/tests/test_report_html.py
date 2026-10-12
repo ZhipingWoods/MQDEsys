@@ -71,6 +71,19 @@ def test_vllm_report_shows_the_measured_numbers() -> None:
     assert render_html(r, "zh").count("vLLM 部署") == 1
 
 
+def test_sglang_report_section_is_separate_from_vllm_and_only_shown_when_the_stage_ran() -> None:
+    r = load("vllm")
+    assert "SGLang" not in render_html(r, "en"), "no sglang stage in the report -> no sglang section, not an empty one"
+    for ex in r["recipes"]["W4A16"]["export"].values():
+        v = dict(ex["vllm"])
+        v["served_ppl"] = 99.123  # a number only the sglang entry carries
+        ex["sglang"] = v
+    en = render_html(r, "en")
+    assert "SGLang deployment" in en and "vLLM deployment" in en
+    assert en.count("99.123") == len(r["recipes"]["W4A16"]["export"]), "one sglang row per exported format"
+    assert render_html(r, "zh").count("SGLang 部署") == 1
+
+
 def test_gguf_report_has_the_llamacpp_table_and_server_numbers() -> None:
     r = load("gguf")
     html = render_html(r, "en")

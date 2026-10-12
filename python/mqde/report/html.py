@@ -53,6 +53,7 @@ T: dict[str, dict[str, str]] = {
     "real_ppl": {"zh": "真实权重 PPL", "en": "Real-weight PPL"},
     "vs_fake": {"zh": "相对伪量化", "en": "vs fake-quant"},
     "vllm": {"zh": "vLLM 部署（S11）与部署后精度（S12）", "en": "vLLM deployment (S11) and served accuracy (S12)"},
+    "sglang": {"zh": "SGLang 部署（S11）与部署后精度（S12）", "en": "SGLang deployment (S11) and served accuracy (S12)"},
     "lm_eval": {"zh": "任务精度（lm-eval，部署后的服务）", "en": "Task accuracy (lm-eval against the served model)"},
     "unquantized": {"zh": "未量化（基线）", "en": "Unquantized (baseline)"},
     "task": {"zh": "任务", "en": "Task"},
@@ -288,11 +289,11 @@ def export_section(r: dict[str, Any], lang: str) -> str:
     return f'<div class="card"><h2>{e(T["export"][lang])}</h2>{table(head, rows)}</div>'
 
 
-def vllm_section(r: dict[str, Any], lang: str) -> str:
+def _serve_section(r: dict[str, Any], lang: str, backend: str) -> str:
     rows = []
     for n, rec in r.get("recipes", {}).items():
         for f, ex in (rec.get("export") or {}).items():
-            v = ex.get("vllm")
+            v = ex.get(backend)
             if not v:
                 continue
             if v.get("status") in ("skipped", "failed"):
@@ -313,7 +314,15 @@ def vllm_section(r: dict[str, Any], lang: str) -> str:
     if any(len(x) > len(head) for x in rows):
         head.append(("", False))
         rows = [x + [""] * (len(head) - len(x)) for x in rows]
-    return f'<div class="card"><h2>{e(T["vllm"][lang])}</h2>{table(head, rows)}</div>'
+    return f'<div class="card"><h2>{e(T[backend][lang])}</h2>{table(head, rows)}</div>'
+
+
+def vllm_section(r: dict[str, Any], lang: str) -> str:
+    return _serve_section(r, lang, "vllm")
+
+
+def sglang_section(r: dict[str, Any], lang: str) -> str:
+    return _serve_section(r, lang, "sglang")
 
 
 def accuracy_section(r: dict[str, Any], lang: str) -> str:
@@ -389,7 +398,7 @@ def render_html(report: dict[str, Any], lang: str = "en") -> str:
     if report.get("kind") not in (None, "llm"):
         raise ValueError(f"only LLM job reports are supported (kind={report.get('kind')!r})")
     body = "".join(f(report, lang) for f in (overview, recipes_section, logits_section, layers_section, export_section, vllm_section,
-                                              accuracy_section, gguf_section, sensitivity_section, stages_section))
+                                              sglang_section, accuracy_section, gguf_section, sensitivity_section, stages_section))
     title = f'{T["title"][lang]} · {report.get("job_id", "")}'
     return (f'<!doctype html><html lang="{lang}"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'

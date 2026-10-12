@@ -170,7 +170,8 @@ function Overview({ rep, rs }: { rep: LLMJobReport; rs: LLMRecipeReport[] }) {
       </div>
       {rs.some((r) => r.export) && <ExportCard rs={rs} />}
       {rs.some((r) => r.logits) && <LogitsCard rep={rep} rs={rs} />}
-      {rs.some((r) => Object.values(r.export ?? {}).some((e) => e.vllm)) && <VllmCard rs={rs} />}
+      {rs.some((r) => Object.values(r.export ?? {}).some((e) => e.vllm)) && <ServeCard rs={rs} which="vllm" />}
+      {rs.some((r) => Object.values(r.export ?? {}).some((e) => e.sglang)) && <ServeCard rs={rs} which="sglang" />}
       {(rep.baseline_lm_eval || rs.some((r) => Object.values(r.export ?? {}).some((e) => e.vllm?.lm_eval))) && <LmEvalCard rep={rep} rs={rs} />}
       {rep.llamacpp && <LlamaCppCard d={rep.llamacpp} />}
     </>
@@ -434,12 +435,18 @@ function LmEvalCard({ rep, rs }: { rep: LLMJobReport; rs: LLMRecipeReport[] }) {
   );
 }
 
-function VllmCard({ rs }: { rs: LLMRecipeReport[] }) {
-  const rows = rs.flatMap((r) => Object.entries(r.export ?? {}).flatMap(([f, e]) => (e.vllm ? [{ r, f, v: e.vllm }] : [])));
+const SERVE_INFO = {
+  vllm: { title: "vLLM", cmd: "vllm serve", logprobs: "vLLM 返回的 prompt 对数概率" },
+  sglang: { title: "SGLang", cmd: "python -m sglang.launch_server", logprobs: "SGLang /generate 返回的 input_token_logprobs" },
+} as const;
+
+function ServeCard({ rs, which }: { rs: LLMRecipeReport[]; which: "vllm" | "sglang" }) {
+  const info = SERVE_INFO[which];
+  const rows = rs.flatMap((r) => Object.entries(r.export ?? {}).flatMap(([f, e]) => (e[which] ? [{ r, f, v: e[which]! }] : [])));
   const conc = rows.find((x) => x.v.load)?.v.load?.spec.concurrency;
   return (
     <div className="card table-wrap">
-      <h2>vLLM 部署（S11）与部署后精度（S12）</h2>
+      <h2>{info.title} 部署（S11）与部署后精度（S12）</h2>
       <table>
         <thead>
           <tr>
@@ -493,8 +500,8 @@ function VllmCard({ rs }: { rs: LLMRecipeReport[] }) {
         </tbody>
       </table>
       <p className="note">
-        每个导出的 checkpoint 由 <span className="mono">vllm serve</span> 直接加载。部署后 PPL 与上方的伪量化 / 真实权重 PPL 使用同一评测窗口，
-        取自 vLLM 返回的 prompt 对数概率，差异来自后端内核与精度。压测为闭环流式请求{conc ? `（${conc} 并发）` : ""}，TTFT / TPOT 取中位数。
+        每个导出的 checkpoint 由 <span className="mono">{info.cmd}</span> 直接加载。部署后 PPL 与上方的伪量化 / 真实权重 PPL 使用同一评测窗口，
+        取自 {info.logprobs}，差异来自后端内核与精度。压测为闭环流式请求{conc ? `（${conc} 并发）` : ""}，TTFT / TPOT 取中位数。
       </p>
     </div>
   );
