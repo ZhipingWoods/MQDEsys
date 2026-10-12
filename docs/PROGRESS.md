@@ -180,6 +180,17 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-10/12（再再再再续） · Claude · T-1302 算法可插拔性加固 + 第三方接入指南
+
+P13 阶段顺序里 T-1303 之后做 T-1302（和 T-1303 本可并行，这次是顺序做的）。
+
+- **做了什么**：`scripts/check_algo_registry_sync.py`——正则解析 `python/mqde/quant/algorithms.py` 的 `@register("...")`，不 import 真实模块（import 会把 torch 这种重依赖也拉进来，这种结构性检查脚本应该和 `scripts/check_deps.py` 一样零重依赖），和 `data/algorithms.yaml` 的条目做双向差集；特别处理了 `kind: combo` 条目（如 `awq+gptq`）——这些名字本来就不该出现在 `ALGO_REGISTRY` 里（`resolve()` 是拆成 `+` 两边分别查注册表），但反过来检查组合引用的每一部分是否都注册了。`docs/guides/add-algorithm.md`（直接照抄 `rtn`/`smoothquant`/`awq`/`gptq` 四个真实实现写的 walkthrough，不是凭印象编的示例代码）、`docs/guides/add-backend.md`（如实写了一个不太好听但真实的事实：部署后端今天**没有**像算法/导出器那样的注册表，`llm_job.py` 里是硬编码 import 和分支判断，这是本任务发现但没有修的真实架构缺口，写进了指南而不是假装它不存在）。`docs/adr/0004-external-algorithm-adapters.md`（T-0609 的 ADR，状态 Proposed）。
+- **写 ADR 前先核实了许可证，不是凭印象**：搜了一下确认 GPTQModel (ModelCloud) 核心代码是 Apache-2.0，但有个之前完全不知道的例外——可选的 Swordfish 内核是 AGPL-3.0-or-later（运行时 JIT 编译链接，不是必需组件）；llm-compressor (vllm-project) 是 Apache-2.0。这两个事实直接决定了 ADR 里方案 A/B 的风险评估怎么写，所以值得先查实。ADR 照搬了 ADR-0002（评测框架）已经验证过的套路——子进程调用、不 import 进 `mqde` 环境——但也诚实写了这个套路在 T-0609 原始验收标准（"统一 QParams 与 trace"）上打了折扣，方案 A 拿不到和自研算法同粒度的逐层数据，只能降级成"量化误差指标并排对比"。写完三个方案和需要负责人决定的 4 个问题后就停了，没有碰 `algorithms/external.py`，没有改 `pyproject.toml`。
+- **一处编号错误，当场改了**：最初照抄用户计划里写的 "ADR-0006"，实际检查 `docs/adr/` 只有 0001-0003 三个文件，正确编号应该是 0004——这是计划阶段的笔误，发现后直接改了（TASKS.md、guide 里的引用都同步改了），不是什么值得讨论的设计决策，纯粹是数错了文件。
+- **真实跑了脚本**（不是只读代码推演）：Mac 系统 Python 是 externally-managed 装不了 pyyaml，用 `python3 -m venv /tmp/mqde_check_venv` 建了一个一次性虚拟环境（不碰系统 Python，用完可以直接删）装了 `pyyaml`/`jsonschema`，在这个 venv 里真的跑了 `check_algo_registry_sync.py`：在真实代码库上输出 `OK (4 registered, 6 yaml entries)`；又用临时构造的假 fixture（不碰真实文件）分别造出"注册了但 yaml 没有"、"yaml 有但没注册"、"combo 引用了不存在的部分" 三种坏情况，三种都被正确抓到并给出准确理由。
+- **校验**：`SKIP=deps,abi,format,cpp,python,web bash scripts/check_all.sh`（用临时 venv 的 python/pip 加进 PATH）确认新加的 `algo`/`schema` 两个检查组接线正确、其余组按预期 SKIP；后面 clang-format 那段因为 Mac 自带 `/bin/bash` 是 3.2 版本没有 `mapfile`，报了一个和这次改动无关的既有环境问题，没有去动它。4090 验证见下一条。
+- **未完成 / 下一步**：没有实现任何真正的 C++ `Registry<Base>` 生产调用点——这次只是在文档里诚实写明它目前零生产调用点，没有去找一个地方塞进去凑数；T-0609 本体（真正引入 GPTQModel/llm-compressor）继续等负责人批复 ADR-0004。T-1304（新建作业向导重构）是 P13 里体量最大的一块，按阶段顺序接下来做。
+
 ### 2026-10-10（再再再续） · Claude · T-1303 HF 目录后台定时刷新 + 二级分类分组
 
 按 P13 阶段顺序，T-1305 之后做 T-1303（后端数据工程，和 T-1302 可并行，先挑这个因为 T-1304 更需要它）。

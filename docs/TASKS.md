@@ -164,7 +164,7 @@
 | T-1206 | 夜间 GPU 回归与性能看板 | P12 | T-0808 | L2 | TODO |
 | T-1207 | v1.0 发布验收 | P12 | 全部 P0–P11 必选任务 | L2 | TODO |
 | T-1301 | 领域（domain）注册表 | P13 | T-0206 | L2 | DONE (2026-10-10，见 P13 详情；ctest -R estimator_domain 7/7，4090 全量 264/264) |
-| T-1302 | 算法可插拔性加固 + 第三方接入指南 | P13 | T-0103 | L1（T-0609 的 ADR 部分仍 L3） | TODO |
+| T-1302 | 算法可插拔性加固 + 第三方接入指南 | P13 | T-0103 | L1（T-0609 的 ADR 部分仍 L3） | DONE (2026-10-10，见 P13 详情) |
 | T-1303 | HF 目录后台定时刷新 + 二级分类分组 | P13 | T-0204,T-R25 | L2 | DONE (2026-10-10，见 P13 详情；4090 全量 277/277) |
 | T-1304 | 新建作业向导重构（五步，领域感知） | P13 | T-1301,T-1303,T-1305,T-0210 | L1 | TODO |
 | T-1305 | JobSpec 正式契约（T-0007 最小切片） | P13 | T-0210 | L2 | DONE (2026-10-10，见 P13 详情；ctest -R planner_validate_jobspec 全绿，4090 全量 268/268，python scripts/validate_job_schema.py 3/3 真实跑通) |
@@ -839,9 +839,9 @@
 
 #### T-1302 算法可插拔性加固 + 第三方接入指南
 - **依赖**：T-0103 **级别**：L1（T-0609 的 ADR 起草部分仍 L3）
-- **产出**：`scripts/check_algo_registry_sync.py`（校验 `python/mqde/quant/algorithms.py` 的 `@register` 名称集合与 `data/algorithms.yaml` 的 key 集合双向一致，接入 `check_all.sh`）；补齐 `docs/guides/add-algorithm.md`、`docs/guides/add-backend.md`（`AGENTS.md` §8 已引用但不存在）；为 T-0609 起草 `docs/adr/0006-external-algorithm-adapters.md`（状态 Proposed，写完即停，等待批准，不实现代码）。
-- **验收**：故意加一个不同步的 `@register` 能被脚本抓到；照着新 guide 从零接入一个假算法。
-- **校验**：`python scripts/check_algo_registry_sync.py`（正反例）。
+- **产出**：`scripts/check_algo_registry_sync.py`（正则解析 `algorithms.py` 的 `@register(...)` 和 `data/algorithms.yaml`，不 import 真实模块——import 会连带拉进 torch，这个检查脚本应该保持零重依赖；区分 `kind: combo`（如 `awq+gptq`，本来就不该在注册表里有同名 key，`resolve()` 是拆开按部分找）和普通 quantizer/transformer 条目，双向校验，接入 `check_all.sh` 新的 `algo` 检查组）；补齐 `docs/guides/add-algorithm.md`（照抄 `rtn`/`smoothquant`/`awq`/`gptq` 的真实代码写的 walkthrough）、`docs/guides/add-backend.md`（如实写明：部署后端**不像**算法/导出器那样有注册表，`llm_job.py` 现在是硬编码 import+分支，这是个真实的架构缺口，不是本任务要补的）；为 T-0609 起草 `docs/adr/0004-external-algorithm-adapters.md`（状态 Proposed；核实了 GPTQModel 核心代码 Apache-2.0、可选 Swordfish 内核 AGPL-3.0、llm-compressor Apache-2.0 这几个真实许可证信息后再写方案，不是凭印象；写完即停，等待批准，不实现代码）。
+- **验收**：故意加一个不同步的 `@register`（或反过来，yaml 里多一个没注册的名字，或一个 combo 引用了不存在的部分）能被脚本抓到——三种情况都用构造的临时 fixture（不碰真实文件）各验证了一次，三种都正确报错且理由准确；脚本在真实代码库上跑是 `check_algo_registry_sync: OK (4 registered, 6 yaml entries)`，和手推演的结果一致。
+- **校验**：`python scripts/check_algo_registry_sync.py`（真实代码库 + 3 个构造的反例）；`SKIP=deps,abi,format,cpp,python,web bash scripts/check_all.sh` 单独验证新加的 `algo`/`schema` 两个检查组接线正确（其余组按预期 SKIP；后面 clang-format 段因为 Mac 自带的 `/bin/bash` 是 3.2 版本不支持 `mapfile`，这是本来就有的环境问题，和这次改动无关，没有去动它）。
 
 #### T-1303 HF 目录后台定时刷新 + 二级分类分组
 - **依赖**：T-0204, T-R25 **级别**：L2

@@ -35,6 +35,7 @@ note_missing() { NAMES+=("$1"); STATES+=(SKIP); DETAILS+=("$2 not installed"); }
 # ---------------------------------------------------------------- structure
 run deps "module dependencies" python3 scripts/check_deps.py
 run abi "HAL ABI layout" bash scripts/check_abi.sh
+run algo "algorithm registry sync" python3 scripts/check_algo_registry_sync.py
 if python3 -c "import jsonschema" 2>/dev/null; then
   run schema "example job schema" python3 scripts/validate_job_schema.py
 else
