@@ -346,7 +346,7 @@ export interface LLMJobReport {
   data?: { calib: { dataset: string; n: number; seq_len: number }; eval: { dataset: string; windows: number; seq_len: number } };
   baseline?: PplResult;
   recipes?: Record<string, LLMRecipeReport>;
-  env?: { torch: string; torch_threads: number; device: string };
+  env?: { torch: string; torch_threads: number; device?: string; quant_device?: string; eval_device?: string; quant_device_name?: string; eval_device_name?: string; hardware?: string };
   llamacpp?: LlamaCppDeploy;
   baseline_lm_eval?: LmEval;
   logits_probe?: { windows: number; seq_len: number; k: number; exact: boolean; reference_mib: number };

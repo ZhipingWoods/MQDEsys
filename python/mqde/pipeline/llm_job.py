@@ -62,6 +62,7 @@ class LLMJobSpec:
     # them when they differ.
     quant_device: str = "cpu"
     eval_device: str = "cpu"
+    hardware: str = ""  # deploy.hardware (T-1308): a hardware_db id the submitter picked, purely informational
     act_static: str | None = None
     kv_method: str = "kivi"  # keys per-channel: int8 is lossless on Qwen2 (outlier key channels), naive per-token is not
     kv_granularity: str = "per_token"
@@ -114,6 +115,7 @@ class LLMJobSpec:
             # back to deploy.device, so a job that only sets deploy.device gets both equal to it.
             quant_device=str(d.get("quant_device", dep_device)),
             eval_device=str(e.get("device", dep_device)),
+            hardware=str(dep.get("hardware", "")),
             act_static=q.get("act_static"),
             kv_method=q.get("kv", {}).get("method", "kivi") if isinstance(q.get("kv"), dict) else "kivi",
             kv_granularity=q.get("kv", {}).get("granularity", "per_token") if isinstance(q.get("kv"), dict) else "per_token",
@@ -431,8 +433,17 @@ class LLMJob:
         torch.manual_seed(s.seed)
         # GPTQ's Cholesky/GEMM results depend on the BLAS thread count (bit-level), which its sequential error
         # feedback amplifies (~1% PPL for W4 on Qwen2.5-0.5B): the count is part of the reproducibility key.
-        self.report["env"] = {"torch": torch.__version__, "torch_threads": torch.get_num_threads(),
-                              "quant_device": s.quant_device, "eval_device": s.eval_device}
+        def device_name(device: str) -> str:
+            return torch.cuda.get_device_name(torch.device(device)) if device.startswith("cuda") and torch.cuda.is_available() else "cpu"
+
+        self.report["env"] = {
+            "torch": torch.__version__, "torch_threads": torch.get_num_threads(),
+            "quant_device": s.quant_device, "eval_device": s.eval_device,
+            # T-1308: the real measured device name (not just "cuda:0"), so Compare.tsx can facet
+            # throughput/error by actual hardware across jobs instead of by an opaque device string.
+            "quant_device_name": device_name(s.quant_device), "eval_device_name": device_name(s.eval_device),
+            "hardware": s.hardware,
+        }
         recipes = self._stage("validate", lambda: [RecipeSpec.load(r) for r in s.recipes], ",".join(s.recipes))
         ad = self._stage("inspect", lambda: HFCausalLM(s.model_path, device=s.quant_device))
         self.report["model"] = {"path": s.model_path, "blocks": len(ad.get_blocks()), "linears": len(ad.qmodel.units)}

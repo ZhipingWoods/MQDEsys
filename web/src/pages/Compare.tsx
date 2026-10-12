@@ -68,6 +68,27 @@ function LLMCompare({ reps }: { reps: LLMJobReport[] }) {
   );
   const recipes = [...new Set(pts.map((p) => p.recipe))];
   const gg = reps.flatMap((r) => Object.values(r.llamacpp?.results ?? {}).map((x) => ({ r, x })));
+  // T-1308: same recipe run on more than one real hardware (distinguished by the actually-measured
+  // eval_device_name, not the submitted deploy.hardware label) -- throughput (stage wall-clock seconds)
+  // should differ by hardware, quantization error (PPL) should not. Hidden entirely when every job in
+  // the comparison ran on the same hardware, rather than showing a one-row "comparison" that compares
+  // nothing.
+  const stageSeconds = (r: LLMJobReport, stage: string) => r.stages?.find((s) => s.stage === stage)?.seconds;
+  const hwPts = useMemo(
+    () =>
+      reps.flatMap((r) =>
+        Object.values(r.recipes ?? {}).map((rr) => ({
+          job: r.job_id,
+          recipe: rr.recipe,
+          hw: r.env?.eval_device_name || r.env?.eval_device || r.spec?.device || "unknown",
+          quantizeSeconds: stageSeconds(r, "quantize"),
+          evalSeconds: stageSeconds(r, "eval_fake_wo_kv"),
+          ppl: rr.eval.fake_quant_wo_kv.ppl,
+        })),
+      ),
+    [reps],
+  );
+  const comparableRecipes = recipes.filter((rc) => new Set(hwPts.filter((p) => p.recipe === rc).map((p) => p.hw)).size > 1);
   return (
     <>
       <div className="card">
@@ -138,6 +159,46 @@ function LLMCompare({ reps }: { reps: LLMJobReport[] }) {
           </tbody>
         </table>
       </div>
+      {comparableRecipes.length > 0 && (
+        <div className="card table-wrap" data-testid="hardware-compare">
+          <h2>按硬件对比（同一配方，不同硬件）</h2>
+          <p className="note">同一配方在不同硬件上的吞吐（量化/评估耗时）与误差（PPL）对比：误差应基本不随硬件变化，耗时应该随硬件明显不同。</p>
+          <table>
+            <thead>
+              <tr>
+                <th>配方</th>
+                <th>硬件</th>
+                <th>作业</th>
+                <th className="num">量化耗时</th>
+                <th className="num">评估耗时</th>
+                <th className="num">PPL（W+A）</th>
+              </tr>
+            </thead>
+            <tbody>
+              {comparableRecipes.flatMap((rc) =>
+                hwPts
+                  .filter((p) => p.recipe === rc)
+                  .map((p) => (
+                    <tr key={p.job + p.recipe} data-testid={`hw-compare-row-${p.recipe}-${p.hw}`}>
+                      <td>
+                        <span className="badge accent">{p.recipe}</span>
+                      </td>
+                      <td className="mono small">{p.hw}</td>
+                      <td>
+                        <Link to={`/jobs/${p.job}`} className="mono small">
+                          {p.job}
+                        </Link>
+                      </td>
+                      <td className="num">{fmt(p.quantizeSeconds, 2)} s</td>
+                      <td className="num">{fmt(p.evalSeconds, 2)} s</td>
+                      <td className="num">{fmt(p.ppl, 3)}</td>
+                    </tr>
+                  )),
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
       {gg.length > 0 && (
         <div className="card table-wrap">
           <h2>llama.cpp 部署实测（GGUF）</h2>

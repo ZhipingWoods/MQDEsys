@@ -119,6 +119,15 @@ def test_quant_device_and_eval_device_default_to_the_shared_device_and_are_repor
     assert rep["env"]["quant_device"] == rep["env"]["eval_device"] == "cpu"
 
 
+def test_hardware_and_real_device_names_are_recorded_for_cross_hardware_comparison(job_env: None, tmp_path: Path) -> None:
+    rep = LLMJob(spec(tmp_path, hardware="nvidia/rtx4090"), job_dir=tmp_path / "j").run()
+    assert rep["env"]["hardware"] == "nvidia/rtx4090"
+    # this test runs with device="cpu" (job_env never touches torch.cuda), so the *real* device name is
+    # "cpu" regardless of what hardware id was submitted -- device_name must reflect what actually ran,
+    # not just echo the submitted label.
+    assert rep["env"]["quant_device_name"] == rep["env"]["eval_device_name"] == "cpu"
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a real second device to exercise the move")
 def test_quant_device_and_eval_device_can_differ_and_the_job_still_produces_a_consistent_report(job_env: None, tmp_path: Path) -> None:
     """Real cross-device round trip (see test_blockwise_llm.py's unit-level version of the same sequencing):
