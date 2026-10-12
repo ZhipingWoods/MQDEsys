@@ -37,6 +37,20 @@ class HFCausalLM:
         cast(Any, self.model).config.use_cache = False
         self.qmodel = QuantModel(self.model, QuantModel.load_family(self.family_name))
 
+    def to(self, device: str | torch.device) -> HFCausalLM:
+        """Move the live model to `device` (T-1304/T-1306: quant_device/evaluation.device split).
+
+        Only ever called when the caller already knows the target differs from the current device --
+        everything downstream (blockwise capture, forward passes, FakeQuantLinear) reads the device off
+        the module/tensor it is handed rather than a value cached at construction time, so moving the
+        container here is enough; detached originals held by a quantizer's own restore() bookkeeping are
+        untouched by this (they are no longer part of the module tree `.to()` recurses through), which is
+        exactly what keeps them pinned at the quant device they were captured on.
+        """
+        self.device = torch.device(device)
+        self.model.to(self.device)
+        return self
+
     @classmethod
     def from_model(cls, model: nn.Module, tokenizer: Any = None) -> HFCausalLM:
         """Wrap an already-built model (tests: tiny random configs, no weights on disk)."""

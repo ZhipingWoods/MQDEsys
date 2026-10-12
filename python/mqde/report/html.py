@@ -193,8 +193,13 @@ def overview(r: dict[str, Any], lang: str) -> str:
     recs = r.get("recipes", {})
     tiles = [(T["model"][lang], name or "–"), (T["baseline_ppl"][lang], fmt(base, 3)),
              (T["n_recipes"][lang], str(len(recs))), ("job", str(r.get("job_id", "–")))]
+    # quant_device/eval_device (T-1304/T-1306) replace the single "device" key older reports used; shown
+    # as one "device X" when they match (including every old report, which only ever had the one key) or
+    # "quant X · eval Y" when a job actually split them.
+    qd, ed = env.get("quant_device", env.get("device")), env.get("eval_device", env.get("device"))
+    device_label = f"quant {qd} · eval {ed}" if qd and ed and qd != ed else (f"device {qd or ed}" if qd or ed else "")
     sub = " · ".join(x for x in (f"torch {env.get('torch')}" if env.get("torch") else "",
-                                 f"device {env.get('device')}" if env.get("device") else "",
+                                 device_label,
                                  f"threads {env.get('torch_threads')}" if env.get("torch_threads") else "") if x)
     return f'<h1>{e(T["title"][lang])}</h1><div class="sub">{e(sub)}</div>' + _tiles(tiles)
 

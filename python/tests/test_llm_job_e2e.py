@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 import torch
+import yaml
 
 pytest.importorskip("transformers")
 pytest.importorskip("safetensors")
@@ -94,6 +95,41 @@ def test_quantize_only_still_quantizes_multiple_recipes(job_env: None, tmp_path:
     assert set(rep["recipes"]) == {"W4A16", "W2A16"}
     for r in rep["recipes"].values():
         assert r["layers"] and r["eval"] == {}
+
+
+def test_from_yaml_parses_quant_device_and_eval_device_with_deploy_device_as_fallback(tmp_path: Path) -> None:
+    base = {"metadata": {"name": "t"}, "model": {"path": "<tiny>"}, "quant": {"recipe": ["w4a16"]}}
+    p = tmp_path / "a.yaml"
+    p.write_text(yaml.safe_dump({**base, "deploy": {"device": "cuda:1"}}))
+    s = LLMJobSpec.from_yaml(p)
+    assert s.device == s.quant_device == s.eval_device == "cuda:1", "deploy.device alone sets all three the same"
+
+    p.write_text(yaml.safe_dump({**base, "deploy": {"device": "cpu"}, "quant_device": "cuda:0",
+                                 "evaluation": {"device": "cuda:1"}}))
+    s2 = LLMJobSpec.from_yaml(p)
+    assert (s2.device, s2.quant_device, s2.eval_device) == ("cpu", "cuda:0", "cuda:1")
+
+    p.write_text(yaml.safe_dump({**base, "deploy": {"device": "cpu"}, "quant_device": "cuda:0"}))
+    s3 = LLMJobSpec.from_yaml(p)
+    assert (s3.quant_device, s3.eval_device) == ("cuda:0", "cpu"), "eval_device with no evaluation.device falls back to deploy.device"
+
+
+def test_quant_device_and_eval_device_default_to_the_shared_device_and_are_reported(job_env: None, tmp_path: Path) -> None:
+    rep = LLMJob(spec(tmp_path), job_dir=tmp_path / "j").run()
+    assert rep["env"]["quant_device"] == rep["env"]["eval_device"] == "cpu"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a real second device to exercise the move")
+def test_quant_device_and_eval_device_can_differ_and_the_job_still_produces_a_consistent_report(job_env: None, tmp_path: Path) -> None:
+    """Real cross-device round trip (see test_blockwise_llm.py's unit-level version of the same sequencing):
+    quantize on cpu, move to cuda:0 for eval, move back before restore() so the detached FP originals
+    (pinned on cpu since capture) match the live model's device again."""
+    job = LLMJob(spec(tmp_path, quant_device="cpu", eval_device="cuda:0"), job_dir=tmp_path / "j")
+    rep = job.run()
+    assert "error" not in rep
+    assert rep["env"]["quant_device"] == "cpu" and rep["env"]["eval_device"] == "cuda:0"
+    r = rep["recipes"]["W4A16"]
+    assert r["summary"]["ppl"] > 0 and r["summary"]["ppl_delta_pct"] != 0
 
 
 def test_a_failure_in_the_html_writer_does_not_fail_the_job(job_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

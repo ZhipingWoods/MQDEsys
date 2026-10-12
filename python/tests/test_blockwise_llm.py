@@ -69,6 +69,31 @@ def test_restore_and_requantize_are_idempotent() -> None:
     q2.restore()
 
 
+def test_to_moves_the_model_and_restore_stays_consistent_after_moving_back() -> None:
+    """T-1304/T-1306 quant_device/eval_device split: llm_job.py quantizes on one device, moves the model
+    to another for eval, then moves back before calling restore() -- the detached originals restore()
+    swaps back in were never touched by either move (see HFCausalLM.to()'s docstring), so this only works
+    if the live model is back on the quant device by the time restore() runs. Runs the real cross-device
+    round trip when CUDA is available; degrades to a same-device no-op otherwise, which still exercises
+    the sequencing (just not a real device change)."""
+    ad = _tiny()
+    assert ad.device == torch.device("cpu")
+    ids = _calib(1, 48)[0]
+    ref = ad.logits(ids).clone()
+    r = RecipeSpec.load("w4a16")
+    q = BlockwiseQuantizer(ad, r, "rtn")
+    q.run(_calib())  # quantize on the "quant device" (cpu)
+    target = "cuda:0" if torch.cuda.is_available() else "cpu"
+    ad.to(target)
+    assert ad.device == torch.device(target) and next(ad.model.parameters()).device.type == torch.device(target).type
+    q_logits = ad.logits(ids).clone()  # eval on the "eval device"; .logits() moves ids there itself
+    assert not torch.equal(q_logits.cpu(), ref)
+    ad.to("cpu")  # back to the quant device before restore(), same order llm_job.py uses
+    assert next(ad.model.parameters()).device.type == "cpu"
+    q.restore()
+    assert not _fq_layers(ad.model) and torch.equal(ad.logits(ids), ref)
+
+
 def test_gptq_blockwise_beats_rtn_on_output() -> None:
     errs = {}
     for algo in ("rtn", "gptq"):

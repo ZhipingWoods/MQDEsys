@@ -54,7 +54,14 @@ class LLMJobSpec:
     calib_seq_len: int = 512
     eval_seq_len: int = 512
     eval_windows: int = 40
-    device: str = "cpu"
+    device: str = "cpu"  # deploy.device: shared fallback for quant_device/eval_device when they are not set
+    # T-1304/T-1306: quantize on one device, evaluate on another (e.g. calibration/GPTQ's sequential error
+    # feedback on CPU for determinism, PPL/export on GPU for speed). Each independently falls back to
+    # `device` in from_yaml, so an unmodified job (only deploy.device set) gets quant_device == eval_device
+    # == device, i.e. today's single-device behavior exactly -- _run() only moves the live model between
+    # them when they differ.
+    quant_device: str = "cpu"
+    eval_device: str = "cpu"
     act_static: str | None = None
     kv_method: str = "kivi"  # keys per-channel: int8 is lossless on Qwen2 (outlier key channels), naive per-token is not
     kv_granularity: str = "per_token"
@@ -92,6 +99,7 @@ class LLMJobSpec:
     def from_yaml(cls, path: str | Path) -> LLMJobSpec:
         d = yaml.safe_load(Path(path).read_text())
         q, c, e, dep = d["quant"], d.get("calibration", {}), d.get("evaluation", {}), d.get("deploy", {})
+        dep_device = dep.get("device", "cpu")
         return cls(
             name=d.get("metadata", {}).get("name", Path(path).stem),
             model_path=d["model"]["path"],
@@ -101,7 +109,11 @@ class LLMJobSpec:
             calib_seq_len=int(c.get("seq_len", 512)),
             eval_seq_len=int(e.get("seq_len", 512)),
             eval_windows=int(e.get("max_windows", 40)),
-            device=dep.get("device", "cpu"),
+            device=dep_device,
+            # top-level quant_device / evaluation.device (schemas/job_spec.schema.json, T-1305): each falls
+            # back to deploy.device, so a job that only sets deploy.device gets both equal to it.
+            quant_device=str(d.get("quant_device", dep_device)),
+            eval_device=str(e.get("device", dep_device)),
             act_static=q.get("act_static"),
             kv_method=q.get("kv", {}).get("method", "kivi") if isinstance(q.get("kv"), dict) else "kivi",
             kv_granularity=q.get("kv", {}).get("granularity", "per_token") if isinstance(q.get("kv"), dict) else "per_token",
@@ -419,9 +431,10 @@ class LLMJob:
         torch.manual_seed(s.seed)
         # GPTQ's Cholesky/GEMM results depend on the BLAS thread count (bit-level), which its sequential error
         # feedback amplifies (~1% PPL for W4 on Qwen2.5-0.5B): the count is part of the reproducibility key.
-        self.report["env"] = {"torch": torch.__version__, "torch_threads": torch.get_num_threads(), "device": s.device}
+        self.report["env"] = {"torch": torch.__version__, "torch_threads": torch.get_num_threads(),
+                              "quant_device": s.quant_device, "eval_device": s.eval_device}
         recipes = self._stage("validate", lambda: [RecipeSpec.load(r) for r in s.recipes], ",".join(s.recipes))
-        ad = self._stage("inspect", lambda: HFCausalLM(s.model_path, device=s.device))
+        ad = self._stage("inspect", lambda: HFCausalLM(s.model_path, device=s.quant_device))
         self.report["model"] = {"path": s.model_path, "blocks": len(ad.get_blocks()), "linears": len(ad.qmodel.units)}
         prep = lambda: (calib_batches(ad.tokenizer, s.calib_samples, s.calib_seq_len, s.seed), eval_ids(ad.tokenizer))  # noqa: E731
         cal, ids = self._stage("calib_prepare", prep)
@@ -429,9 +442,16 @@ class LLMJob:
                                "eval": {"dataset": "wikitext-2 test", "windows": s.eval_windows, "seq_len": s.eval_seq_len}}
         probe_windows, probe_ref = None, None
         base: dict[str, float] | None = None
+        # T-1304/T-1306: quant_device/eval_device split. Moving only happens when they actually differ, so
+        # an unmodified job (both equal to deploy.device) never calls HFCausalLM.to() at all -- same
+        # single-device behavior as before this existed, bit-for-bit (see the BLAS-thread-count comment
+        # above: GPTQ's result depends on exactly this kind of incidental state staying unchanged).
+        moves_devices = s.quant_device != s.eval_device
         if s.quantize_only:
             self.ev.log("quantize_only: skipping eval_baseline, logits probe, sensitivity, export and deploy")
         else:
+            if moves_devices:
+                ad.to(s.eval_device)
             base = self._stage("eval_baseline", lambda: self._ppl(ad, ids, "pretrain"))
             if wants_lm_eval_baseline(s.vllm):
                 self.report["baseline_lm_eval"] = self._stage("lm_eval_baseline", self._lm_eval_baseline)
@@ -443,6 +463,8 @@ class LLMJob:
                 self.report["logits_probe"] = {"windows": int(probe_windows.shape[0]), "seq_len": s.eval_seq_len, "k": probe_ref.k,
                                                "exact": probe_ref.exact, "reference_mib": probe_ref.nbytes() / 2**20}
             self.report["baseline"] = base
+            if moves_devices:
+                ad.to(s.quant_device)  # back for calibration/quantize below
         self._save()
         policy = MixedPrecisionPolicy.from_dict(s.mixed_precision)
         self.report["recipes"] = {}
@@ -474,6 +496,8 @@ class LLMJob:
                 self._save()
                 continue
             assert base is not None
+            if moves_devices:
+                ad.to(s.eval_device)
             wo = self._stage("eval_fake_wo_kv", lambda: self._ppl(ad, ids, f"{recipe.name}.fake_quant_wo_kv"), recipe.name)
             rep["eval"] = {"fake_quant_wo_kv": wo}
             if probe_ref is not None:
@@ -503,6 +527,10 @@ class LLMJob:
                 "worst_layers": sorted(({"name": t.name, "out_sqnr_db": t.out_sqnr_db, "w_sqnr_db": t.w_sqnr_db} for t in res.traces),
                                        key=lambda d: d["out_sqnr_db"] if d["out_sqnr_db"] is not None else d["w_sqnr_db"])[:10],
             }
+            if moves_devices:
+                ad.to(s.quant_device)  # back before restore(): the detached originals it swaps in were
+                                        # never moved and are still sitting on the quant device (see
+                                        # HFCausalLM.to()'s docstring)
             q.restore()
             self.report["recipes"][recipe.name] = rep
             self._save()
@@ -527,7 +555,9 @@ def main() -> None:
     ap.add_argument("--model")
     ap.add_argument("--recipes")
     ap.add_argument("--algorithm")
-    ap.add_argument("--device")
+    ap.add_argument("--device", help="sets quant-device and eval-device together; either flag below overrides just one")
+    ap.add_argument("--quant-device")
+    ap.add_argument("--eval-device")
     ap.add_argument("--act-static", choices=["minmax", "ema", "percentile"])
     ap.add_argument("--kv", help="e.g. int8, int4, fp8 (overrides the recipe kv)")
     ap.add_argument("--kv-method", default=None, choices=sorted(kvq.KV_REGISTRY))
@@ -549,8 +579,10 @@ def main() -> None:
     ap.add_argument("--job-id", help="server-assigned id; output goes to <output_dir>/<job-id>")
     a = ap.parse_args()
     spec = LLMJobSpec.from_yaml(a.spec) if a.spec else LLMJobSpec(name="llm", model_path=a.model, recipes=["w4a16"])
-    for k, v in {"model_path": a.model, "algorithm": a.algorithm, "device": a.device, "act_static": a.act_static,
-                 "eval_windows": a.eval_windows, "calib_samples": a.calib_samples, "kv_method": a.kv_method}.items():
+    if a.device is not None:
+        spec.device = spec.quant_device = spec.eval_device = a.device
+    for k, v in {"model_path": a.model, "algorithm": a.algorithm, "quant_device": a.quant_device, "eval_device": a.eval_device,
+                 "act_static": a.act_static, "eval_windows": a.eval_windows, "calib_samples": a.calib_samples, "kv_method": a.kv_method}.items():
         if v is not None:
             setattr(spec, k, v)
     if a.recipes:

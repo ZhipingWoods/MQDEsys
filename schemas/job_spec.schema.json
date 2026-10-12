@@ -93,14 +93,14 @@
         "concurrency": { "type": "array", "items": { "type": "integer" } },
         "attribution": { "type": "boolean" },
         "device": {
-          "description": "T-1304: the evaluation device, independent of deploy.device/quant_device -- today's JobSpec has only one shared device field; this is additive and not yet read by any pipeline stage.",
+          "description": "T-1304/T-1306: the evaluation device, independent of the top-level quant_device. Read by llm_job.py (LLMJobSpec.eval_device); falls back to deploy.device when absent, so a job that only sets deploy.device is unaffected. VLA (vla_job.py) does not read this yet.",
           "type": "string"
         }
       },
       "additionalProperties": true
     },
     "quant_device": {
-      "description": "T-1304: the device the quantization stage itself runs on, independent of evaluation.device. Not yet consumed by any pipeline stage.",
+      "description": "T-1304/T-1306: the device the quantization stage itself runs on, independent of evaluation.device. Read by llm_job.py (LLMJobSpec.quant_device); falls back to deploy.device when absent. VLA (vla_job.py) does not read this yet.",
       "type": "string"
     },
     "deploy": {
