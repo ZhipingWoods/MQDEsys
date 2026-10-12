@@ -86,11 +86,27 @@ try {
   check('switching back to llm (a real pipeline) removes the blocked notice', (await page.getByTestId('domain-blocked').count()) === 0);
   check('submit is enabled again', await page.getByRole('button', { name: '提交作业' }).isEnabled());
 
-  // ---- 2. "不量化" forces the bf16 recipe, matching data/recipes/bf16.yaml's real "no quantization" meaning ----
+  // ---- 2. "高级参数": group_size override (T-1304), omitted from the job unless actually touched. Before
+  // the "不量化" step below: that step leaves `picked` on bf16 (not per_group), which would make this
+  // section's own "enabled" check fail for an unrelated reason.
   await page.getByTestId('model-path').fill(MODEL);
+  check('advanced params panel is closed by default', (await page.getByTestId('group-size-override').count()) === 0);
+  await page.getByTestId('advanced-params-toggle').click();
+  await page.getByTestId('group-size-override').waitFor({ timeout: 5000 });
+  check('group_size override is enabled (the default LLM recipes are all per_group)', await page.getByTestId('group-size-override').isEnabled());
+  check('and untouched, so the job has no quant.group_size yet', (await preview()).quant.group_size === undefined);
+  await page.getByTestId('group-size-override').fill('64');
+  await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.quant?.group_size === 64; } catch { return false; } }, null, { timeout: 10000 });
+  check('typing a value adds quant.group_size as a number', (await preview()).quant.group_size === 64);
+  await page.getByTestId('group-size-override').fill('');
+  await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.quant?.group_size === undefined; } catch { return false; } }, null, { timeout: 10000 });
+  check('clearing it removes the field again', (await preview()).quant.group_size === undefined);
+
+  // ---- 2c. "不量化" forces the bf16 recipe, matching data/recipes/bf16.yaml's real "no quantization" meaning ----
   await page.getByTestId('opt-no-quant').check();
   await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.quant?.recipe?.[0] === 'bf16'; } catch { return false; } }, null, { timeout: 10000 });
   check('checking "不量化" sets quant.recipe to just ["bf16"]', JSON.stringify((await preview()).quant.recipe) === '["bf16"]');
+  check('bf16 is not per_group, so the override is now disabled', await page.getByTestId('group-size-override').isDisabled());
   await page.getByTestId('opt-no-quant').uncheck();
   check('unchecking it leaves the recipe chips selectable again', !(await page.getByTestId('opt-no-quant').isChecked()));
 

@@ -64,6 +64,11 @@
               }
             }
           }
+        },
+        "group_size": {
+          "description": "T-1304: advanced per-job override of every picked recipe's own per_group group_size (the wizard's '高级参数' panel). Read by llm_job.py/vla_job.py; a no-op (logged, not an error) for any recipe whose weight granularity isn't per_group.",
+          "type": "integer",
+          "exclusiveMinimum": 0
         }
       },
       "required": ["recipe"],

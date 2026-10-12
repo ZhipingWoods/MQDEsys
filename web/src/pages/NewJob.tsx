@@ -31,6 +31,11 @@ export default function NewJobPage() {
   // when this is on, matching the server's own rejection list exactly, so the UI can never produce a job
   // the server would 400.
   const [quantizeOnly, setQuantizeOnly] = useState(false);
+  // T-1304: advanced per-job group_size override (quant.group_size, read by llm_job.py/vla_job.py's
+  // group_size_override). "" = not overridden, so an untouched job omits the field entirely and matches
+  // every picked recipe's own data/recipes/*.yaml group_size exactly.
+  const [groupSizeOverride, setGroupSizeOverride] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   // LLM (wikitext-2 PPL) options
   const [seqLen, setSeqLen] = useState(512);
   const [windows, setWindows] = useState(40);
@@ -82,6 +87,7 @@ export default function NewJobPage() {
     setNCalib(llmLike ? 32 : 16);
     setNoQuant(false);
     setQuantizeOnly(false);
+    setGroupSizeOverride("");
     setModelMode("custom");
   };
 
@@ -143,7 +149,7 @@ export default function NewJobPage() {
           domain,
           metadata: { name },
           model: { source: "local", path: model, type: "vla", modality: "vla" },
-          quant: { recipe: picked, algorithm, ...(action ? { also_quantize: ["action"] } : {}) },
+          quant: { recipe: picked, algorithm, ...(action ? { also_quantize: ["action"] } : {}), ...(groupSizeOverride !== "" ? { group_size: Number(groupSizeOverride) } : {}) },
           calibration: { dataset, n_samples: nCalib },
           evaluation: {
             dataset,
@@ -164,6 +170,7 @@ export default function NewJobPage() {
             act_static: actStatic || null,
             ...(kvSpec ? { kv: { ...kvSpec, method: kvMethod } } : {}),
             ...(rules.length ? { mixed_precision: { rules } } : {}),
+            ...(groupSizeOverride !== "" ? { group_size: Number(groupSizeOverride) } : {}),
           },
           ...(quantDevice !== evalDevice ? { quant_device: quantDevice } : {}),
           calibration: { dataset: "wikitext-2-raw-v1:train", n_samples: nCalib, seq_len: seqLen },
@@ -323,6 +330,43 @@ export default function NewJobPage() {
                   </span>
                 ))}
             </div>
+            {(() => {
+              const perGroupPicked = (recipes.data ?? []).filter((r) => picked.includes(r.id) && r.weight.granularity === "per_group");
+              return (
+                <div className="card" style={{ margin: "0 0 12px", padding: 10 }}>
+                  <div style={{ cursor: "pointer", fontWeight: 600 }} onClick={() => setAdvancedOpen(!advancedOpen)} data-testid="advanced-params-toggle">
+                    {advancedOpen ? "▾" : "▸"} 高级参数
+                  </div>
+                  {advancedOpen && (
+                    <div className="form-row" style={{ marginTop: 8 }}>
+                      <div className="field">
+                        <label>Group size 覆盖（覆盖所选配方自身的 per-group 分组大小）</label>
+                        <input
+                          type="number"
+                          min={1}
+                          value={groupSizeOverride}
+                          placeholder={perGroupPicked[0] ? String(perGroupPicked[0].weight.group_size) : "—"}
+                          disabled={perGroupPicked.length === 0}
+                          onChange={(e) => setGroupSizeOverride(e.target.value)}
+                          data-testid="group-size-override"
+                        />
+                        <p className="small muted" style={{ marginTop: 4 }}>
+                          {perGroupPicked.length > 0
+                            ? `对以下配方生效：${perGroupPicked.map((r) => `${r.name}（默认 ${r.weight.group_size}）`).join("、")}；非 per-group 配方不受影响。`
+                            : "当前所选配方都不是 per-group 粒度（例如 W8A16/FP8 是 per-channel），这个开关对它们没有意义，已禁用。"}
+                        </p>
+                      </div>
+                      <div className="field grow">
+                        <label>旋转量化（QuaRot）</label>
+                        <select disabled value="">
+                          <option value="">未实现（T-0610），敬请期待</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             {kind === "vla" ? (
               <label className="small">
                 <input type="checkbox" checked={action} onChange={(e) => setAction(e.target.checked)} /> 同时量化 DiT 动作头（默认保持 FP32）

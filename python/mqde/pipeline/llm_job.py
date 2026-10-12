@@ -93,6 +93,12 @@ class LLMJobSpec:
     # ignored (logged, not silently dropped) when this is set -- validate_jobspec rejects the combination
     # before a server-submitted job gets this far; a direct CLI invocation is trusted to not combine them.
     quantize_only: bool = False
+    # T-1304: advanced per-job override of the recipe's own per-group size (quant.group_size in the YAML,
+    # the wizard's "高级参数" panel). None = use whatever each recipe's own data/recipes/*.yaml says.
+    # Applies only to recipes whose weight granularity is already per_group -- a recipe quantizing
+    # per_tensor/per_channel has no group_size concept, so the override is a no-op for it (logged, not a
+    # validation error: a job can mix recipes that do and don't use it).
+    group_size_override: int | None = None
     seed: int = 0
     output_dir: str = "runs"
 
@@ -131,6 +137,7 @@ class LLMJobSpec:
             sensitivity=(d.get("analysis") or {}).get("sensitivity"),
             sensitivity_windows=int((d.get("analysis") or {}).get("sensitivity_windows", 8)),
             quantize_only=bool(e.get("skip", False)),
+            group_size_override=int(q["group_size"]) if q.get("group_size") is not None else None,
             output_dir=d.get("output_dir", "runs"),
         )
 
@@ -445,6 +452,13 @@ class LLMJob:
             "hardware": s.hardware,
         }
         recipes = self._stage("validate", lambda: [RecipeSpec.load(r) for r in s.recipes], ",".join(s.recipes))
+        if s.group_size_override is not None:
+            for r in recipes:
+                if r.weight.granularity == "per_group":
+                    self.ev.log(f"group_size override: {r.name} {r.weight.group_size} -> {s.group_size_override}")
+                    r.weight.group_size = s.group_size_override
+                else:
+                    self.ev.log(f"group_size override ignored for {r.name}: granularity is {r.weight.granularity}, not per_group")
         ad = self._stage("inspect", lambda: HFCausalLM(s.model_path, device=s.quant_device))
         self.report["model"] = {"path": s.model_path, "blocks": len(ad.get_blocks()), "linears": len(ad.qmodel.units)}
         prep = lambda: (calib_batches(ad.tokenizer, s.calib_samples, s.calib_seq_len, s.seed), eval_ids(ad.tokenizer))  # noqa: E731
@@ -586,6 +600,7 @@ def main() -> None:
     ap.add_argument("--llamacpp-serve", help="llama-server load test as JSON, e.g. '{\"concurrency\": 8}'; 'off' disables")
     ap.add_argument("--sensitivity-windows", type=int)
     ap.add_argument("--quantize-only", action="store_true", help="skip every evaluation/export/deploy stage")
+    ap.add_argument("--group-size", type=int, help="override per_group recipes' group_size (no-op for a recipe that isn't per_group)")
     ap.add_argument("--job-dir")
     ap.add_argument("--job-id", help="server-assigned id; output goes to <output_dir>/<job-id>")
     a = ap.parse_args()
@@ -620,6 +635,8 @@ def main() -> None:
         spec.sensitivity_windows = a.sensitivity_windows
     if a.quantize_only:
         spec.quantize_only = True
+    if a.group_size is not None:
+        spec.group_size_override = a.group_size
     if a.mixed_precision:
         mp = Path(a.mixed_precision)
         spec.mixed_precision = yaml.safe_load(mp.read_text() if mp.is_file() else a.mixed_precision)

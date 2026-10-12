@@ -128,6 +128,25 @@ def test_hardware_and_real_device_names_are_recorded_for_cross_hardware_comparis
     assert rep["env"]["quant_device_name"] == rep["env"]["eval_device_name"] == "cpu"
 
 
+def test_group_size_override_applies_to_per_group_recipes_and_is_a_logged_noop_for_others(job_env: None, tmp_path: Path) -> None:
+    job = LLMJob(spec(tmp_path, recipes=["w4a16", "w8a16"], group_size_override=64), job_dir=tmp_path / "j")
+    rep = job.run()
+    assert rep["recipes"]["W4A16"]["weight"]["group_size"] == 64, "w4a16 is per_group (default 128): the override must win"
+    assert "group_size" not in rep["recipes"]["W8A16"]["weight"], "w8a16 is per_channel: no group_size concept, override is a no-op"
+    log = (tmp_path / "j" / "events.jsonl").read_text()
+    assert "group_size override: W4A16 128 -> 64" in log
+    assert "group_size override ignored for W8A16: granularity is per_channel, not per_group" in log
+
+
+def test_from_yaml_parses_group_size_override(tmp_path: Path) -> None:
+    base = {"metadata": {"name": "t"}, "model": {"path": "<tiny>"}, "quant": {"recipe": ["w4a16"]}}
+    p = tmp_path / "a.yaml"
+    p.write_text(yaml.safe_dump(base))
+    assert LLMJobSpec.from_yaml(p).group_size_override is None, "absent quant.group_size must not turn into some default override"
+    p.write_text(yaml.safe_dump({**base, "quant": {"recipe": ["w4a16"], "group_size": 256}}))
+    assert LLMJobSpec.from_yaml(p).group_size_override == 256
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a real second device to exercise the move")
 def test_quant_device_and_eval_device_can_differ_and_the_job_still_produces_a_consistent_report(job_env: None, tmp_path: Path) -> None:
     """Real cross-device round trip (see test_blockwise_llm.py's unit-level version of the same sequencing):

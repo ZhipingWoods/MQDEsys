@@ -64,6 +64,9 @@ class JobSpec:
     # all three need the BF16 reference predictions eval_baseline produces. S01 preflight (pure C++
     # estimation, no model forward pass) and S07 quantize still run.
     quantize_only: bool = False
+    # T-1304: advanced per-job override of per_group recipes' group_size; see llm_job.py's LLMJobSpec
+    # field of the same name for the full rationale (identical semantics here).
+    group_size_override: int | None = None
     seed: int = 0
     output_dir: str = "runs"
 
@@ -87,6 +90,7 @@ class JobSpec:
             attribution=bool(e.get("attribution", True)),
             extra_modalities=list(q.get("also_quantize", [])),
             quantize_only=bool(e.get("skip", False)),
+            group_size_override=int(q["group_size"]) if q.get("group_size") is not None else None,
             seed=int(d.get("seed", 0)),
             output_dir=d.get("output_dir", "runs"),
         )
@@ -200,6 +204,13 @@ class VLAJob:
 
         # S00 validate
         recipes = self._stage("validate", lambda: [RecipeSpec.load(r) for r in spec.recipes], msg=",".join(spec.recipes))
+        if spec.group_size_override is not None:
+            for r in recipes:
+                if r.weight.granularity == "per_group":
+                    self.ev.log(f"group_size override: {r.name} {r.weight.group_size} -> {spec.group_size_override}")
+                    r.weight.group_size = spec.group_size_override
+                else:
+                    self.ev.log(f"group_size override ignored for {r.name}: granularity is {r.weight.granularity}, not per_group")
 
         # S01 preflight (C++ estimator)
         def preflight() -> dict[str, Any]:
@@ -401,6 +412,7 @@ def main() -> None:
     ap.add_argument("--eval-samples", type=int, default=None)
     ap.add_argument("--calib-samples", type=int, default=None)
     ap.add_argument("--quantize-only", action="store_true", help="skip eval_baseline, attribution and eval_fake")
+    ap.add_argument("--group-size", type=int, default=None, help="override per_group recipes' group_size")
     ap.add_argument("--job-id", default=None, help="assigned by mqde-server")
     args = ap.parse_args()
     spec = JobSpec.from_yaml(args.job)
@@ -416,6 +428,8 @@ def main() -> None:
         spec.calib_samples = args.calib_samples
     if args.quantize_only:
         spec.quantize_only = True
+    if args.group_size is not None:
+        spec.group_size_override = args.group_size
     job = VLAJob(spec, job_id=args.job_id)
     rep = job.run()
     summary = {k: v["summary"] | ({} if spec.quantize_only else {"action_rel_l2": v["eval"]["action_rel_l2"]})
