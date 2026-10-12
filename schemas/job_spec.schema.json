@@ -93,14 +93,14 @@
         "concurrency": { "type": "array", "items": { "type": "integer" } },
         "attribution": { "type": "boolean" },
         "device": {
-          "description": "T-1304/T-1306: the evaluation device, independent of the top-level quant_device. Read by llm_job.py (LLMJobSpec.eval_device); falls back to deploy.device when absent, so a job that only sets deploy.device is unaffected. VLA (vla_job.py) does not read this yet.",
+          "description": "T-1304/T-1306: the evaluation device, independent of the top-level quant_device. Read by llm_job.py (LLMJobSpec.eval_device); falls back to deploy.device when absent, so a job that only sets deploy.device is unaffected. Through mqde serve, this is the same 'cpu'|'gpu' symbol deploy.device already uses -- JobRunner resolves it against whichever GPU pool slot it assigns (or reserves one specially for it even when deploy.device is 'cpu'). A direct `python -m mqde.pipeline.llm_job` invocation may instead use a literal torch device string. VLA (vla_job.py) does not read this yet.",
           "type": "string"
         }
       },
       "additionalProperties": true
     },
     "quant_device": {
-      "description": "T-1304/T-1306: the device the quantization stage itself runs on, independent of evaluation.device. Read by llm_job.py (LLMJobSpec.quant_device); falls back to deploy.device when absent. VLA (vla_job.py) does not read this yet.",
+      "description": "T-1304/T-1306: the device the quantization stage itself runs on, independent of evaluation.device. Read by llm_job.py (LLMJobSpec.quant_device); falls back to deploy.device when absent. Through mqde serve this is the same 'cpu'|'gpu' symbol deploy.device already uses (JobRunner resolves it, see evaluation.device's description); a direct CLI invocation may use a literal torch device string instead. VLA (vla_job.py) does not read this yet.",
       "type": "string"
     },
     "deploy": {

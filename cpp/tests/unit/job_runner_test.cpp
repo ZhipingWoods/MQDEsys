@@ -34,6 +34,7 @@ fs::path write_fake_worker(const fs::path& dir) {
        "[ -f \"$cnt\" ] && n=$(cat \"$cnt\")\n"
        "n=$((n+1))\n"
        "echo \"$n\" > \"$cnt\"\n"
+       "echo \"$@\" > \"$d/.argv\"\n"
        "fail_until=\"${MQDE_TEST_FAIL_UNTIL:-0}\"\n"
        "if [ \"$n\" -le \"$fail_until\" ]; then exit 1; fi\n"
        "exit 0\n";
@@ -200,4 +201,56 @@ TEST(job_runner_merged_state, a_crashed_process_with_no_terminal_event_falls_bac
   p.state = "FAILED";  // the process exited non-zero before writing its own job_state event
   p.exit_code = 9;
   EXPECT_EQ(merged_state("UNKNOWN", p), "FAILED");
+}
+
+// ---- T-1304/T-1306: quant_device/eval_device split reaches the launched subprocess as its own flags ----
+
+std::string read_argv(const fs::path& runs, const std::string& id) {
+  std::ifstream f(runs / id / ".argv");
+  std::string line;
+  std::getline(f, line);
+  return line;
+}
+
+TEST(job_runner_device_split, a_job_with_no_split_fields_only_gets_the_one_device_flag_as_before) {
+  auto base = fresh_dir("no_split");
+  const auto script = write_fake_worker(base / "bin");
+  ::setenv("MQDE_TEST_FAIL_UNTIL", "0", 1);  // an earlier test in this binary may have left this at "999"
+  JobRunner runner(base / "runs", base, script.string(), {}, 1, 0.05);
+  const auto id = runner.submit(Json{{"deploy", {{"device", "cpu"}}}});
+  wait_for_terminal(runner, id);
+  const auto argv = read_argv(base / "runs", id);
+  EXPECT_NE(argv.find("--device cpu"), std::string::npos) << argv;
+  EXPECT_EQ(argv.find("--quant-device"), std::string::npos) << "unset quant_device/eval_device must not add flags: " << argv;
+  EXPECT_EQ(argv.find("--eval-device"), std::string::npos) << argv;
+}
+
+TEST(job_runner_device_split, a_job_that_sets_both_gets_both_flags_resolved_against_the_assigned_slot) {
+  auto base = fresh_dir("split_both");
+  const auto script = write_fake_worker(base / "bin");
+  ::setenv("MQDE_TEST_FAIL_UNTIL", "0", 1);
+  JobRunner runner(base / "runs", base, script.string(), {7}, 1, 0.05);  // one GPU slot: index 7
+  const auto id = runner.submit(Json{{"deploy", {{"device", "gpu"}}}, {"quant_device", "cpu"}, {"evaluation", {{"device", "gpu"}}}});
+  wait_for_terminal(runner, id);
+  const auto argv = read_argv(base / "runs", id);
+  EXPECT_NE(argv.find("--quant-device cpu"), std::string::npos) << argv;
+  // "gpu" resolves to cuda:0 regardless of which real index (7) was assigned: CUDA_VISIBLE_DEVICES pins
+  // that one slot so the subprocess only ever sees it as device 0.
+  EXPECT_NE(argv.find("--eval-device cuda:0"), std::string::npos) << argv;
+}
+
+TEST(job_runner_device_split, evaluation_device_gpu_alone_still_reserves_a_gpu_slot_even_though_deploy_device_is_cpu) {
+  auto base = fresh_dir("split_eval_only");
+  const auto script = write_fake_worker(base / "bin");
+  ::setenv("MQDE_TEST_FAIL_UNTIL", "0", 1);
+  JobRunner runner(base / "runs", base, script.string(), {3}, 1, 0.05);
+  // deploy.device=cpu alone would mean "no GPU needed" (today's single-device meaning) -- but
+  // evaluation.device=gpu means this job does need the pool, or eval_fake_wo_kv etc. would have nowhere to run.
+  const auto id = runner.submit(Json{{"deploy", {{"device", "cpu"}}}, {"evaluation", {{"device", "gpu"}}}});
+  const auto final_ = wait_for_terminal(runner, id);
+  EXPECT_EQ(final_.gpu, 3) << "must have taken the GPU slot, not the (unlimited-looking but still single) CPU one";
+  EXPECT_FALSE(final_.cpu);
+  const auto argv = read_argv(base / "runs", id);
+  EXPECT_EQ(argv.find("--quant-device"), std::string::npos) << "quant_device was never set, so no flag for it: " << argv;
+  EXPECT_NE(argv.find("--eval-device cuda:0"), std::string::npos) << argv;
 }

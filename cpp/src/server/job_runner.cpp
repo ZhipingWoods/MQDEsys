@@ -95,7 +95,10 @@ std::string JobRunner::submit(const Json& job) {
   std::ofstream(dir / "job.yaml") << out.c_str() << "\n";
   JobProc proc{.id = id, .state = "QUEUED", .submitted_at = now_s()};
   proc.max_attempts = max_attempts_;
-  proc.cpu = job.value("/deploy/device"_json_pointer, std::string()) == "cpu";
+  if (const auto& qd = job.value("/quant_device"_json_pointer, Json()); qd.is_string()) proc.quant_device = qd.get<std::string>();
+  if (const auto& ed = job.value("/evaluation/device"_json_pointer, Json()); ed.is_string()) proc.eval_device = ed.get<std::string>();
+  const bool wants_gpu = (proc.quant_device && *proc.quant_device == "gpu") || (proc.eval_device && *proc.eval_device == "gpu");
+  proc.cpu = job.value("/deploy/device"_json_pointer, std::string()) == "cpu" && !wants_gpu;
   if (job.value("/model/type"_json_pointer, std::string()) == "llm") proc.module = "mqde.pipeline.llm_job";
   {
     std::lock_guard lk(mu_);
@@ -167,8 +170,26 @@ void JobRunner::launch(JobProc& j, int gpu) {
     ::setenv("PYTHONPATH", old && *old ? (pythonpath + ":" + old).c_str() : pythonpath.c_str(), 1);
     ::setenv("MQDE_DATA_DIR", (repo_ / "data").c_str(), 1);
     ::setenv("PYTHONUNBUFFERED", "1", 1);
-    ::execlp(python_.c_str(), python_.c_str(), "-m", j.module.c_str(), job_yaml.c_str(), "--job-id",
-             j.id.c_str(), "--device", gpu >= 0 ? "cuda:0" : "cpu", static_cast<char*>(nullptr));
+    // "gpu" (the only other symbol the frontend's device selectors send) resolves the same way --device
+    // always has: the one slot this launch was actually given, or "cpu" if none was (which wants_gpu at
+    // submit() time should have prevented, but a literal real device string -- a direct, non-server
+    // invocation's job.yaml -- is passed through unchanged either way).
+    auto resolve = [&](const std::string& sym) { return sym == "gpu" ? std::string(gpu >= 0 ? "cuda:0" : "cpu") : sym; };
+    std::vector<std::string> args = {python_, "-m", j.module, job_yaml, "--job-id", j.id, "--device",
+                                      gpu >= 0 ? "cuda:0" : "cpu"};
+    if (j.quant_device) {
+      args.emplace_back("--quant-device");
+      args.push_back(resolve(*j.quant_device));
+    }
+    if (j.eval_device) {
+      args.emplace_back("--eval-device");
+      args.push_back(resolve(*j.eval_device));
+    }
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (auto& a : args) argv.push_back(a.data());
+    argv.push_back(nullptr);
+    ::execvp(python_.c_str(), argv.data());
     std::fprintf(stderr, "exec %s failed: %s\n", python_.c_str(), std::strerror(errno));
     ::_exit(127);
   }

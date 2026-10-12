@@ -20,9 +20,15 @@ namespace mqde::server {
 struct JobProc {
   std::string id;
   std::string state;  // QUEUED | RUNNING | SUCCEEDED | FAILED | CANCELLED
-  int gpu = -1;       // -1 while queued, and for CPU jobs
-  bool cpu = false;   // deploy.device == "cpu": runs outside the GPU pool (one CPU job at a time)
+  int gpu = -1;        // -1 while queued, and for CPU jobs
+  bool cpu = false;    // no GPU slot needed: deploy.device == "cpu" and neither quant_device nor
+                       // evaluation.device (below) asks for one either
   std::string module = "mqde.pipeline.vla_job";  // model.type == "llm" -> mqde.pipeline.llm_job
+  // T-1304/T-1306: top-level quant_device / evaluation.device, read verbatim from the submitted job (same
+  // "cpu"|"gpu" symbols the frontend's single device selector already sends as deploy.device) -- unset
+  // when the job did not request a split, in which case launch() passes only the one --device flag it
+  // always has, exactly as before this existed.
+  std::optional<std::string> quant_device, eval_device;
   pid_t pid = -1;
   int exit_code = 0;
   double submitted_at = 0, started_at = 0, finished_at = 0;
