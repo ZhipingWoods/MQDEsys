@@ -1,5 +1,7 @@
 #include "mqde/estimator/estimator.h"
 
+#include <algorithm>
+
 namespace mqde::estimator {
 namespace fs = std::filesystem;
 
@@ -19,6 +21,7 @@ Result<Domain> load_domain(std::string_view id_or_path) {
     d.classic_algorithms.push_back(std::move(c));
   }
   d.default_eval_dataset = get_or<std::string>(j, "default_eval_dataset", "");
+  d.order = get_or<int>(j, "order", d.order);
   d.pipeline_status = get_or<std::string>(j, "pipeline_status", "ui_only_pending_backend");
   if (d.pipeline_status != "implemented" && d.pipeline_status != "ui_only_pending_backend")
     return make_error(Errc::kInvalidArgument,
@@ -26,6 +29,23 @@ Result<Domain> load_domain(std::string_view id_or_path) {
                       d.id, d.pipeline_status);
   return d;
 }
+
+Result<std::vector<Domain>> list_domains_in(const fs::path& dir) {
+  std::error_code ec;
+  if (!fs::is_directory(dir, ec)) return make_error(Errc::kNotFound, "domains directory '{}' missing", dir.string());
+  std::vector<Domain> out;
+  for (const auto& e : fs::directory_iterator(dir)) {
+    if (e.path().extension() != ".yaml") continue;
+    MQDE_ASSIGN_OR_RETURN(Domain d, load_domain(e.path().string()));
+    out.push_back(std::move(d));
+  }
+  std::sort(out.begin(), out.end(), [](const Domain& a, const Domain& b) {
+    return a.order != b.order ? a.order < b.order : a.id < b.id;
+  });
+  return out;
+}
+
+Result<std::vector<Domain>> list_domains() { return list_domains_in(data_dir() / "domains"); }
 
 Json to_json(const Domain& d) {
   Json algos = Json::array();
@@ -36,7 +56,8 @@ Json to_json(const Domain& d) {
           {"applicable_recipes", d.applicable_recipes},
           {"classic_algorithms", algos},
           {"default_eval_dataset", d.default_eval_dataset},
-          {"pipeline_status", d.pipeline_status}};
+          {"pipeline_status", d.pipeline_status},
+          {"order", d.order}};
 }
 
 }  // namespace mqde::estimator

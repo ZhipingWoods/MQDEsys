@@ -5,6 +5,7 @@
 # or python pipeline exists yet; this is a placeholder so the domain is selectable in the UI (T-1304) and
 # clearly marked as not yet backed by a real pipeline, rather than silently absent.
 id: ewm
+order: 50  # wizard tab position: LLM, VLM, VLA, WM, EWM
 display_name: EWM（具身世界模型，动作条件）
 model_families: []
 applicable_recipes: []

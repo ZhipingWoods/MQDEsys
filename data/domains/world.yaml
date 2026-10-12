@@ -2,6 +2,7 @@
 # for this domain (see T-1005) -- model_families is intentionally empty rather than pointing at something
 # that does not exist.
 id: world
+order: 40  # wizard tab position: LLM, VLM, VLA, WM, EWM
 display_name: World Model（通用世界模型 / 视频生成）
 model_families: []
 applicable_recipes: []

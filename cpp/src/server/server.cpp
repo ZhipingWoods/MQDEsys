@@ -348,11 +348,10 @@ Result<void> serve(const ServerOptions& o) {
   });
   // Domain registry (T-1301): the top-level problem domain (llm/vla/vlm/world/ewm) a JobSpec targets.
   svr.Get("/api/v1/domains", [](const httplib::Request&, httplib::Response& res) {
-    auto ids = estimator::list_data_entries("domains");
-    if (!ids) return send_error(res, ids.error());
+    auto ds = estimator::list_domains();  // in wizard order
+    if (!ds) return send_error(res, ds.error());
     Json arr = Json::array();
-    for (const auto& id : *ids)
-      if (auto d = estimator::load_domain(id)) arr.push_back(estimator::to_json(*d));
+    for (const auto& d : *ds) arr.push_back(estimator::to_json(d));
     send_json(res, arr);
   });
   svr.Get("/api/v1/recipes", [](const httplib::Request&, httplib::Response& res) {

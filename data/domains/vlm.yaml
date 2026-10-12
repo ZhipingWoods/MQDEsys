@@ -1,4 +1,5 @@
 id: vlm
+order: 20  # wizard tab position: LLM, VLM, VLA, WM, EWM
 display_name: VLM（视觉-语言）
 model_families: [qwen3_5]
 applicable_recipes: []

@@ -1,6 +1,7 @@
 # T-1301: top-level domain registry. id must match modelspec::ModelFamily.modality for families this
 # domain covers (see cpp/include/mqde/modelspec/model_spec.h).
 id: llm
+order: 10  # wizard tab position: LLM, VLM, VLA, WM, EWM
 display_name: LLM（纯语言模型）
 model_families: [generic_decoder]
 applicable_recipes: []  # empty = no domain-specific restriction today; every data/recipes/*.yaml applies

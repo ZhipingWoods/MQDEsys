@@ -77,6 +77,8 @@ try {
   await page.goto(`${base}/new`, { waitUntil: 'load' });
   const side = page.getByTestId('live-estimate');
   await side.waitFor({ timeout: 20000 });
+  // The wizard opens on LLM; this test compares the four VLA default recipes, so pick that tab explicitly.
+  await page.getByTestId('domain-tab-vla').click();
   const input = page.getByTestId('model-path');
   await input.fill(MODEL);
   await page.waitForSelector('[data-testid="live-w4a16"]', { timeout: 20000 });

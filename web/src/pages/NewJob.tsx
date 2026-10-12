@@ -19,11 +19,12 @@ export default function NewJobPage() {
   const [algorithm, setAlgorithm] = useState("recipe");
   const profiles = useAsync(api.hardwareProfiles, []);
   const cfg = useAsync(api.config, []);
-  const [domain, setDomain] = useState("vla");
-  const [name, setName] = useState("minicpm-vla-eval");
-  const [model, setModel] = useState(DEFAULT_MODEL);
+  // the wizard opens on the first tab, LLM (domain order is data/domains/*.yaml `order`: LLM, VLM, VLA, WM, EWM)
+  const [domain, setDomain] = useState("llm");
+  const [name, setName] = useState("qwen-wikitext-ppl");
+  const [model, setModel] = useState(DEFAULT_LLM);
   const [modelMode, setModelMode] = useState<"custom" | "catalog">("custom");
-  const [picked, setPicked] = useState<string[]>(["w8a16", "fp8", "w4a16", "w4a8"]);
+  const [picked, setPicked] = useState<string[]>(["w4a16", "w4a8", "w2a16"]);
   const [noQuant, setNoQuant] = useState(false);
   // T-1304/T-1306: "仅量化不评测" (evaluation.skip) -- now a real backend capability (llm_job.py/vla_job.py's
   // quantize_only branches, planner::validate_jobspec rejects combining it with export/vllm/llamacpp/
@@ -66,7 +67,7 @@ export default function NewJobPage() {
   const [lmLimit, setLmLimit] = useState(50);
   const [lmShots, setLmShots] = useState(5);
   const [dataset, setDataset] = useState(DEFAULT_DATASET);
-  const [nCalib, setNCalib] = useState(16);
+  const [nCalib, setNCalib] = useState(32);
   const [nEval, setNEval] = useState(24);
   const [hw, setHw] = useState("nvidia/rtx4090");
   const [attribution, setAttribution] = useState(true);
@@ -261,7 +262,7 @@ export default function NewJobPage() {
       <div className="card">
         <h2>① 领域 + 模型</h2>
         <div className="tabs" style={{ marginBottom: 12 }}>
-          {(domainsQ.data ?? [{ id: "vla", display_name: "VLA（视觉-语言-动作）" }, { id: "llm", display_name: "LLM（HF CausalLM · wikitext-2 PPL）" }]).map((d) => (
+          {(domainsQ.data ?? [{ id: "llm", display_name: "LLM（HF CausalLM · wikitext-2 PPL）" }, { id: "vla", display_name: "VLA（视觉-语言-动作）" }]).map((d) => (
             <div key={d.id} className={`tab ${domain === d.id ? "on" : ""}`} onClick={() => switchDomain(d.id)} data-testid={`domain-tab-${d.id}`}>
               {d.display_name}
             </div>

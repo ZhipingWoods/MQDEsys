@@ -82,3 +82,29 @@ TEST(estimator_domain, to_json_round_trips_the_classic_algorithms_list) {
   EXPECT_GE(j.at("classic_algorithms").size(), 3u);
   EXPECT_EQ(j.at("classic_algorithms")[0].at("name"), "rtn");
 }
+
+// The order the new-job wizard shows the domain tabs in is data (`order` in each yaml), not directory order.
+TEST(estimator_domain, list_domains_returns_them_in_the_registered_order_llm_vlm_vla_world_ewm) {
+  auto ds = list_domains();
+  ASSERT_TRUE(ds) << ds.error().message;
+  std::vector<std::string> ids;
+  for (const auto& d : *ds) ids.push_back(d.id);
+  EXPECT_EQ(ids, (std::vector<std::string>{"llm", "vlm", "vla", "world", "ewm"}));
+}
+
+TEST(estimator_domain, order_is_part_of_the_json_and_a_missing_order_sorts_last_by_id) {
+  auto d = load_domain("llm");
+  ASSERT_TRUE(d);
+  EXPECT_EQ(to_json(*d).at("order"), 10);
+  const auto dir = std::filesystem::temp_directory_path() / ("mqde_domain_order_" + std::to_string(::getpid()));
+  std::filesystem::create_directories(dir);
+  for (const auto& [id, order] : {std::pair<std::string, std::string>{"zeta", ""}, {"alpha", ""}, {"mid", "order: 5\n"}}) {
+    std::ofstream(dir / (id + ".yaml")) << "id: " << id << "\ndisplay_name: " << id << "\n" << order;
+  }
+  auto ds = list_domains_in(dir);
+  ASSERT_TRUE(ds) << ds.error().message;
+  std::vector<std::string> ids;
+  for (const auto& x : *ds) ids.push_back(x.id);
+  EXPECT_EQ(ids, (std::vector<std::string>{"mid", "alpha", "zeta"}));
+  std::filesystem::remove_all(dir);
+}

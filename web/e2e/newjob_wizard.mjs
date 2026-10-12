@@ -73,9 +73,13 @@ try {
   // ---- 1. domain registry drives the tabs; a domain with no real pipeline is blocked, not silently accepted ----
   await page.goto(`${base}/new`, { waitUntil: 'load' });
   const realDomains = await (await fetch(`${base}/api/v1/domains`)).json();
-  check('the server has all 5 registered domains', realDomains.map((d) => d.id).sort().join(',') === 'ewm,llm,vla,vlm,world');
+  check('the server has all 5 registered domains', [...realDomains.map((d) => d.id)].sort().join(',') === 'ewm,llm,vla,vlm,world');
   for (const d of realDomains) await page.getByTestId(`domain-tab-${d.id}`).waitFor({ timeout: 10000 });
   check('every registered domain gets a tab', true);
+  const tabOrder = await page.locator('[data-testid^="domain-tab-"]').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid').replace('domain-tab-', '')));
+  check('the tabs are in the registry order LLM, VLM, VLA, WM, EWM', tabOrder.join(',') === 'llm,vlm,vla,world,ewm', tabOrder.join(','));
+  check('and the API serves them in that order too', realDomains.map((d) => d.id).join(',') === 'llm,vlm,vla,world,ewm', realDomains.map((d) => d.id).join(','));
+  check('the wizard opens on the first tab (LLM)', (await page.getByTestId('domain-tab-llm').getAttribute('class')).includes('on'));
 
   await page.getByTestId('domain-tab-vlm').click();
   await page.getByTestId('domain-blocked').waitFor({ timeout: 10000 });

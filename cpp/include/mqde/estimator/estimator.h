@@ -68,12 +68,18 @@ struct Domain {
   // "ui_only_pending_backend": the domain is selectable but submitting a job for it is rejected with a
   // clear reason, not silently accepted.
   std::string pipeline_status = "ui_only_pending_backend";
+  // Position of this domain's tab in the new-job wizard (ascending); a domain without one sorts after every
+  // numbered one, by id. The order is data so adding a domain never touches frontend code.
+  int order = 1000;
 };
 
 Result<Recipe> load_recipe(std::string_view name_or_path);
 Result<HardwareProfile> load_hardware(std::string_view id_or_path);
 Result<BackendProfile> load_backend(std::string_view id_or_path);
 Result<Domain> load_domain(std::string_view id_or_path);
+// Every domain, in wizard order (`order` ascending, then id). A domain file that fails to load is an error, not skipped.
+Result<std::vector<Domain>> list_domains();
+Result<std::vector<Domain>> list_domains_in(const std::filesystem::path& dir);
 Result<std::vector<std::string>> list_data_entries(std::string_view sub);  // recipes, hardware_db, ...
 // Finds the hardware_db profile whose match_names occur in a probed device name ("NVIDIA GeForce RTX 4090").
 Result<HardwareProfile> match_hardware(std::string_view device_name);

@@ -1,4 +1,5 @@
 id: vla
+order: 30  # wizard tab position: LLM, VLM, VLA, WM, EWM
 display_name: VLA（视觉-语言-动作）
 model_families: [minicpm_vla]
 applicable_recipes: []
