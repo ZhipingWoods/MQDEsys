@@ -1,0 +1,43 @@
+# Architecture template: MiniCPM-V 4.6 (SigLIP-style ViT with an inserted window-attention merger, an MLP merger,
+# and a hybrid linear/full-attention Qwen3.5-style language model). A plain VLM: no action head (that is
+# minicpm_vla.yaml, which wraps this same stack under `vlm.`).
+# Seen on: /cache/fanruikai/Models/MiniCPM-V-4.6 (779 tensors, 1.3B parameters, tied embeddings).
+family: minicpmv
+modality: vlm
+match:
+  model_type: [minicpmv4_6]
+
+config_paths:
+  text: [text_config]
+  vision: [vision_config]
+
+# 448x448 slice -> 1024 patches -> 16x compression -> 64 tokens (same as the VLA's MiniCPM-V 4.6 stack).
+tokens_per_image: 64
+
+# First matching prefix wins: the vit_merger (inside the vision tower) is listed before the tower.
+components:
+  - name: vision
+    modality: vision
+    prefix: model.vision_tower.encoder.layers.
+    block_regex: '^(\d+)\.'
+  - name: vision_merger
+    modality: vision
+    prefix: model.vision_tower.vit_merger.
+  - name: merger
+    modality: vision
+    prefix: model.merger.
+  - name: language
+    modality: language
+    prefix: model.language_model.
+    block_regex: 'layers\.(\d+)\.'
+  - name: lm_head
+    modality: language
+    prefix: lm_head.
+
+default_keep_fp:
+  - 'embed_tokens'
+  - 'lm_head'
+  - 'patch_embedding'
+  - 'position_embedding'
+  - 'linear_attn\.in_proj_[ab]\.'
+  - 'conv1d'
