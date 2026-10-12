@@ -51,7 +51,7 @@ if a[0] == "status":
     print(json.dumps(d["rows"]))
 elif a[0] == "install":
     b = a[1]; v = a[a.index("--version") + 1] if "--version" in a else d["latest"][b]
-    print("resolving", b, v, flush=True); time.sleep(1.5); print("installing", b, v, flush=True)
+    print("resolving", b, v, flush=True); time.sleep(4); print("installing", b, v, flush=True)
     if v == "9.9.9":
         print("error: no matching distribution", file=sys.stderr); sys.exit(1)
     for r in d["rows"]:

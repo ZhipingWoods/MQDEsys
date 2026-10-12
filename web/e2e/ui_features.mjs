@@ -56,7 +56,7 @@ const MODEL = fs.mkdtempSync(path.join(os.tmpdir(), 'mqde-e2e-model-'));
 const runs = fs.mkdtempSync(path.join(os.tmpdir(), 'mqde-e2e-runs-'));
 const port = await freePort();
 const server = spawn(bin, ['serve', '--repo', repo, '--runs', runs, '--web', path.join(repo, 'web/dist'), '--python', path.join(here, 'fake_worker.py'),
-  '--gpus', '0', '--allow', os.tmpdir(), '--port', String(port)], { stdio: ['ignore', 'ignore', 'ignore'], env: { ...process.env, MQDE_TEMPLATE_DEVICES: '1', MQDE_PLUGIN_DIR: pluginDir } });
+  '--gpus', '0', '--allow', os.tmpdir(), '--port', String(port)], { stdio: ['ignore', 'ignore', 'ignore'], env: { ...process.env, MQDE_TEMPLATE_DEVICES: '1', MQDE_PLUGIN_DIR: pluginDir, MQDE_SETUP_BACKEND_BIN: path.join(here, 'fake_setup_backend.py') } });
 const stop = () => { try { server.kill(); } catch { /* gone */ } };
 process.on('exit', stop);
 const base = `http://127.0.0.1:${port}`;

@@ -38,7 +38,7 @@ async function withServer(env, fn) {
   const runs = fs.mkdtempSync(path.join(os.tmpdir(), 'mqde-e2e-runs-'));
   const port = await freePort();
   const server = spawn(bin, ['serve', '--repo', repo, '--runs', runs, '--web', path.join(repo, 'web/dist'), '--python', path.join(here, 'fake_worker.py'),
-    '--gpus', '0', '--allow', os.tmpdir(), '--port', String(port)], { stdio: ['ignore', 'ignore', 'ignore'], env: { ...process.env, ...env } });
+    '--gpus', '0', '--allow', os.tmpdir(), '--port', String(port)], { stdio: ['ignore', 'ignore', 'ignore'], env: { ...process.env, MQDE_SETUP_BACKEND_BIN: path.join(here, 'fake_setup_backend.py'), ...env } });
   const base = `http://127.0.0.1:${port}`;
   try {
     for (let i = 0; i < 100; i++) { try { if ((await fetch(`${base}/api/v1/health`)).ok) break; } catch { /* not up */ } await new Promise((r) => setTimeout(r, 100)); }
