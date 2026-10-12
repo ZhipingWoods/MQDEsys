@@ -4,6 +4,7 @@ the install flows, against a local fake PyPI / GitHub server and a fake ``uv`` -
 from __future__ import annotations
 
 import io
+import re
 import json
 import stat
 import tarfile
@@ -727,3 +728,21 @@ def test_ensure_only_installs_what_is_missing_and_only_what_was_asked_for(clean:
     out = capsys.readouterr().out
     assert out.splitlines()[0] == "already installed: sglang", "llamacpp was not asked for, so it is not mentioned"
     assert "uv venv" in out and "vllm==<latest>" in out and "sglang==" not in out
+
+
+def test_the_installer_still_parses_as_python_3_10() -> None:
+    """scripts/setup_backend.py runs under whatever system python the machine has (>= 3.10, per pyproject), before any
+    environment exists. Python 3.12 accepts f-strings that reuse their own quote character; 3.10 does not -- and a 3.12-only
+    construct is exactly what shipped once and broke the real 4090 install."""
+    import ast
+
+    for rel in ("python/mqde/backend/envs.py", "scripts/setup_backend.py"):
+        src = (Path(__file__).resolve().parents[3] / rel).read_text()
+        try:
+            ast.parse(src, filename=rel, feature_version=(3, 10))
+        except SyntaxError as e:
+            pytest.fail(f"{rel} is not valid Python 3.10: {e}")
+        # feature_version only gates grammar the parser tracks; f-string nesting is tokenizer-level in 3.12, so also look for it
+        for i, line in enumerate(src.splitlines(), 1):
+            if re.search(r"""f"[^"\n]*\{[^}"\n]*"[^"\n]*"[^}"\n]*\}""", line) or re.search(r"""f'[^'\n]*\{[^}'\n]*'[^'\n]*'[^}'\n]*\}""", line):
+                pytest.fail(f"{rel}:{i} reuses the f-string's own quote inside a replacement field (3.12+ only): {line.strip()[:100]}")

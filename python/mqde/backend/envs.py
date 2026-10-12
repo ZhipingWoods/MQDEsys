@@ -556,7 +556,8 @@ def install_llamacpp(version: str | None, r: Runner) -> str:
     cache.mkdir(exist_ok=True)
     failures: list[str] = []
     for names in candidates:
-        r.log(f"llama.cpp {tag}: trying {', '.join(f'{n} ({by_name[n].get('size', 0) // 2**20} MiB)' for n in names)}")
+        sizes = ", ".join("%s (%d MiB)" % (n, by_name[n].get("size", 0) // 2**20) for n in names)
+        r.log(f"llama.cpp {tag}: trying {sizes}")
         tmp = Path(tempfile.mkdtemp(prefix=f".{tag}.", dir=root))
         try:
             _install_llamacpp_assets(tag, names, by_name, tmp, cache, r)
