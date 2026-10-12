@@ -311,6 +311,9 @@ std::vector<Problem> validate_jobspec(const Json& job) {
       if (job.contains("deploy") && job["deploy"].is_object() && job["deploy"].contains("vllm"))
         add(out, "/evaluation/skip", "quantize-only is incompatible with deploy.vllm",
             "remove deploy.vllm, or turn off evaluation.skip");
+      if (job.contains("deploy") && job["deploy"].is_object() && job["deploy"].contains("sglang"))
+        add(out, "/evaluation/skip", "quantize-only is incompatible with deploy.sglang",
+            "remove deploy.sglang, or turn off evaluation.skip");
       if (!job.value(Json::json_pointer("/deploy/llamacpp/types"), Json::array()).empty())
         add(out, "/evaluation/skip", "quantize-only is incompatible with deploy.llamacpp",
             "remove deploy.llamacpp, or turn off evaluation.skip");

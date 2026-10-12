@@ -134,6 +134,20 @@
               }
             }
           }
+        },
+        "sglang": {
+          "description": "T-0704: serve each exported checkpoint with SGLang (own environment, MQDE_SGLANG_PYTHON), smoke it, load-test it and score it with its own logprobs. Read by llm_job.py; incompatible with evaluation.skip.",
+          "type": "object",
+          "properties": {
+            "mem_fraction_static": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+            "max_model_len": { "type": "integer" },
+            "disable_cuda_graph": { "type": "boolean" },
+            "concurrency": { "type": "integer" },
+            "requests": { "type": "integer" },
+            "prompt_len": { "type": "integer" },
+            "n_predict": { "type": "integer" },
+            "ppl_windows": { "type": "integer" }
+          }
         }
       },
       "additionalProperties": true

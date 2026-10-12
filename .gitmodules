@@ -19,3 +19,6 @@
 [submodule "3rdpart/unsloth"]
 	path = 3rdpart/unsloth
 	url = https://github.com/unslothai/unsloth.git
+[submodule "3rdpart/sglang"]
+	path = 3rdpart/sglang
+	url = https://github.com/sgl-project/sglang.git

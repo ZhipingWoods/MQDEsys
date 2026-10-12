@@ -405,6 +405,10 @@ TEST(planner_validate_jobspec, quantize_only_conflicts_with_export_vllm_llamacpp
   with_vllm["deploy"] = {{"vllm", Json::object()}};
   EXPECT_EQ(validate_jobspec(with_vllm).size(), 1u);
 
+  Json with_sglang = base;
+  with_sglang["deploy"] = {{"sglang", Json::object()}};
+  EXPECT_EQ(validate_jobspec(with_sglang).size(), 1u);
+
   Json with_llamacpp = base;
   with_llamacpp["deploy"] = {{"llamacpp", {{"types", Json::array({"q4_k"})}}}};
   EXPECT_EQ(validate_jobspec(with_llamacpp).size(), 1u);
@@ -417,7 +421,7 @@ TEST(planner_validate_jobspec, quantize_only_conflicts_with_export_vllm_llamacpp
   with_logits_probe["analysis"] = {{"logits_probe", Json::object()}};
   EXPECT_EQ(validate_jobspec(with_logits_probe).size(), 1u);
 
-  for (const auto& j : {with_export, with_vllm, with_llamacpp, with_sensitivity, with_logits_probe}) {
+  for (const auto& j : {with_export, with_vllm, with_sglang, with_llamacpp, with_sensitivity, with_logits_probe}) {
     auto p = validate_jobspec(j);
     ASSERT_EQ(p.size(), 1u);
     EXPECT_EQ(p[0].field, "/evaluation/skip");
