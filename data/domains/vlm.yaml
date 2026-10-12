@@ -1,14 +1,14 @@
 id: vlm
 order: 20  # wizard tab position: LLM, VLM, VLA, WM, EWM
 display_name: VLM（视觉-语言）
-model_families: [qwen3_5]
+model_families: [minicpmv, qwen3_5]
 applicable_recipes: []
 classic_algorithms:
   - name: rtn
-    note: vision tower typically kept FP or RTN-only; reference only, no VLM pipeline exists yet (see T-1002)
+    note: per-component RTN; the pipeline attributes error to the vision tower and the language model separately
   - name: gptq
-    note: would apply to the language backbone component only; reference only, not wired for VLM yet (T-1002)
+    note: layer-wise, calibrated on image+text samples (vision tower and language model quantized from their own activations)
   - name: awq
-    note: reference only, not wired for VLM yet (T-1002)
-default_eval_dataset: ""
-pipeline_status: ui_only_pending_backend  # no python/mqde/pipeline/vlm_job.py exists; see T-1002
+    note: activation-aware scaling, same calibration; not yet checked on a VLM
+default_eval_dataset: synthetic
+pipeline_status: implemented  # python/mqde/pipeline/vlm_job.py (MiniCPM-V 4.6); Qwen3.5-VL shares the engine but is untested

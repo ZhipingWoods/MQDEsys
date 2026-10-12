@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, fmt, fmtBytes, gib, JobListItem, JobReport, llamaSpeed, LLMJobReport } from "../api";
+import { api, fmt, fmtBytes, gib, JobListItem, JobReport, llamaSpeed, LLMJobReport, VLMJobReport } from "../api";
 import { baseOption, Chart, series, token } from "../charts";
 
 /** Accuracy vs. cost across finished jobs: VLA (action error vs. deployed memory) and LLM (PPL vs. weight bits). */
 export default function ComparePage() {
   const [jobs, setJobs] = useState<JobListItem[]>([]);
-  const [reports, setReports] = useState<(JobReport | LLMJobReport)[]>([]);
+  const [reports, setReports] = useState<(JobReport | LLMJobReport | VLMJobReport)[]>([]);
   const [params, setParams] = useSearchParams();
-  const tab = params.get("tab") === "vla" ? "vla" : "llm";
+  const tab = params.get("tab") === "vla" ? "vla" : params.get("tab") === "vlm" ? "vlm" : "llm";
   useEffect(() => {
     api.jobs().then(async (js) => {
       const done = js.filter((j) => j.state === "SUCCEEDED");
@@ -18,22 +18,67 @@ export default function ComparePage() {
     });
   }, []);
   const llm = reports.filter((r): r is LLMJobReport => r.kind === "llm");
-  const vla = reports.filter((r): r is JobReport => r.kind !== "llm");
+  const vlm = reports.filter((r): r is VLMJobReport => (r.kind as string) === "vlm");
+  const vla = reports.filter((r): r is JobReport => r.kind !== "llm" && (r.kind as string) !== "vlm");
   return (
     <>
       <h1>配方对比</h1>
-      <p className="subtitle">汇总已完成作业：精度与成本的权衡。LLM {llm.length} 个作业 · VLA {vla.length} 个作业。</p>
+      <p className="subtitle">汇总已完成作业：精度与成本的权衡。LLM {llm.length} 个作业 · VLM {vlm.length} 个作业 · VLA {vla.length} 个作业。</p>
       <div className="tabs">
         <div className={`tab ${tab === "llm" ? "on" : ""}`} onClick={() => setParams({ tab: "llm" }, { replace: true })}>
           LLM（PPL）
+        </div>
+        <div className={`tab ${tab === "vlm" ? "on" : ""}`} onClick={() => setParams({ tab: "vlm" }, { replace: true })} data-testid="compare-tab-vlm">
+          VLM（答案分布）
         </div>
         <div className={`tab ${tab === "vla" ? "on" : ""}`} onClick={() => setParams({ tab: "vla" }, { replace: true })}>
           VLA（动作误差）
         </div>
       </div>
-      {tab === "llm" ? <LLMCompare reps={llm} /> : <VLACompare reps={vla} />}
+      {tab === "llm" ? <LLMCompare reps={llm} /> : tab === "vlm" ? <VLMCompare reps={vlm} /> : <VLACompare reps={vla} />}
       {jobs.length === 0 && <p className="muted">暂无已完成作业</p>}
     </>
+  );
+}
+
+function VLMCompare({ reps }: { reps: VLMJobReport[] }) {
+  const rows = reps.flatMap((r) => Object.values(r.recipes ?? {}).filter((x) => x.summary.kl != null).map((x) => ({ job: r.job_id, name: r.spec?.name, x })));
+  if (rows.length === 0) return <p className="muted">暂无带评测结果的 VLM 作业</p>;
+  const pct = (v: number | null) => (v == null ? "–" : `${(v * 100).toFixed(1)}%`);
+  return (
+    <div className="card">
+      <h2>VLM 配方：答案分布的变化（只统计答案位置）</h2>
+      <table data-testid="vlm-compare-table">
+        <thead>
+          <tr>
+            <th>作业</th>
+            <th>配方</th>
+            <th>算法</th>
+            <th>KL</th>
+            <th>Top-1 一致</th>
+            <th>答案完全一致</th>
+            <th>答对率</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows
+            .sort((a, b) => (a.x.summary.kl ?? 0) - (b.x.summary.kl ?? 0))
+            .map(({ job, name, x }) => (
+              <tr key={job + x.recipe}>
+                <td>
+                  <Link to={`/jobs/${job}`}>{name ?? job}</Link>
+                </td>
+                <td>{x.recipe}</td>
+                <td>{x.algorithm}</td>
+                <td className="num">{x.summary.kl!.toExponential(2)}</td>
+                <td className="num">{pct(x.summary.top1_agreement)}</td>
+                <td className="num">{pct(x.summary.generation_exact_match)}</td>
+                <td className="num">{pct(x.summary.gt_accuracy)}</td>
+              </tr>
+            ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

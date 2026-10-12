@@ -180,6 +180,14 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-13 · Claude · VLM 领域（MiniCPM-V 4.6）+ llama.cpp CUDA 源码编译
+
+- **状态**：T-1002 PARTIAL，T-0704 llama.cpp 环境脚本补完。
+- **本次完成**：`vlm_job.py` 与适配器/数据/测试、前端 VLM 表单与报告页、`vlm.yaml` 标为 implemented、`validate`/`JobRunner`/`server` 认 `vlm`；`build llamacpp` 在 4090 编出 CUDA 版并验证（见 TASKS T-1002、T-0704）。真机数字：W8A16/W4A16 对答案分布几乎无影响（KL ≤7e-4，Top-1 100%），W4A8(RTN) 前缀一致 69%，W2A16(RTN) 输出乱码；GPTQ 4 比特时视觉塔比语言模型更敏感。
+- **校验**：pytest vlm 29 例、envs 102 例；ctest 314；e2e `vlm_ui` 25/25、`newjob_wizard` 48/48、`nav_split` 11/11、`ui_features` 20/20、`backend_envs` 27/27；各新分支 mutation 均被抓。
+- **需要人工决策 / 待评审（L2）**：`schemas/job_spec.schema.json`（`model.type` 加 `vlm`、`evaluation.max_new_tokens`）；`data/compat/matrix.yaml` 的 sglang 条目（上一轮遗留）；估算器 sglang `BackendProfile` 字段；生产服务仍用 `MQDE_*` 环境变量指定 vLLM/SGLang，所以前端的更新按钮对它们是禁用的。
+- **下一步**：Qwen2-VL / LLaVA 适配器；VLM 的 vLLM 服务端评测；用 LeRobot 真实图像做 VLM 评测；估算器的图像 token 数。
+
 ### 2026-10-12（再续） · Claude · 补回"仅量化不评测"真实后端（用户明确要求回去把摆设做成真功能）
 
 上一条记录里把"仅量化不评测"和"量化/评估设备拆分"都标记为"没做——后端无对应能力，做了会是摆设"。用户看完前端重排后明确要求：既要继续 P13 剩余任务，也要回去把这一轮确实没做的几项中能做的补成真的。这条先补"仅量化不评测"（设备拆分和高级参数面板留在下一条）。

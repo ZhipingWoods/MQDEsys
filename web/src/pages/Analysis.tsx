@@ -4,7 +4,9 @@
 // job picked yet) or with context from a job's "在独立页面打开" link (?recipe=<name> pre-selected).
 import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { api, JobDetail, LLMJobReport } from "../api";
+import { api, JobDetail, LLMJobReport, VLMJobReport } from "../api";
+import { LayerAnalysis } from "./LayerAnalysis";
+import { orderedVlm } from "./JobVLM";
 import { ordered, RecipeErrorAnalysis } from "./JobLLM";
 import { orderedRecipes, VLARecipeErrorAnalysis } from "./Job";
 
@@ -38,7 +40,8 @@ export default function AnalysisPage() {
   if (!rep) return <p className="note">该作业还没有报告（尚未完成，或已失败）。</p>;
 
   const isLLM = rep.kind === "llm" || (detail.job as { model?: { type?: string } } | undefined)?.model?.type === "llm";
-  const names = isLLM ? ordered(rep as unknown as LLMJobReport).map((r) => r.recipe) : orderedRecipes(rep);
+  const isVLM = rep.kind === ("vlm" as string) || (detail.job as { model?: { type?: string } } | undefined)?.model?.type === "vlm";
+  const names = isLLM ? ordered(rep as unknown as LLMJobReport).map((r) => r.recipe) : isVLM ? orderedVlm(rep as unknown as VLMJobReport).map((r) => r.recipe) : orderedRecipes(rep);
   const tab = params.get("recipe") ?? names[0];
   const setTab = (t: string) => setParams({ recipe: t }, { replace: true });
 
@@ -61,7 +64,8 @@ export default function AnalysisPage() {
       {tab && isLLM && (rep as unknown as LLMJobReport).recipes?.[tab] && (
         <RecipeErrorAnalysis r={(rep as unknown as LLMJobReport).recipes![tab]} base={(rep as unknown as LLMJobReport).baseline?.ppl} />
       )}
-      {tab && !isLLM && rep.recipes?.[tab] && <VLARecipeErrorAnalysis r={rep.recipes[tab]} rep={rep} />}
+      {tab && isVLM && (rep as unknown as VLMJobReport).recipes?.[tab] && <LayerAnalysis layers={(rep as unknown as VLMJobReport).recipes![tab].layers} strip="model." />}
+      {tab && !isLLM && !isVLM && rep.recipes?.[tab] && <VLARecipeErrorAnalysis r={rep.recipes[tab]} rep={rep} />}
     </>
   );
 }

@@ -384,7 +384,7 @@ TEST(planner_validate_jobspec, an_unknown_domain_id_is_a_problem) {
 }
 
 TEST(planner_validate_jobspec, a_domain_with_no_real_pipeline_is_rejected_with_a_clear_reason) {
-  for (const char* id : {"vlm", "world", "ewm"}) {
+  for (const char* id : {"world", "ewm"}) {
     Json job = {{"domain", id}, {"model", {{"type", "llm"}}}, {"quant", {{"recipe", Json::array({"w4a16"})}}}};
     auto p = validate_jobspec(job);
     ASSERT_EQ(p.size(), 1u) << id;
@@ -401,6 +401,21 @@ TEST(planner_validate_jobspec, llm_and_vla_domains_have_a_real_pipeline_and_add_
                   {"quant", {{"recipe", Json::array({"w4a16"})}}},
                   {"deploy", {{"device", "gpu"}}}};
   EXPECT_TRUE(validate_jobspec(vla_job).empty());
+}
+
+TEST(planner_validate_jobspec, vlm_is_a_real_domain_and_model_type_and_needs_a_gpu) {
+  Json vlm = {{"domain", "vlm"},
+              {"model", {{"type", "vlm"}}},
+              {"quant", {{"recipe", Json::array({"w4a16"})}}},
+              {"deploy", {{"device", "gpu"}}}};
+  EXPECT_TRUE(validate_jobspec(vlm).empty());
+  vlm["deploy"]["device"] = "cpu";
+  auto p = validate_jobspec(vlm);
+  ASSERT_EQ(p.size(), 1u);
+  EXPECT_EQ(p[0].field, "/deploy/device");
+  Json bogus = {{"model", {{"type", "vlmm"}}}, {"quant", {{"recipe", Json::array({"w4a16"})}}}};
+  ASSERT_EQ(validate_jobspec(bogus).size(), 1u);
+  EXPECT_NE(validate_jobspec(bogus)[0].message.find("vlm"), std::string::npos) << "the message lists the valid types";
 }
 
 TEST(planner_validate_jobspec, domain_is_entirely_optional_and_omitting_it_adds_no_problem) {
@@ -456,6 +471,18 @@ TEST(planner_validate_jobspec, quantize_only_conflicts_with_export_vllm_llamacpp
     ASSERT_EQ(p.size(), 1u);
     EXPECT_EQ(p[0].field, "/evaluation/skip");
   }
+}
+
+TEST(planner_validate_jobspec, quantize_only_conflicts_with_vlm_attribution_too_including_the_default) {
+  Json base = {{"model", {{"type", "vlm"}}},
+               {"quant", {{"recipe", Json::array({"w4a16"})}}},
+               {"deploy", {{"device", "gpu"}}},
+               {"evaluation", {{"skip", true}}}};
+  auto p = validate_jobspec(base);  // attribution omitted: defaults to true, needs the reference this skips
+  ASSERT_EQ(p.size(), 1u);
+  EXPECT_EQ(p[0].field, "/evaluation/skip");
+  base["evaluation"]["attribution"] = false;
+  EXPECT_TRUE(validate_jobspec(base).empty());
 }
 
 TEST(planner_validate_jobspec, quantize_only_conflicts_with_vla_attribution_true_including_the_default) {

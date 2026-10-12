@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { api, fmt, fmtBytes, followJob, JobDetail, JobEvent, JobReport, LLMJobReport, RecipeReport } from "../api";
+import { api, fmt, fmtBytes, followJob, JobDetail, JobEvent, JobReport, LLMJobReport, RecipeReport, VLMJobReport } from "../api";
 import { barItem, baseOption, Chart, series, token } from "../charts";
 import { Tile } from "./Estimate";
 import { LLM_STAGES, LLMReportView } from "./JobLLM";
+import { VLM_STAGES, VLMReportView } from "./JobVLM";
 import { StateBadge } from "./Jobs";
 import { LayerAnalysis } from "./LayerAnalysis";
 
@@ -60,7 +61,8 @@ export default function JobPage() {
   const rep = detail?.report ?? null;
   const job = detail?.job as { model?: { type?: string }; deploy?: { device?: string } } | undefined;
   const isLLM = rep?.kind === "llm" || job?.model?.type === "llm";
-  const stageList = isLLM ? LLM_STAGES : STAGES;
+  const isVLM = rep?.kind === ("vlm" as string) || job?.model?.type === "vlm";
+  const stageList = isLLM ? LLM_STAGES : isVLM ? VLM_STAGES : STAGES;
   const stages = useMemo(() => {
     const m: Record<string, StageState> = {};
     for (const [k] of stageList) m[k] = { status: "pending", count: 0 };
@@ -130,7 +132,7 @@ export default function JobPage() {
         <EventLog events={events} />
       </div>
 
-      {rep && (isLLM ? <LLMReportView rep={rep as unknown as LLMJobReport} job={detail?.job} jobId={id} /> : <ReportView rep={rep} jobId={id} />)}
+      {rep && (isLLM ? <LLMReportView rep={rep as unknown as LLMJobReport} job={detail?.job} jobId={id} /> : isVLM ? <VLMReportView rep={rep as unknown as VLMJobReport} jobId={id} /> : <ReportView rep={rep} jobId={id} />)}
     </>
   );
 }

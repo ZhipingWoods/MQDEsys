@@ -20,7 +20,7 @@
       "properties": {
         "source": { "type": "string" },
         "path": { "type": "string", "minLength": 1 },
-        "type": { "enum": ["llm", "vla"] },
+        "type": { "enum": ["llm", "vlm", "vla"] },
         "modality": { "type": "string" }
       },
       "required": ["path"],
@@ -95,6 +95,7 @@
         "n_samples": { "type": "integer" },
         "seq_len": { "type": "integer" },
         "max_windows": { "type": "integer" },
+        "max_new_tokens": { "type": "integer", "minimum": 1, "description": "VLM: longest answer generated per question (vlm_job.py)." },
         "concurrency": { "type": "array", "items": { "type": "integer" } },
         "attribution": { "type": "boolean" },
         "device": {

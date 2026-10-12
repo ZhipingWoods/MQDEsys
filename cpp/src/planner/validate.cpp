@@ -283,8 +283,8 @@ std::vector<Problem> validate_jobspec(const Json& job) {
   }
 
   const auto mtype = job.value(Json::json_pointer("/model/type"), std::string("vla"));
-  if (mtype != "vla" && mtype != "llm")
-    add(out, "/model/type", fmt::format("'{}' is not 'vla' or 'llm'", mtype), "");
+  if (mtype != "vla" && mtype != "llm" && mtype != "vlm")
+    add(out, "/model/type", fmt::format("'{}' is not 'llm', 'vlm' or 'vla'", mtype), "");
 
   // domain (T-1301/T-1305): optional today (every existing caller keys off model.type instead), but when
   // present it must name a registered domain whose pipeline actually exists -- rejecting here, before
@@ -323,7 +323,7 @@ std::vector<Problem> validate_jobspec(const Json& job) {
             "quantize-only is incompatible with analysis.sensitivity/logits_probe (both need an evaluated "
             "baseline)",
             "remove them, or turn off evaluation.skip");
-    } else if (mtype == "vla") {
+    } else if (mtype == "vla" || mtype == "vlm") {  // both attribute error per modality against an unquantized reference
       if (job.value(Json::json_pointer("/evaluation/attribution"), true))
         add(out, "/evaluation/skip",
             "quantize-only is incompatible with evaluation.attribution=true (attribution needs the BF16 "

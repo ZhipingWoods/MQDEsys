@@ -146,7 +146,7 @@ export interface JobListItem {
   recipes?: string[];
   model?: string;
   gpu?: number;
-  kind?: "vla" | "llm";
+  kind?: "vla" | "llm" | "vlm";
   device?: string;
   started_ts?: number;
   last_ts?: number;
@@ -338,6 +338,39 @@ export interface LogitsResult {
   windows: number;
   exact: boolean;
   k: number;
+}
+
+/** report.json of mqde.pipeline.vlm_job (kind === "vlm"). */
+export interface VLMExample { question: string; answer: string; truth: string | null }
+export interface VLMRecipeReport {
+  recipe: string;
+  algorithm: string;
+  weight: QuantSpecJson;
+  act: QuantSpecJson;
+  layers: LayerTrace[];
+  attribution?: { modality: string; units: number; kl: number; top1_agreement: number; answer_ppl: number }[];
+  eval: {
+    kl: number; top1_agreement: number; ref_top1_prob_drop: number; positions: number; answer_ppl: number;
+    generation_exact_match: number; generation_prefix_match: number; gt_accuracy: number | null; examples: VLMExample[];
+  };
+  summary: {
+    kl: number | null; top1_agreement: number | null; answer_ppl: number | null; answer_ppl_delta_pct: number | null;
+    generation_exact_match: number | null; generation_prefix_match: number | null; gt_accuracy: number | null; gt_accuracy_delta: number | null;
+    worst_stage: string | null; worst_layers: { name: string; out_sqnr_db: number; act_kurtosis: number }[];
+    component_mean_out_sqnr_db: Record<string, number>;
+  };
+}
+export interface VLMJobReport {
+  job_id: string;
+  kind: "vlm";
+  error?: string;
+  verdict?: string;
+  spec: { name: string; model_path: string; recipes: string[]; algorithm: string; device: string; quantize_only?: boolean; max_new_tokens: number };
+  stages: { stage: string; status: string; seconds?: number; error?: string }[];
+  model?: { family: string; n_linears: number; components: Record<string, { modality: string; linears: number; quantizable: number; blocks: number }> };
+  data?: { calib: { source: string; n: number }; eval: { source: string; n: number; has_gt: boolean; questions: string[] } };
+  baseline?: { answer_ppl: number; n_samples: number; n_answer_tokens: number; gen_seconds_per_sample: number; gt_samples: number; gt_accuracy: number | null; examples: VLMExample[] };
+  recipes?: Record<string, VLMRecipeReport>;
 }
 
 export interface LLMJobReport {

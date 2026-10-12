@@ -29,7 +29,7 @@ export interface JobSpec {
   model: {
     source?: string;
     path: string;
-    type?: "llm" | "vla";
+    type?: "llm" | "vlm" | "vla";
     modality?: string;
   };
   quant: {
@@ -52,6 +52,7 @@ export interface JobSpec {
     n_samples?: number;
     seq_len?: number;
     max_windows?: number;
+    max_new_tokens?: number;
     concurrency?: number[];
     attribution?: boolean;
     // T-1304: independent of deploy.device/quant_device. Not yet read by any pipeline stage.

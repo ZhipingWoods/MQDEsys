@@ -81,9 +81,9 @@ try {
   check('and the API serves them in that order too', realDomains.map((d) => d.id).join(',') === 'llm,vlm,vla,world,ewm', realDomains.map((d) => d.id).join(','));
   check('the wizard opens on the first tab (LLM)', (await page.getByTestId('domain-tab-llm').getAttribute('class')).includes('on'));
 
-  await page.getByTestId('domain-tab-vlm').click();
+  await page.getByTestId('domain-tab-world').click();
   await page.getByTestId('domain-blocked').waitFor({ timeout: 10000 });
-  check('vlm (no real pipeline) shows the blocked notice', true);
+  check('world (no real pipeline) shows the blocked notice', true);
   check('submit is disabled for a blocked domain', await page.getByRole('button', { name: /该领域尚未支持提交/ }).isDisabled());
 
   await page.getByTestId('domain-tab-llm').click();

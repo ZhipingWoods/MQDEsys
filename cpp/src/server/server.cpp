@@ -1192,9 +1192,8 @@ Result<void> serve(const ServerOptions& o) {
       auto spec_yaml = load_structured_file(e.path() / "job.yaml");
       const Json jy = spec_yaml ? *spec_yaml : Json::object();
       // report.kind is written by llm_job; job.yaml carries model.type for server-submitted jobs; else VLA
-      j["kind"] = rep.is_object() && rep.value("kind", "") == "llm"
-                      ? std::string("llm")
-                      : jy.value("/model/type"_json_pointer, std::string("vla"));
+      const auto rep_kind = rep.is_object() ? rep.value("kind", "") : std::string();
+      j["kind"] = rep_kind == "llm" || rep_kind == "vlm" ? rep_kind : jy.value("/model/type"_json_pointer, std::string("vla"));
       j["device"] =
           jy.value("/deploy/device"_json_pointer,
                    rep.is_object() ? rep.value("/spec/device"_json_pointer, std::string()) : std::string());

@@ -35,8 +35,15 @@ TEST(estimator_domain, llm_and_vla_are_marked_implemented_because_their_pipeline
   EXPECT_EQ(vla->model_families, (std::vector<std::string>{"minicpm_vla"}));
 }
 
+TEST(estimator_domain, vlm_is_implemented_and_knows_the_minicpmv_family) {
+  auto d = load_domain("vlm");
+  ASSERT_TRUE(d) << d.error().message;
+  EXPECT_EQ(d->pipeline_status, "implemented");
+  EXPECT_NE(std::find(d->model_families.begin(), d->model_families.end(), "minicpmv"), d->model_families.end());
+}
+
 TEST(estimator_domain, domains_with_no_real_pipeline_say_so_instead_of_pretending) {
-  for (const char* id : {"vlm", "world", "ewm"}) {
+  for (const char* id : {"world", "ewm"}) {
     auto d = load_domain(id);
     ASSERT_TRUE(d) << id << ": " << d.error().message;
     EXPECT_EQ(d->pipeline_status, "ui_only_pending_backend") << id;

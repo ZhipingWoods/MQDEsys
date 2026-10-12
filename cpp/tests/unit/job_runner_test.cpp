@@ -254,3 +254,22 @@ TEST(job_runner_device_split, evaluation_device_gpu_alone_still_reserves_a_gpu_s
   EXPECT_EQ(argv.find("--quant-device"), std::string::npos) << "quant_device was never set, so no flag for it: " << argv;
   EXPECT_NE(argv.find("--eval-device cuda:0"), std::string::npos) << argv;
 }
+
+// ---- model.type picks the executor module ----
+TEST(job_runner_module, model_type_selects_the_python_pipeline_module) {
+  for (const auto& [type, module] : std::vector<std::pair<std::string, std::string>>{
+           {"llm", "mqde.pipeline.llm_job"}, {"vlm", "mqde.pipeline.vlm_job"}, {"vla", "mqde.pipeline.vla_job"}, {"", "mqde.pipeline.vla_job"}}) {
+    auto base = fresh_dir(("module_" + (type.empty() ? std::string("default") : type)).c_str());
+    const auto script = write_fake_worker(base / "bin");
+    ::setenv("MQDE_TEST_FAIL_UNTIL", "0", 1);
+    JobRunner runner(base / "runs", base, script.string(), {}, 1, 0.05);
+    Json job = {{"deploy", {{"device", "cpu"}}}};
+    if (!type.empty()) job["model"] = {{"type", type}};
+    const auto id = runner.submit(job);
+    wait_for_terminal(runner, id);
+    std::ifstream f(base / "runs" / id / ".argv");
+    std::string argv;
+    std::getline(f, argv);
+    EXPECT_NE(argv.find("-m " + module + " "), std::string::npos) << type << ": " << argv;
+  }
+}

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, CatalogModel, DownloadStatus, fmtBytes, RuntimeParams } from "../api";
-import { DEFAULT_DATASET, DEFAULT_LLM, DEFAULT_MODEL, useAsync, useDebounced } from "../hooks";
+import { DEFAULT_DATASET, DEFAULT_LLM, DEFAULT_MODEL, DEFAULT_VLM, useAsync, useDebounced } from "../hooks";
 import { Meter } from "./Fit";
 
 const LIVE_RUNTIME: RuntimeParams = { concurrency: 1, images_per_step: 2, text_tokens: 42, image_resolution: 448, gpu_memory_utilization: 0.9, extra_modalities: [] };
@@ -10,6 +10,9 @@ const LIVE_RUNTIME: RuntimeParams = { concurrency: 1, images_per_step: 2, text_t
 // world, ewm) is selectable but shown as a blocked notice instead of a form that would just be rejected by
 // the server's own validate_jobspec check -- see docs/TASKS.md T-1304 for why those are not wired up yet.
 const LLM_LIKE = new Set(["llm"]);
+type Kind = "llm" | "vlm" | "vla";
+// what the wizard's form looks like for a domain: LLM (PPL), VLM (image+question -> answer) or VLA (the rest)
+const kindOf = (d: string): Kind => (LLM_LIKE.has(d) ? "llm" : d === "vlm" ? "vlm" : "vla");
 
 export default function NewJobPage() {
   const nav = useNavigate();
@@ -67,6 +70,7 @@ export default function NewJobPage() {
   const [lmLimit, setLmLimit] = useState(50);
   const [lmShots, setLmShots] = useState(5);
   const [dataset, setDataset] = useState(DEFAULT_DATASET);
+  const [maxNewTokens, setMaxNewTokens] = useState(24); // VLM: longest answer generated per question
   const [nCalib, setNCalib] = useState(32);
   const [nEval, setNEval] = useState(24);
   const [hw, setHw] = useState("nvidia/rtx4090");
@@ -78,17 +82,20 @@ export default function NewJobPage() {
   // instead of leaving the GPTQ/AWQ/GGUF chip lists below to be lined up with vLLM/llama.cpp by hand.
   const [deployBackend, setDeployBackend] = useState<"none" | "vllm" | "llamacpp" | "sglang">("none");
 
-  const kind: "vla" | "llm" = LLM_LIKE.has(domain) ? "llm" : "vla";
+  const kind = kindOf(domain);
   const currentDomain = domainsQ.data?.find((d) => d.id === domain);
   const blocked = currentDomain != null && currentDomain.pipeline_status !== "implemented";
 
   const switchDomain = (d: string) => {
     setDomain(d);
-    const llmLike = LLM_LIKE.has(d);
-    setModel(llmLike ? DEFAULT_LLM : DEFAULT_MODEL);
-    setName(llmLike ? "qwen-wikitext-ppl" : "minicpm-vla-eval");
-    setPicked(llmLike ? ["w4a16", "w4a8", "w2a16"] : ["w8a16", "fp8", "w4a16", "w4a8"]);
-    setNCalib(llmLike ? 32 : 16);
+    const k = kindOf(d);
+    setModel({ llm: DEFAULT_LLM, vlm: DEFAULT_VLM, vla: DEFAULT_MODEL }[k]);
+    setName({ llm: "qwen-wikitext-ppl", vlm: "minicpmv-vqa-eval", vla: "minicpm-vla-eval" }[k]);
+    setPicked(k === "llm" ? ["w4a16", "w4a8", "w2a16"] : k === "vlm" ? ["w8a16", "w4a16"] : ["w8a16", "fp8", "w4a16", "w4a8"]);
+    setNCalib(k === "llm" ? 32 : 16);
+    setNEval(k === "vlm" ? 12 : 24);
+    setMaxNewTokens(24);
+    setDataset(k === "vlm" ? "synthetic" : DEFAULT_DATASET);
     setNoQuant(false);
     setQuantizeOnly(false);
     setGroupSizeOverride("");
@@ -161,7 +168,23 @@ export default function NewJobPage() {
     ...(downBits === "fp" ? [{ match: "mlp\\.down_proj$", skip: true }] : downBits ? [{ match: "mlp\\.down_proj$", bits: Number(downBits) }] : []),
   ];
   const job =
-    kind === "vla"
+    kind === "vlm"
+      ? {
+          domain,
+          metadata: { name },
+          model: { source: "local", path: model, type: "vlm" },
+          quant: { recipe: picked, algorithm, ...(groupSizeOverride !== "" ? { group_size: Number(groupSizeOverride) } : {}) },
+          calibration: { dataset, n_samples: nCalib },
+          evaluation: {
+            dataset,
+            n_samples: nEval,
+            max_new_tokens: maxNewTokens,
+            attribution: quantizeOnly ? false : attribution,
+            ...(quantizeOnly ? { skip: true } : {}),
+          },
+          deploy: { hardware: hw },
+        }
+      : kind === "vla"
       ? {
           domain,
           metadata: { name },
@@ -336,7 +359,7 @@ export default function NewJobPage() {
             </label>
             <label className="small" style={{ display: "block", marginBottom: 8 }}>
               <input type="checkbox" checked={quantizeOnly} onChange={(e) => setQuantizeOnly(e.target.checked)} data-testid="opt-quantize-only" /> 仅量化不评测（跳过
-              {kind === "vla" ? "误差归因与评测" : "PPL 评测、敏感度分析、导出一致性检查与 vLLM/llama.cpp 部署"}，只保留量化本身与层级误差追踪）
+              {kind !== "llm" ? "误差归因与评测" : "PPL 评测、敏感度分析、导出一致性检查与 vLLM/llama.cpp 部署"}，只保留量化本身与层级误差追踪）
             </label>
             <div className="chips" style={{ marginBottom: 8, opacity: noQuant ? 0.5 : 1, pointerEvents: noQuant ? "none" : "auto" }}>
               {recipes.data
@@ -389,6 +412,10 @@ export default function NewJobPage() {
               <label className="small">
                 <input type="checkbox" checked={action} onChange={(e) => setAction(e.target.checked)} /> 同时量化 DiT 动作头（默认保持 FP32）
               </label>
+            ) : kind === "vlm" ? (
+              <p className="note" data-testid="vlm-note">
+                VLM 分别量化视觉塔（含视觉融合/投影）与语言模型；lm_head 与 embedding 保持原精度。图像经视觉塔后与问题一起送入语言模型，评测只看<b>答案</b>位置的分布。
+              </p>
             ) : (
               <div className="form-row">
                 <div className="field">
@@ -441,11 +468,13 @@ export default function NewJobPage() {
       {!blocked && (
       <div className="card">
         <h2>④ 评估数据 + 设备</h2>
-        {kind === "vla" ? (
+        {kind !== "llm" ? (
           <>
             <div className="form-row">
               <div className="field grow">
-                <label>数据集（LeRobot v3 目录，或 synthetic）</label>
+                <label>
+                  {kind === "vlm" ? "数据集（synthetic：程序绘制的图形场景，答案已知；或 LeRobot v3 目录：真实图像，以未量化模型自己的回答为参照）" : "数据集（LeRobot v3 目录，或 synthetic）"}
+                </label>
                 <input value={dataset} onChange={(e) => setDataset(e.target.value)} data-testid="dataset-path" />
               </div>
               <div className="field">
@@ -456,6 +485,12 @@ export default function NewJobPage() {
                 <label>评估样本</label>
                 <input type="number" value={nEval} min={1} onChange={(e) => setNEval(Number(e.target.value))} />
               </div>
+              {kind === "vlm" && (
+                <div className="field">
+                  <label>最长回答（token）</label>
+                  <input type="number" value={maxNewTokens} min={1} max={256} onChange={(e) => setMaxNewTokens(Number(e.target.value))} data-testid="vlm-max-new-tokens" />
+                </div>
+              )}
             </div>
             <label className="small">
               <input type="checkbox" checked={attribution && !quantizeOnly} disabled={quantizeOnly} onChange={(e) => setAttribution(e.target.checked)} /> 分阶段误差归因（逐模态单独量化，定位误差来源环节）
