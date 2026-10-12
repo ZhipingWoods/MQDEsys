@@ -775,3 +775,11 @@ P13 阶段顺序里 T-1303 之后做 T-1302（和 T-1303 本可并行，这次�
 ### 2026-09-23 · 规划 Agent · 系统级规划
 - **状态**：DONE（文档）
 - **本次完成**：产出 `AGENTS.md`、`docs/ARCHITECTURE.md`、`docs/STRUCTURE.md`、`docs/TASKS.md`、`docs/PROGRESS.md`、`CLAUDE.md`。
+
+### 2026-10-12（再再再再再再续） · Claude · T-1306/T-1307 DONE
+
+T-1306：新增 `/analysis/:jobId`、`/suggest/:jobId` 独立路由+侧栏导航项，内容复用作业详情页原有的 `RecipeErrorAnalysis`/`RecipeSuggestion`/`VLARecipeErrorAnalysis`（都是从 `JobLLM.tsx`/`Job.tsx` 导出，不是重写）；作业详情页加"在独立页面打开"带上下文链接。`nav_split.mjs` 11/11。
+
+T-1307：`Hardware.tsx` 三张表加图标（占位图形，非真实 LOGO）；硬件画像行点击展开详情（完整 TFLOPS/原生格式/`source` 链接）。顺带发现并补上一个真缺口：`data/hardware_db/**/*.yaml` 本来就有 `source` 字段，C++ 解析时一直没读，这次加上并通过 `/hardware/profiles` 吐出来。`estimator_test.cpp` +1（mutation 验证），4090 `ctest` 288/288；`hardware_plugin.mjs` 11/11。
+
+P13 还剩 T-1308（多硬件对比闭环）和配方高级参数面板。

@@ -168,8 +168,8 @@
 | T-1303 | HF 目录后台定时刷新 + 二级分类分组 | P13 | T-0204,T-R25 | L2 | DONE (2026-10-10，见 P13 详情；4090 全量 277/277) |
 | T-1304 | 新建作业向导重构（五步，领域感知） | P13 | T-1301,T-1303,T-1305,T-0210 | L1 | PARTIAL (2026-10-12，前端本体已重排+接入新功能，见 P13 详情；真正的分步 Next/Back 导航改为单页多卡片保留，范围收窄有记录；"仅量化不评测"、LLM 量化/评估设备拆分（schema→Python→C++ JobRunner→前端）均已打通并 4090 真机通过真实 mqde serve 验证（VLA 设备拆分因 CUDA 专用调用散落暂缓）；配方高级参数面板仍未做) |
 | T-1305 | JobSpec 正式契约（T-0007 最小切片） | P13 | T-0210 | L2 | DONE (2026-10-10，见 P13 详情；ctest -R planner_validate_jobspec 全绿，4090 全量 268/268，python scripts/validate_job_schema.py 3/3 真实跑通) |
-| T-1306 | "量化与评测"信息架构拆分 | P13 | T-1304 | L1 | TODO |
-| T-1307 | 硬件与后端页面视觉改版 | P13 | T-0306 | L1 | TODO |
+| T-1306 | "量化与评测"信息架构拆分 | P13 | T-1304 | L1 | DONE (2026-10-12，/analysis、/suggest 独立路由+导航项，nav_split.mjs 11/11，web/e2e 全量 123/123) |
+| T-1307 | 硬件与后端页面视觉改版 | P13 | T-0306 | L1 | DONE (2026-10-12，三张表加图标，硬件画像行可展开详情+数据来源链接，hardware_plugin.mjs 11/11；HardwareProfile 新增 source 字段，estimator_test 1 例 mutation 验证，4090 ctest 288/288) |
 | T-1308 | 多硬件部署/推理/误差对比闭环 | P13 | T-1101,T-1102,T-1103 | L1 | TODO |
 
 > 标注“扩展/实验”的任务（T-0610、T-0706、T-1004、T-1005、T-1103~T-1105）不阻塞 v1.0，其余均为必选。
@@ -896,17 +896,13 @@
 **2026-10-12（再再再再续，前端接入）**：原来的单个"执行设备"下拉换成"量化设备"/"评估设备"两个独立选择器（仅 LLM 领域，VLA 后端本就没读这两个字段）。两者相同（默认都是 CPU，和重构前行为一致）时提交的 JobSpec 完全不带 `quant_device`/`evaluation.device` 这两个新字段，`deploy.device` 还是原来那套（和今天任何既有作业的提交形状逐字节一致）；两者不同时才带上这两个字段，`deploy.device` 则反映"只要有一个要 GPU 就要"，和 `JobRunner` 这次新实现的解析逻辑完全对应。新增 4 个 `newjob_wizard.mjs` 用例，`web/e2e/*` 全量 112/112；`npx tsc -b`/`npm run build` 干净。至此"量化/评估设备拆分"和"仅量化不评测"两项都已经从 schema 占位 → Python 实现 → C++ 服务端调度 → 前端控件，完整打通。
 - **校验**：`node web/e2e/newjob_wizard.mjs` 33/33；`newjob_live_estimate` 10/10、`ui_features` 20/20 不受影响。这轮没碰 C++/Python，不需要去 4090 跑前端 e2e（4090 不装 Playwright，见 `web/e2e/README.md`）。
 
-#### T-1306 "量化与评测"信息架构拆分
-- **依赖**：T-1304 **级别**：L1
-- **产出**：把"误差分析"（T-0903）、"优化建议"（T-0904）从作业详情页深处提升为独立一级导航条目。
-- **验收**：任意作业详情页一步跳到带上下文的独立"误差分析"页。
-- **校验**：回归 `layer_detail.mjs`/`attribution_highlight.mjs`/`clone_from_suggestion.mjs`。
+#### T-1306 "量化与评测"信息架构拆分 —— DONE 2026-10-12
+- **产出**：新路由 `/analysis/:jobId`、`/suggest/:jobId`（侧栏新增同名一级导航项），渲染和作业详情页 tab 一样的内容（`JobLLM.tsx` 导出 `RecipeErrorAnalysis`/`RecipeSuggestion`，`Job.tsx` 导出 `VLARecipeErrorAnalysis`），作业详情页每个配方旁加"在独立页面打开"链接带 `?recipe=` 上下文；冷启动（没选作业）显示引导文案+跳转 `/jobs`。`/suggest` 对 VLA 作业显示"后端没有这个能力"而不是空页面。
+- **校验**：新 `web/e2e/nav_split.mjs` 11/11；`web/e2e` 全量 123/123；回归 `layer_detail.mjs`/`attribution_highlight.mjs`/`clone_from_suggestion.mjs` 均过。
 
-#### T-1307 硬件与后端页面视觉改版
-- **依赖**：T-0306 **级别**：L1
-- **产出**：`web/src/assets/vendors/*.svg`（通用占位图标，非真实厂商 LOGO，用户已确认此方案）；`Hardware.tsx` 三张表格加图标列；硬件画像条目点击打开详情视图。
-- **验收**：三张表格可见图标；详情视图展示比表格行更完整的信息。
-- **校验**：Playwright 扩展 `hardware_plugin.mjs`。
+#### T-1307 硬件与后端页面视觉改版 —— DONE 2026-10-12
+- **产出**：`Hardware.tsx` 三张表格加图标（按 kind/vendor 生成的占位图形，非真实厂商 LOGO）；硬件画像库每行点击展开详情（完整 `peak_tflops`、全部原生格式、`source` 链接）。顺带补上后端缺口：`HardwareProfile.source`（原来 YAML 里有但解析时被丢弃），`GET /hardware/profiles` 现在带出来。
+- **校验**：`estimator_test.cpp` 新增 1 例（mutation 验证过），4090 `ctest` 288/288；`hardware_plugin.mjs` 新增 4 例，11/11。
 
 #### T-1308 多硬件部署/推理/误差对比闭环
 - **依赖**：T-1101, T-1102, T-1103 **级别**：L1
