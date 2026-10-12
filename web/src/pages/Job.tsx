@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, fmt, fmtBytes, followJob, JobDetail, JobEvent, JobReport, LLMJobReport, RecipeReport } from "../api";
 import { barItem, baseOption, Chart, series, token } from "../charts";
 import { Tile } from "./Estimate";
@@ -130,7 +130,7 @@ export default function JobPage() {
         <EventLog events={events} />
       </div>
 
-      {rep && (isLLM ? <LLMReportView rep={rep as unknown as LLMJobReport} job={detail?.job} /> : <ReportView rep={rep} />)}
+      {rep && (isLLM ? <LLMReportView rep={rep as unknown as LLMJobReport} job={detail?.job} jobId={id} /> : <ReportView rep={rep} jobId={id} />)}
     </>
   );
 }
@@ -162,7 +162,7 @@ function EventLog({ events }: { events: JobEvent[] }) {
   );
 }
 
-function ReportView({ rep }: { rep: JobReport }) {
+function ReportView({ rep, jobId }: { rep: JobReport; jobId?: string }) {
   // the server re-serializes JSON with sorted keys; restore the job's recipe order
   const names = orderedRecipes(rep);
   const [params, setParams] = useSearchParams();
@@ -192,12 +192,20 @@ function ReportView({ rep }: { rep: JobReport }) {
         </div>
       )}
       {tab === "overview" && names.length > 0 && <Overview rep={rep} />}
-      {tab !== "overview" && rep.recipes?.[tab] && <RecipeView r={rep.recipes[tab]} rep={rep} />}
+      {tab !== "overview" && rep.recipes?.[tab] && jobId && (
+        <p className="small muted" data-testid="open-standalone-links">
+          在独立页面打开：{" "}
+          <Link to={`/analysis/${jobId}?recipe=${tab}`} data-testid="open-analysis-link">
+            误差分析
+          </Link>
+        </p>
+      )}
+      {tab !== "overview" && rep.recipes?.[tab] && <VLARecipeErrorAnalysis r={rep.recipes[tab]} rep={rep} />}
     </>
   );
 }
 
-function orderedRecipes(rep: JobReport): string[] {
+export function orderedRecipes(rep: JobReport): string[] {
   const all = Object.keys(rep.recipes ?? {});
   const order = (rep.spec?.recipes ?? []).map((x) => x.toLowerCase());
   return [...all].sort((a, b) => order.indexOf(a.toLowerCase()) - order.indexOf(b.toLowerCase()));
@@ -333,7 +341,7 @@ function Overview({ rep }: { rep: JobReport }) {
   );
 }
 
-function RecipeView({ r, rep }: { r: RecipeReport; rep: JobReport }) {
+export function VLARecipeErrorAnalysis({ r, rep }: { r: RecipeReport; rep: JobReport }) {
   void rep;
   return (
     <>

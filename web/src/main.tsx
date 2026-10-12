@@ -11,10 +11,14 @@ import JobPage from "./pages/Job";
 import HardwarePage from "./pages/Hardware";
 import ComparePage from "./pages/Compare";
 import CatalogPage from "./pages/Catalog";
+import AnalysisPage from "./pages/Analysis";
+import SuggestPage from "./pages/Suggest";
 
+// T-1306: "误差分析"/"优化建议" used to live only as tabs buried inside a job's own detail page; promoted
+// to their own top-level nav items (standalone /analysis, /suggest routes) so the site map is flat.
 const NAV: { group: string; items: [string, string, string][] }[] = [
   { group: "评估前", items: [["/fit", "◎", "部署预评估"], ["/graph", "◇", "模型结构"], ["/estimate", "▦", "资源预估"]] },
-  { group: "量化与评测", items: [["/new", "＋", "新建作业"], ["/jobs", "▶", "作业与执行"], ["/compare", "⇄", "配方对比"]] },
+  { group: "量化与评测", items: [["/new", "＋", "新建作业"], ["/jobs", "▶", "作业与执行"], ["/analysis", "△", "误差分析"], ["/suggest", "☆", "优化建议"], ["/compare", "⇄", "配方对比"]] },
   { group: "部署", items: [["/hardware", "▣", "硬件与后端"], ["/catalog", "◈", "模型目录"]] },
 ];
 
@@ -79,6 +83,10 @@ function App() {
           <Route path="/new" element={<NewJobPage />} />
           <Route path="/jobs" element={<JobsPage />} />
           <Route path="/jobs/:id" element={<JobPage />} />
+          <Route path="/analysis" element={<AnalysisPage />} />
+          <Route path="/analysis/:jobId" element={<AnalysisPage />} />
+          <Route path="/suggest" element={<SuggestPage />} />
+          <Route path="/suggest/:jobId" element={<SuggestPage />} />
           <Route path="/compare" element={<ComparePage />} />
           <Route path="/hardware" element={<HardwarePage />} />
           <Route path="/catalog" element={<CatalogPage />} />

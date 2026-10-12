@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, fmt, fmtBytes, LlamaCppDeploy, LlamaServe, llamaSpeed, LLMJobReport, LLMRecipeReport, Sensitivity, LmEval } from "../api";
 import { baseOption, Chart, series, token } from "../charts";
 import { Tile } from "./Estimate";
@@ -25,14 +25,14 @@ const pct = (v: number | null | undefined) => (v == null ? "–" : `${v >= 0 ? "
 const wdesc = (r: LLMRecipeReport) =>
   `W ${r.weight.format}${r.weight.bits ?? ""}${r.weight.group_size ? " g" + r.weight.group_size : ""} · A ${r.act.format === "none" ? "FP" : `${r.act.format}${r.act.bits ?? ""}`}`;
 
-function ordered(rep: LLMJobReport): LLMRecipeReport[] {
+export function ordered(rep: LLMJobReport): LLMRecipeReport[] {
   // A job that failed before writing its full report (or a stand-in worker in a test) may have no spec / recipes at
   // all; fall back to whatever `recipes` order the report itself has rather than crashing the page.
   const order = (rep.spec?.recipes ?? []).map((x) => x.toLowerCase());
   return Object.values(rep.recipes ?? {}).sort((a, b) => order.indexOf(a.recipe.toLowerCase()) - order.indexOf(b.recipe.toLowerCase()));
 }
 
-export function LLMReportView({ rep, job }: { rep: LLMJobReport; job?: Record<string, unknown> }) {
+export function LLMReportView({ rep, job, jobId }: { rep: LLMJobReport; job?: Record<string, unknown>; jobId?: string }) {
   const rs = ordered(rep);
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") ?? "overview";
@@ -62,6 +62,18 @@ export function LLMReportView({ rep, job }: { rep: LLMJobReport; job?: Record<st
         </div>
       )}
       {tab === "overview" && rs.length > 0 && <Overview rep={rep} rs={rs} />}
+      {cur && jobId && (
+        <p className="small muted" data-testid="open-standalone-links">
+          在独立页面打开：{" "}
+          <Link to={`/analysis/${jobId}?recipe=${cur.recipe}`} data-testid="open-analysis-link">
+            误差分析
+          </Link>{" "}
+          ·{" "}
+          <Link to={`/suggest/${jobId}?recipe=${cur.recipe}`} data-testid="open-suggest-link">
+            优化建议
+          </Link>
+        </p>
+      )}
       {cur && <RecipeView r={cur} base={b?.ppl} job={job} />}
     </>
   );
@@ -488,7 +500,9 @@ function VllmCard({ rs }: { rs: LLMRecipeReport[] }) {
   );
 }
 
-function RecipeView({ r, base, job }: { r: LLMRecipeReport; base?: number; job?: Record<string, unknown> }) {
+// T-1306: split so /analysis and /suggest (standalone pages, promoted out of the job detail tabs) can
+// render just one half each; RecipeView below still composes both for the embedded per-recipe tab.
+export function RecipeErrorAnalysis({ r, base }: { r: LLMRecipeReport; base?: number }) {
   return (
     <>
       <div className="tiles">
@@ -497,8 +511,21 @@ function RecipeView({ r, base, job }: { r: LLMRecipeReport; base?: number; job?:
         <Tile label="相对原模型" value={pct(r.summary.ppl_delta_pct)} hint={`算法 ${r.algorithm}`} />
         <Tile label="量化层数" value={`${r.layers.length}`} hint={`${wdesc(r)} · 跳过 ${r.skipped.length}`} />
       </div>
-      {r.sensitivity && <SensitivityCard s={r.sensitivity} recipe={r.recipe} job={job} />}
       <LayerAnalysis layers={r.layers} strip="model." />
+    </>
+  );
+}
+
+export function RecipeSuggestion({ r, job }: { r: LLMRecipeReport; job?: Record<string, unknown> }) {
+  if (!r.sensitivity) return <p className="note">该配方未开启敏感度分析（analysis.sensitivity），没有可生成的优化建议。</p>;
+  return <SensitivityCard s={r.sensitivity} recipe={r.recipe} job={job} />;
+}
+
+function RecipeView({ r, base, job }: { r: LLMRecipeReport; base?: number; job?: Record<string, unknown> }) {
+  return (
+    <>
+      <RecipeErrorAnalysis r={r} base={base} />
+      {r.sensitivity && <RecipeSuggestion r={r} job={job} />}
     </>
   );
 }
