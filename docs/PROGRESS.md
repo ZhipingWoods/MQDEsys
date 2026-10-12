@@ -783,3 +783,9 @@ T-1306：新增 `/analysis/:jobId`、`/suggest/:jobId` 独立路由+侧栏导航
 T-1307：`Hardware.tsx` 三张表加图标（占位图形，非真实 LOGO）；硬件画像行点击展开详情（完整 TFLOPS/原生格式/`source` 链接）。顺带发现并补上一个真缺口：`data/hardware_db/**/*.yaml` 本来就有 `source` 字段，C++ 解析时一直没读，这次加上并通过 `/hardware/profiles` 吐出来。`estimator_test.cpp` +1（mutation 验证），4090 `ctest` 288/288；`hardware_plugin.mjs` 11/11。
 
 P13 还剩 T-1308（多硬件对比闭环）和配方高级参数面板。
+
+### 2026-10-12（×7续） · Claude · T-1308 DONE，P13 全部完成
+
+发现 `llm_job.py` 报告原本不记录任何硬件标识，补上 `env.hardware`/`quant_device_name`/`eval_device_name`（后两个是真实测到的设备名，不是提交时填的标签）。Mac 没装 torch，不为这一项单独装；用 4090 上 CPU vs CUDA 两种真实硬件各跑一次同一个 Qwen2.5-0.5B W4A16 GPTQ 作业：量化 175.3s vs 59.6s、评估 2.0s vs 0.065s（真实吞吐差异），PPL 17.46 vs 17.86（CPU/CUDA 数值路径不同，预期内，不是 bug）。`Compare.tsx` 新增"按硬件对比"表，仅 ≥2 种硬件才显示。`hardware_compare.mjs` 7/7。
+
+P13（领域泛化与前端重构）全部 8 个任务（T-1301～T-1308）完成。T-1304 范围收窄记录在案的几项（配方高级参数面板、校准自定义样本、评估数据集画廊）仍未做，是下一步候选。

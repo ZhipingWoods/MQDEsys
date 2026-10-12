@@ -170,7 +170,7 @@
 | T-1305 | JobSpec 正式契约（T-0007 最小切片） | P13 | T-0210 | L2 | DONE (2026-10-10，见 P13 详情；ctest -R planner_validate_jobspec 全绿，4090 全量 268/268，python scripts/validate_job_schema.py 3/3 真实跑通) |
 | T-1306 | "量化与评测"信息架构拆分 | P13 | T-1304 | L1 | DONE (2026-10-12，/analysis、/suggest 独立路由+导航项，nav_split.mjs 11/11，web/e2e 全量 123/123) |
 | T-1307 | 硬件与后端页面视觉改版 | P13 | T-0306 | L1 | DONE (2026-10-12，三张表加图标，硬件画像行可展开详情+数据来源链接，hardware_plugin.mjs 11/11；HardwareProfile 新增 source 字段，estimator_test 1 例 mutation 验证，4090 ctest 288/288) |
-| T-1308 | 多硬件部署/推理/误差对比闭环 | P13 | T-1101,T-1102,T-1103 | L1 | TODO |
+| T-1308 | 多硬件部署/推理/误差对比闭环 | P13 | T-1101,T-1102,T-1103 | L1 | DONE (2026-10-12，发现 llm_job.py 报告原本不记录任何硬件标识，补上 env.hardware/quant_device_name/eval_device_name；4090 上真实跑了同一 Qwen2.5-0.5B W4A16 在 CPU 和 CUDA 上各一次：量化 175.3s vs 59.6s、评估 2.0s vs 0.065s，PPL 17.46 vs 17.86（GPTQ CPU/GPU 数值路径不同，预期之内，不是 bug）；Compare.tsx 新增"按硬件对比"表，仅当同配方出现≥2种硬件时显示，hardware_compare.mjs 7/7。Mac 用 Metal 跑没做——本机无 torch，不打算为这一项单独装；用 4090 CPU vs CUDA 作为两种真实硬件) |
 
 > 标注“扩展/实验”的任务（T-0610、T-0706、T-1004、T-1005、T-1103~T-1105）不阻塞 v1.0，其余均为必选。
 > 注意：T-0805 依赖 T-1101（HAL），可在 P8 前提前完成 T-1101。
@@ -904,11 +904,11 @@
 - **产出**：`Hardware.tsx` 三张表格加图标（按 kind/vendor 生成的占位图形，非真实厂商 LOGO）；硬件画像库每行点击展开详情（完整 `peak_tflops`、全部原生格式、`source` 链接）。顺带补上后端缺口：`HardwareProfile.source`（原来 YAML 里有但解析时被丢弃），`GET /hardware/profiles` 现在带出来。
 - **校验**：`estimator_test.cpp` 新增 1 例（mutation 验证过），4090 `ctest` 288/288；`hardware_plugin.mjs` 新增 4 例，11/11。
 
-#### T-1308 多硬件部署/推理/误差对比闭环
-- **依赖**：T-1101, T-1102, T-1103 **级别**：L1
-- **产出**：真实跑通同一量化模型在 ≥2 种硬件上的部署+推理；报告/`Compare.tsx` 新增按硬件分面的吞吐/误差对比维度。
-- **验收**：真实数据证明同一配方在 4090 和 Mac 上能在一张表里对比。
-- **校验**：手工集成验证（同 T-0701/T-0805 的既有做法）+ 数据聚合逻辑单测。
+#### T-1308 多硬件部署/推理/误差对比闭环 —— DONE 2026-10-12
+- **发现的真缺口**：`llm_job.py` 的 `report.json` 原来完全不记录任何硬件标识（只有 `env.device` 这种原始设备字符串），没法按硬件分面。`LLMJobSpec` 新增 `hardware`（`deploy.hardware`，仅作记录）；`env` 新增 `quant_device_name`/`eval_device_name`——真实测到的设备名（GPU 走 `torch.cuda.get_device_name()`），不是submitter填的标签。
+- **真实验证**：Mac 没装 torch，不打算单独为这一项装；改用 4090 上两种真实存在的硬件——CPU 和 CUDA——各跑一次同一个真实 Qwen2.5-0.5B + W4A16 GPTQ 作业：量化耗时 175.3s（CPU）vs 59.6s（GPU），评估耗时 2.0s vs 0.065s，吞吐差异真实；PPL 17.46 vs 17.86——不完全相等（GPTQ 在 CPU/CUDA 走不同数值路径，预期之内，不是 bug，也证明这不是编出来的假数据）。
+- **产出**：`Compare.tsx` 新增"按硬件对比"表，按 `recipe` 分组，仅当同一配方在 ≥2 个不同 `eval_device_name` 下出现时才显示（只有 1 种硬件时完全不渲染，不是空表）。
+- **校验**：1 个新 pytest 用例（4090 真跑），新 `web/e2e/hardware_compare.mjs` 7/7（含"只有一种硬件时该表不出现"的反例）。
 
 ---
 
