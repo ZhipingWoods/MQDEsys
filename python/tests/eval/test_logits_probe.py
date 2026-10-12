@@ -148,3 +148,85 @@ def test_progress_callback() -> None:
     seen: list[tuple[int, int]] = []
     compare_to_reference(q, w, capture_reference(r, w, k=8), progress=lambda i, n: seen.append((i, n)))
     assert seen == [(1, 3), (2, 3), (3, 3)]
+
+
+# ---------------------------------------------------------------- per-sample (variable length) probe: VLM image+text inputs
+from mqde.eval.logits_probe import capture_sample_reference, compare_to_sample_reference  # noqa: E402
+
+
+class Samples:
+    """A fake multimodal model: sample i has its own length and logits table; `fn(i)` returns [len_i, vocab]."""
+
+    def __init__(self, tables: list[torch.Tensor]) -> None:
+        self.tables = tables
+
+    def __call__(self, i: int) -> torch.Tensor:
+        return self.tables[i][None]
+
+
+def tables(lens: list[int], noise: float = 0.0, seed: int = 0) -> tuple[Samples, Samples]:
+    g = torch.Generator().manual_seed(seed)
+    ref = [torch.randn(n, V, generator=g) * 2 for n in lens]
+    q = [r + noise * torch.randn(r.shape, generator=g) for r in ref]
+    return Samples(ref), Samples(q)
+
+
+def masks(lens: list[int], start: list[int]) -> list[torch.Tensor]:
+    return [torch.arange(n) >= s for n, s in zip(lens, start, strict=True)]
+
+
+def test_variable_lengths_and_identical_models_give_zero_kl() -> None:
+    lens = [5, 9, 3]
+    ref, q = tables(lens)
+    m = masks(lens, [0, 0, 0])
+    r = capture_sample_reference(ref, len(lens), m)
+    got = compare_to_sample_reference(q, r)
+    assert got["kl"] == pytest.approx(0, abs=TOL) and got["top1_agreement"] == 1.0
+    assert got["positions"] == sum(lens) and got["samples"] == 3
+
+
+def test_only_masked_positions_are_compared() -> None:
+    """The prompt (image + question) positions are not answers: perturbing them must not change the result."""
+    lens = [8, 8]
+    ref, q = tables(lens)
+    for t in q.tables:
+        t[:4] += 50.0 * torch.randn(4, V)  # destroy the first 4 positions of every sample
+    m = masks(lens, [4, 4])
+    got = compare_to_sample_reference(q, capture_sample_reference(ref, 2, m))
+    assert got["kl"] == pytest.approx(0, abs=TOL) and got["top1_agreement"] == 1.0
+    assert got["positions"] == 8, "only the 4 answer positions of each of the 2 samples"
+    unmasked = compare_to_sample_reference(q, capture_sample_reference(ref, 2, masks(lens, [0, 0])))
+    assert unmasked["kl"] > 1.0, "the same damage is visible once those positions are included"
+
+
+def test_matches_the_windowed_probe_on_equal_length_inputs() -> None:
+    a, b, w = pair(n=3, s=16, noise=0.7)
+    base = compare_to_reference(b, w, capture_reference(a, w, k=32, exact=True))
+    sa = Samples([a.logits[i] for i in range(3)])
+    sb = Samples([b.logits[i] for i in range(3)])
+    got = compare_to_sample_reference(sb, capture_sample_reference(sa, 3, masks([16] * 3, [0] * 3), k=32, exact=True))
+    assert got["kl"] == pytest.approx(base["kl"], rel=1e-6) and got["top1_agreement"] == pytest.approx(base["top1_agreement"])
+    assert got["ref_top1_prob_drop"] == pytest.approx(base["ref_top1_prob_drop"], abs=1e-6)
+
+
+def test_topk_sample_probe_is_a_lower_bound_of_exact() -> None:
+    lens = [7, 11]
+    ref, q = tables(lens, noise=0.8)
+    m = masks(lens, [2, 3])
+    exact = compare_to_sample_reference(q, capture_sample_reference(ref, 2, m, k=16, exact=True))
+    topk = compare_to_sample_reference(q, capture_sample_reference(ref, 2, m, k=16, exact=False))
+    assert 0 < topk["kl"] <= exact["kl"] + TOL
+
+
+def test_a_sample_whose_length_changed_is_rejected() -> None:
+    ref, q = tables([6, 6])
+    r = capture_sample_reference(ref, 2, masks([6, 6], [0, 0]))
+    bad = Samples([q.tables[0], q.tables[1][:4]])  # sample 1 now has 4 positions instead of 6
+    with pytest.raises(ValueError, match="sample 1"):
+        compare_to_sample_reference(bad, r)
+
+
+def test_an_empty_mask_is_rejected_instead_of_dividing_by_zero() -> None:
+    ref, _ = tables([4])
+    with pytest.raises(ValueError, match="no positions"):
+        capture_sample_reference(ref, 1, [torch.zeros(4, dtype=torch.bool)])

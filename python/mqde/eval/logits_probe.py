@@ -125,6 +125,86 @@ def compare_to_reference(logits_fn: LogitsFn, windows: torch.Tensor, ref: Refere
             "windows": ref.n_windows, "seq_len": ref.seq_len, "exact": ref.exact, "k": ref.k, "reference_mib": ref.nbytes() / 2**20}
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Per-sample probe (T-1002): inputs that are not a flat window of token ids -- an image plus a question, whose length
+# differs from sample to sample. Same measures and the same _kl_exact / _kl_topk as above; the model is a function of the
+# sample *index* returning [1, len_i, vocab], and a boolean mask per sample picks the positions that count (the answer
+# tokens, not the image / question positions the model is only conditioned on).
+
+SampleLogitsFn = Callable[[int], torch.Tensor]
+
+
+@dataclass
+class SampleReference:
+    exact: bool
+    k: int
+    masks: list[torch.Tensor]  # [len_i] bool, on cpu
+    logits: list[torch.Tensor] | None = None  # exact: [n_i, vocab] float16, only the masked positions
+    topk_val: list[torch.Tensor] | None = None  # [n_i, k] float32
+    topk_idx: list[torch.Tensor] | None = None  # [n_i, k] int64
+    lse: list[torch.Tensor] | None = None  # [n_i] float32
+
+    @property
+    def n_samples(self) -> int:
+        return len(self.masks)
+
+    def nbytes(self) -> int:
+        parts = [*(self.logits or []), *(self.topk_val or []), *(self.topk_idx or []), *(self.lse or [])]
+        return sum(t.numel() * t.element_size() for t in parts)
+
+
+@torch.inference_mode()
+def capture_sample_reference(fn: SampleLogitsFn, n_samples: int, masks: list[torch.Tensor], k: int = 256,
+                             exact: bool = False) -> SampleReference:
+    if len(masks) != n_samples:
+        raise ValueError(f"{len(masks)} masks for {n_samples} samples")
+    ref = SampleReference(exact=exact, k=k, masks=[m.cpu() for m in masks], logits=[] if exact else None, topk_val=[], topk_idx=[], lse=[])
+    assert ref.topk_val is not None and ref.topk_idx is not None and ref.lse is not None
+    for i in range(n_samples):
+        if not bool(masks[i].any()):
+            raise ValueError(f"sample {i} has no positions to compare (empty mask)")
+        lg = fn(i).float()[0]
+        if lg.shape[0] != masks[i].shape[0]:
+            raise ValueError(f"sample {i}: the model returned {lg.shape[0]} positions, the mask has {masks[i].shape[0]}")
+        lg = lg[masks[i].to(lg.device)]
+        if exact:
+            assert ref.logits is not None
+            ref.logits.append(lg.to(torch.float16).cpu())
+        v, ix = lg.topk(min(k, lg.shape[-1]), dim=-1)
+        ref.topk_val.append(v.cpu())
+        ref.topk_idx.append(ix.cpu())
+        ref.lse.append(torch.logsumexp(lg, dim=-1).cpu())
+    return ref
+
+
+@torch.inference_mode()
+def compare_to_sample_reference(fn: SampleLogitsFn, ref: SampleReference,
+                                progress: Callable[[int, int], None] | None = None) -> dict[str, float]:
+    assert ref.topk_val is not None and ref.topk_idx is not None and ref.lse is not None
+    kl_sum = agree = drop = 0.0
+    n_pos = 0
+    for i in range(ref.n_samples):
+        full = fn(i).float()[0]
+        if full.shape[0] != ref.masks[i].shape[0]:
+            raise ValueError(f"sample {i}: {full.shape[0]} positions, the reference has {ref.masks[i].shape[0]}")
+        q = full[ref.masks[i].to(full.device)]
+        if ref.exact:
+            assert ref.logits is not None
+            kl = _kl_exact(ref.logits[i].to(q.device), q)
+        else:
+            kl = _kl_topk(ref.topk_val[i].to(q.device), ref.topk_idx[i], ref.lse[i].to(q.device), q)
+        ref_top1 = ref.topk_idx[i][:, 0].to(q.device)
+        agree += float((q.argmax(-1) == ref_top1).sum())
+        p_ref_top1 = (ref.topk_val[i][:, 0] - ref.lse[i]).exp().to(q.device)
+        drop += float((p_ref_top1 - F.softmax(q, dim=-1).gather(-1, ref_top1[:, None])[:, 0]).sum())
+        kl_sum += float(kl.sum())
+        n_pos += q.shape[0]
+        if progress:
+            progress(i + 1, ref.n_samples)
+    return {"kl": kl_sum / n_pos, "top1_agreement": agree / n_pos, "ref_top1_prob_drop": drop / n_pos, "positions": n_pos,
+            "samples": ref.n_samples, "exact": ref.exact, "k": ref.k, "reference_mib": ref.nbytes() / 2**20}
+
+
 @torch.inference_mode()
 def probe_error(logits_fn_ref: LogitsFn, logits_fn_q: LogitsFn, windows: torch.Tensor, k: int = 256) -> dict[str, float]:
     """Gap between the top-k KL and the exact KL for two *live* models (tests / validation; needs both at once)."""
