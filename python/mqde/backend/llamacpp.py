@@ -1,7 +1,7 @@
 """llama.cpp backend (T-0705): run a GGUF with ``llama-perplexity`` / ``llama-bench`` on CPU, Metal or CUDA builds.
 
-Binaries come from MQDE_LLAMACPP_BIN or the repo's out-of-tree builds (``build/llamacpp/bin``, then
-``build/llamacpp-metal/bin``). ``gpu_layers`` maps to ``-ngl``: 0 keeps every layer on the CPU, 99 offloads all
+Binaries come from MQDE_LLAMACPP_BIN, then the managed release ``scripts/setup_backend.py`` installs, then the repo's
+out-of-tree builds (``build/llamacpp/bin``, then ``build/llamacpp-metal/bin``). ``gpu_layers`` maps to ``-ngl``: 0 keeps every layer on the CPU, 99 offloads all
 of them (Metal/CUDA), None leaves llama.cpp's own default.
 """
 
@@ -14,11 +14,14 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from mqde.backend import envs
+
 REPO = Path(__file__).resolve().parents[3]
 
 
 def bin_dir() -> Path:
-    for c in [os.environ.get("MQDE_LLAMACPP_BIN", ""), str(REPO / "build/llamacpp/bin"),
+    managed = envs.managed_llamacpp_server()
+    for c in [os.environ.get("MQDE_LLAMACPP_BIN", ""), str(managed.parent) if managed else "", str(REPO / "build/llamacpp/bin"),
               str(REPO / "build/llamacpp-metal/bin")]:
         if c and (Path(c) / "llama-perplexity").is_file():
             return Path(c)

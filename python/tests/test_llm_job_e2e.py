@@ -140,10 +140,11 @@ def test_from_yaml_parses_deploy_sglang_like_deploy_vllm(tmp_path: Path) -> None
 
 def test_sglang_stage_is_skipped_with_a_reason_when_the_environment_is_missing(job_env: None, tmp_path: Path,
                                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
-    from mqde.backend import sglang_server
+    from mqde.backend import envs
 
     monkeypatch.delenv("MQDE_SGLANG_PYTHON", raising=False)
-    monkeypatch.setattr(sglang_server, "REPO", tmp_path)
+    monkeypatch.setenv("MQDE_ENVS_DIR", str(tmp_path / "envs"))
+    monkeypatch.setattr(envs, "repo_root", lambda: tmp_path)
     job = LLMJob(spec(tmp_path, sglang={}), job_dir=tmp_path / "j")
     r = job._sglang_serve(tmp_path, torch.zeros(8, dtype=torch.long), 10.0)
     assert r["status"] == "skipped" and "MQDE_SGLANG_PYTHON" in r["reason"]

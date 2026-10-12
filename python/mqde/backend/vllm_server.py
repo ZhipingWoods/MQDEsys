@@ -1,8 +1,9 @@
 """vLLM deployment adapter (T-0703 / S11): ``vllm serve`` as a child process on 127.0.0.1.
 
 vLLM usually lives in its own environment (it pins torch / transformers), so it is launched as a subprocess by
-binary path and spoken to over HTTP; nothing from vLLM is imported. The binary comes from ``MQDE_VLLM_BIN``,
-then ``vllm`` on PATH, then ``build/vllm/bin/vllm``.
+binary path and spoken to over HTTP; nothing from vLLM is imported. The binary comes from ``MQDE_VLLM_BIN``, then
+the managed environment ``scripts/setup_backend.py`` creates (``$MQDE_ENVS_DIR/vllm``), then ``vllm`` on PATH, then
+``build/vllm/bin/vllm`` (``backend.envs.resolve``).
 
 Failures that were seen on real runs are recognised from the log and reported with a fix hint; ``engine_info``
 reads the KV-cache capacity vLLM prints at startup (used to compare against the estimator's max concurrency).
@@ -12,13 +13,11 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 from pathlib import Path
 from typing import Any
 
+from mqde.backend import envs
 from mqde.backend.base import HOST, ServerBackend, free_port, http_json, match_diagnosis
-
-REPO = Path(__file__).resolve().parents[3]
 
 # log substring -> diagnosis (first match wins, most specific first)
 DIAGNOSES: list[tuple[str, str]] = [
@@ -46,10 +45,11 @@ DIAGNOSES: list[tuple[str, str]] = [
 
 
 def vllm_bin() -> Path:
-    for c in [os.environ.get("MQDE_VLLM_BIN", ""), shutil.which("vllm") or "", str(REPO / "build/vllm/bin/vllm")]:
-        if c and Path(c).is_file():
-            return Path(c)
-    raise FileNotFoundError("vllm not found (install vLLM into its own env and set MQDE_VLLM_BIN to its `vllm` binary)")
+    r = envs.resolve("vllm")
+    if r is None:
+        raise FileNotFoundError("vllm not found (run `scripts/setup_backend.py install vllm`, or set MQDE_VLLM_BIN to the "
+                                "`vllm` binary of your own environment)")
+    return r.path
 
 
 def diagnose(log: str) -> str | None:

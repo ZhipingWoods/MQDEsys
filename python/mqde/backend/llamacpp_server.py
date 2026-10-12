@@ -4,8 +4,9 @@
 failure diagnosis with the other backends (``backend.base``). ``smoke`` sends one chat request; ``serve_bench``
 is a thin wrapper over ``eval.loadtest`` (llama-server's native streaming protocol).
 
-The binary comes from ``MQDE_LLAMA_SERVER_BIN`` or ``build/llamacpp-server/bin/llama-server`` (upstream
-llama.cpp; the omni fork on the dev machine removed the llama-server target).
+The binary comes from ``MQDE_LLAMA_SERVER_BIN``, then the managed release ``scripts/setup_backend.py`` installs
+(``$MQDE_ENVS_DIR/llamacpp/current``), then ``build/llamacpp-server/bin/llama-server`` (upstream llama.cpp; the omni
+fork on the dev machine removed the llama-server target) -- ``backend.envs.resolve``.
 """
 
 from __future__ import annotations
@@ -14,12 +15,11 @@ import os
 from pathlib import Path
 from typing import Any
 
+from mqde.backend import envs
 from mqde.backend.base import HOST, ServerBackend, free_port, http_json, match_diagnosis, openai_smoke
 from mqde.eval.loadtest import LoadSpec, run_load
 
 __all__ = ["DIAGNOSES", "HOST", "LlamaServer", "diagnose", "free_port", "serve_bench", "server_bin", "smoke"]
-
-REPO = Path(__file__).resolve().parents[3]
 
 # log substring -> diagnosis shown in the report / UI
 DIAGNOSES: list[tuple[str, str]] = [
@@ -36,13 +36,11 @@ DIAGNOSES: list[tuple[str, str]] = [
 
 
 def server_bin() -> Path:
-    for c in [os.environ.get("MQDE_LLAMA_SERVER_BIN", ""), str(REPO / "build/llamacpp-server/bin/llama-server"),
-              str(REPO / "build/llamacpp-metal/bin/llama-server")]:
-        if c and Path(c).is_file():
-            return Path(c)
-    raise FileNotFoundError(
-        "llama-server not found (build upstream llama.cpp into build/llamacpp-server or set MQDE_LLAMA_SERVER_BIN)"
-    )
+    r = envs.resolve("llamacpp")
+    if r is None:
+        raise FileNotFoundError("llama-server not found (run `scripts/setup_backend.py install llamacpp`, or set "
+                                "MQDE_LLAMA_SERVER_BIN to your own build)")
+    return r.path
 
 
 def diagnose(log: str) -> str | None:

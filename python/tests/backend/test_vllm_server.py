@@ -109,9 +109,12 @@ def test_diagnose_real_log_lines(log: str, why: str | None) -> None:
 
 
 def test_binary_lookup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from mqde.backend import envs
+
     monkeypatch.delenv("MQDE_VLLM_BIN", raising=False)
     monkeypatch.setenv("PATH", str(tmp_path))
-    monkeypatch.setattr(vs, "REPO", tmp_path)
+    monkeypatch.setenv("MQDE_ENVS_DIR", str(tmp_path / "envs"))
+    monkeypatch.setattr(envs, "repo_root", lambda: tmp_path)
     with pytest.raises(FileNotFoundError, match="MQDE_VLLM_BIN"):
         vs.vllm_bin()
     b = mock_backend.wrapper(tmp_path, "vllm")

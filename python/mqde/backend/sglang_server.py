@@ -2,9 +2,8 @@
 
 SGLang pins its own torch / transformers / flashinfer, so (like vLLM) it lives in its own environment and is
 launched by interpreter path and spoken to over HTTP; nothing from SGLang is imported. The interpreter comes from
-``MQDE_SGLANG_PYTHON``, then ``build/sglang/bin/python``; a missing environment is reported, not guessed. The source
-tree is the ``3rdpart/sglang`` submodule installed editable into that environment (``SGLANG_BUILD_RUST_EXTS=none``:
-only ``launch_server`` is used, not the Rust gateway), so the adapter and the engine it runs always agree.
+``MQDE_SGLANG_PYTHON``, then the managed environment ``scripts/setup_backend.py`` creates (``$MQDE_ENVS_DIR/sglang``),
+then ``build/sglang/bin/python`` (``backend.envs.resolve``); a missing environment is reported, not guessed.
 
 Failures seen on real runs are recognised from the log; ``engine_info`` reads what SGLang prints at startup
 (weight memory, KV-cache capacity) so it can be compared with the estimator's numbers.
@@ -17,9 +16,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from mqde.backend import envs
 from mqde.backend.base import HOST, ServerBackend, free_port, http_json, match_diagnosis
-
-REPO = Path(__file__).resolve().parents[3]
 
 # log substring -> diagnosis (first match wins, most specific first)
 DIAGNOSES: list[tuple[str, str]] = [
@@ -43,11 +41,11 @@ DIAGNOSES: list[tuple[str, str]] = [
 
 
 def sglang_python() -> Path:
-    for c in [os.environ.get("MQDE_SGLANG_PYTHON", ""), str(REPO / "build/sglang/bin/python")]:
-        if c and Path(c).is_file():
-            return Path(c)
-    raise FileNotFoundError("sglang not found (install 3rdpart/sglang into its own env and set MQDE_SGLANG_PYTHON "
-                            "to that environment's python)")
+    r = envs.resolve("sglang")
+    if r is None:
+        raise FileNotFoundError("sglang not found (run `scripts/setup_backend.py install sglang`, or set MQDE_SGLANG_PYTHON "
+                                "to the python of your own SGLang environment)")
+    return r.path
 
 
 def diagnose(log: str) -> str | None:

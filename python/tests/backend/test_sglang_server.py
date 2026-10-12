@@ -110,8 +110,11 @@ def test_diagnose_real_log_lines(log: str, why: str | None) -> None:
 
 
 def test_interpreter_lookup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from mqde.backend import envs
+
     monkeypatch.delenv("MQDE_SGLANG_PYTHON", raising=False)
-    monkeypatch.setattr(ss, "REPO", tmp_path)
+    monkeypatch.setenv("MQDE_ENVS_DIR", str(tmp_path / "envs"))
+    monkeypatch.setattr(envs, "repo_root", lambda: tmp_path)
     with pytest.raises(FileNotFoundError, match="MQDE_SGLANG_PYTHON"):
         ss.sglang_python()
     b = mock_backend.wrapper(tmp_path, "python")
