@@ -149,12 +149,34 @@ def _run_out(cmd: list[str], timeout: float = 90) -> str | None:
 
 
 def parse_llama_version(text: str) -> str | None:
-    """``version: 11565 (abc123)`` (releases) -> ``b11565``; ``version: 0.5.0-dev (build 1, commit 81ff93e)`` (local builds) as is."""
-    m = re.search(r"version:\s*(\S+)", text)
+    """Release tag from ``llama-server --version``: ``version: 0.6.0-dev (build 11567, commit 972b5fc)`` -> ``b11567`` (official
+    release builds are tagged with their build number), older ``version: 11565 (abc)`` -> ``b11565``. A local build with no git
+    history says ``build 1``: that is not a release number, so keep what it says (``0.5.0-dev (build 1)``)."""
+    m = re.search(r"version:\s*(\S+)(?:\s*\(build\s+(\d+)[^)]*\))?", text)
     if not m:
         return None
-    v = m.group(1)
-    return f"b{v}" if v.isdigit() else v
+    ver, build = m.group(1), m.group(2)
+    if ver.isdigit():
+        return f"b{ver}"
+    if build is None:
+        return ver
+    return f"b{build}" if int(build) >= 100 else f"{ver} (build {build})"
+
+
+def why_not_starting(binary: Path) -> str:
+    """One line on why `binary --version` fails: its own message, else the shared libraries the loader cannot find."""
+    try:
+        r = subprocess.run([str(binary), "--version"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+        text = (r.stderr + r.stdout).strip()
+        if r.returncode != 0 and text:
+            return f"exit {r.returncode}: {text.splitlines()[-1][:300]}"
+        if r.returncode != 0:
+            miss = _run_out(["ldd", str(binary)], 15) if shutil.which("ldd") else None
+            gone = [ln.split()[0] for ln in (miss or "").splitlines() if "not found" in ln]
+            return f"exit {r.returncode}" + (f", missing libraries: {', '.join(gone)}" if gone else ", no output")
+        return "no version in its output"
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"{type(e).__name__}: {e}"
 
 
 def installed_version(backend: str, r: Resolved) -> str | None:
@@ -464,15 +486,20 @@ def install_llamacpp(version: str | None, r: Runner) -> str:
             r.log(f"+ download {by_name[n]['browser_download_url']} -> {dest}")
         return tag
     root.mkdir(parents=True, exist_ok=True)
+    cache = root / ".cache"  # archives survive a failed install: re-downloading 700 MB over a flaky link is the expensive part
+    cache.mkdir(exist_ok=True)
     tmp = Path(tempfile.mkdtemp(prefix=f".{tag}.", dir=root))
     try:
         for n in names:
-            r.log(f"downloading {n}")
-            f = tmp / n
-            download(by_name[n]["browser_download_url"], f, int(by_name[n].get("size") or 0) or None, r.log)
+            f = cache / n
+            size = int(by_name[n].get("size") or 0) or None
+            if f.is_file() and size and f.stat().st_size == size:
+                r.log(f"using the downloaded {n}")
+            else:
+                r.log(f"downloading {n}")
+                download(by_name[n]["browser_download_url"], f, size, r.log)
             with tarfile.open(f) as tf:
                 _safe_extract(tf, tmp / "x")
-            f.unlink()
         srv = next((p for p in sorted((tmp / "x").rglob("llama-server")) if p.is_file()), None)
         if srv is None:
             raise RuntimeError(f"llama.cpp {tag} archive has no llama-server")
@@ -481,9 +508,10 @@ def install_llamacpp(version: str | None, r: Runner) -> str:
                 p.chmod(p.stat().st_mode | 0o111)
         got = parse_llama_version(_run_out([str(srv), "--version"], 30) or "")
         if got is None:
-            raise RuntimeError("the downloaded llama-server does not start (--version failed)")
+            raise RuntimeError(f"the downloaded llama-server does not start ({why_not_starting(srv)})")
         shutil.rmtree(dest, ignore_errors=True)
         (tmp / "x").rename(dest)
+        shutil.rmtree(cache, ignore_errors=True)  # installed: the archives are no longer needed
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     link, new = root / "current", root / ".current.new"

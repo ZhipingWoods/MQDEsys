@@ -275,12 +275,22 @@ def test_installed_versions_are_read_from_the_binaries(clean: Path) -> None:
 
 
 @pytest.mark.parametrize(("out", "want"), [
+    # verbatim from a real b11567 release binary
+    ("version: 0.6.0-dev (build 11567, commit 972b5fcc1)\nbuilt with GNU 11.4.0 for Linux x86_64", "b11567"),
     ("version: 11565 (abc1234)\nbuilt with gcc", "b11565"),
-    ("version: 0.5.0-dev (build 1, commit 81ff93e)", "0.5.0-dev"),
+    # a local build without a git history reports build 1: not a release number, keep what it says
+    ("version: 0.5.0-dev (build 1, commit 81ff93e)", "0.5.0-dev (build 1)"),
+    ("version: 0.5.0-dev", "0.5.0-dev"),
     ("no version here", None),
 ])
 def test_llama_version_parsing(out: str, want: str | None) -> None:
     assert envs.parse_llama_version(out) == want
+
+
+def test_a_release_is_newer_than_a_local_build_and_equal_to_itself() -> None:
+    assert envs.is_newer("b11567", "0.5.0-dev (build 1)")
+    assert not envs.is_newer("b11567", "b11567") and not envs.is_newer("b11567", "b11568")
+    assert envs.is_newer("b11568", "b11567")
 
 
 # ---------------------------------------------------------------- resumable download
@@ -477,6 +487,41 @@ def test_a_release_whose_llama_server_does_not_start_is_not_installed(github: di
     root = clean / "envs/llamacpp"
     assert (root / "current").readlink() == Path("b11565"), "the working install is untouched"
     assert not (root / "b11566").exists()
+
+
+def test_a_server_that_does_not_start_reports_why_in_the_error(github: dict[str, object], clean: Path) -> None:
+    put_release(github, "b11566", server_script="#!/bin/sh\necho 'error while loading shared libraries: libcudart.so.12: cannot open shared object file' >&2\nexit 127")
+    with pytest.raises(RuntimeError, match="libcudart.so.12: cannot open shared object file"):
+        envs.install("llamacpp", "b11566", lambda _l: None)
+
+
+def test_downloaded_archives_are_kept_for_the_next_attempt_and_dropped_after_success(github: dict[str, object], clean: Path,
+                                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 700 MB download must not be thrown away because the install step after it failed (here: a transient start failure)."""
+    put_release(github, "b11566")
+    real = envs._run_out
+    monkeypatch.setattr(envs, "_run_out", lambda *a, **k: None)  # the post-download `llama-server --version` check fails once
+    with pytest.raises(RuntimeError, match="does not start"):
+        envs.install("llamacpp", "b11566", lambda _l: None)
+    fake: Fake = github["fake"]  # type: ignore[assignment]
+    assert len([h for h in fake.hits if h.startswith("/dl/")]) == 1
+    assert (clean / "envs/llamacpp/.cache" / asset("b11566", "ubuntu-x64")).is_file(), "the archive is still there"
+    monkeypatch.setattr(envs, "_run_out", real)
+    logs: list[str] = []
+    envs.install("llamacpp", "b11566", logs.append)
+    assert len([h for h in fake.hits if h.startswith("/dl/")]) == 1, "the retry used the cached archive: no second download"
+    assert any("using the downloaded" in line for line in logs)
+    assert (clean / "envs/llamacpp/current").readlink() == Path("b11566")
+    assert not list((clean / "envs/llamacpp/.cache").glob("*")) if (clean / "envs/llamacpp/.cache").exists() else True, "emptied after success"
+
+
+def test_a_cached_archive_of_the_wrong_size_is_downloaded_again(github: dict[str, object], clean: Path) -> None:
+    put_release(github, "b11566")
+    cache = clean / "envs/llamacpp/.cache"
+    cache.mkdir(parents=True)
+    (cache / asset("b11566", "ubuntu-x64")).write_bytes(b"truncated garbage")
+    envs.install("llamacpp", "b11566", lambda _l: None)
+    assert envs.resolve("llamacpp") is not None
 
 
 def test_archive_members_cannot_escape_the_install_directory(github: dict[str, object], clean: Path) -> None:
