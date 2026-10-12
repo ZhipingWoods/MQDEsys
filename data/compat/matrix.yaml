@@ -54,7 +54,16 @@ backends:
         reason: "vLLM 0.30.0 rejects asymmetric GPTQ (ValidationError on bits=4, sym=False); export as AWQ or compressed-tensors instead, or use a symmetric recipe"
         source: "docs/PROGRESS.md 2026-10 (GPTQ load FAIL, compressed-tensors load PASS, same checkpoint)"
   sglang:
-    loads: [compressed-tensors-int, compressed-tensors-fp8]  # per compressed_tensors.py's declared `backends`; not yet exercised end to end (T-0704)
+    # Each entry below was served end to end by SGLang 0.5.22.dev (3rdpart/sglang @ 86624f14eb) on an RTX 4090
+    # with Qwen2.5-0.5B exported by this repo's own exporters; served PPL was within 0.05% of the real-weight PPL
+    # (awq -0.02%, compressed-tensors W4A16 -0.02%, compressed-tensors FP8 W8A8 -0.04%, symmetric gptq +0.02%).
+    loads: [gptq, awq, compressed-tensors-int, compressed-tensors-fp8]
+    known_issues:
+      - format: gptq
+        when: {symmetric: false}
+        verdict: unsupported
+        reason: "SGLang (86624f14eb) only registers gptq_marlin for CUDA and auto-converts Marlin-compatible (symmetric) GPTQ checkpoints; an asymmetric one falls through to plain gptq, which is not registered ('Unknown quantization method: gptq'); export as AWQ or compressed-tensors instead, or use a symmetric recipe"
+        source: "docs/PROGRESS.md 2026-10-12 (asymmetric GPTQ load FAIL, symmetric GPTQ -> gptq_marlin PASS, awq / compressed-tensors PASS, same model)"
   hf_transformers:
     loads: []  # fake-quant evaluation only, never a deployment target for an exported checkpoint
   llamacpp:

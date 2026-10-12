@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, CatalogModel, DownloadStatus, fmtBytes, RuntimeParams } from "../api";
 import { DEFAULT_DATASET, DEFAULT_LLM, DEFAULT_MODEL, useAsync, useDebounced } from "../hooks";
@@ -58,6 +58,9 @@ export default function NewJobPage() {
   const [probeExact, setProbeExact] = useState(false);
   const [useVllm, setUseVllm] = useState(false);
   const [vllmUtil, setVllmUtil] = useState(0.3);
+  // T-0704: SGLang is a second real serving backend, independent of vLLM (both can be on to compare them)
+  const [useSglang, setUseSglang] = useState(false);
+  const [sglangMem, setSglangMem] = useState(0.3);
   const [useLmEval, setUseLmEval] = useState(false);
   const [lmTasks, setLmTasks] = useState("gsm8k");
   const [lmLimit, setLmLimit] = useState(50);
@@ -93,8 +96,18 @@ export default function NewJobPage() {
 
   // "不量化（保持原始精度）": bf16 (data/recipes/bf16.yaml) already means "no quantization" end to end, so
   // this reuses that real recipe rather than inventing a new, unimplemented concept.
+  // Unticking restores what was picked before ticking (it used to leave the job stuck on bf16-only).
+  const pickedBeforeNoQuant = useRef<string[] | null>(null);
   useEffect(() => {
-    if (noQuant) setPicked(["bf16"]);
+    if (noQuant) {
+      setPicked((p) => {
+        pickedBeforeNoQuant.current = p;
+        return ["bf16"];
+      });
+    } else if (pickedBeforeNoQuant.current) {
+      setPicked(pickedBeforeNoQuant.current);
+      pickedBeforeNoQuant.current = null;
+    }
   }, [noQuant]);
 
   // Picking a real deploy backend suggests (and can override) the export chips below, via the C++
@@ -108,13 +121,14 @@ export default function NewJobPage() {
   useEffect(() => {
     if (deployBackend === "none") {
       setUseVllm(false);
+      setUseSglang(false);
       setGguf([]);
       setSuggestion(null);
       return;
     }
-    if (deployBackend === "sglang" || kind !== "llm" || !primaryRecipe) {
+    if (kind !== "llm" || !primaryRecipe) {
       setSuggestion(null);
-      return; // sglang isn't wired into llm_job.py yet (T-0704); nothing to suggest
+      return;
     }
     let alive = true;
     api
@@ -124,11 +138,13 @@ export default function NewJobPage() {
         setSuggestion(s);
         // Turning deployment on does not depend on there being a format to suggest (e.g. a bf16/no-quant
         // recipe legitimately has no export format but can still be served as-is).
-        if (deployBackend === "vllm") {
-          setUseVllm(true);
+        if (deployBackend === "vllm" || deployBackend === "sglang") {
+          setUseVllm(deployBackend === "vllm");
+          setUseSglang(deployBackend === "sglang");
           if (s.format && s.verdict !== "unsupported") setExportFmts([s.format]);
         } else if (deployBackend === "llamacpp") {
           setUseVllm(false);
+          setUseSglang(false);
           if (s.format) setGguf((g) => (g.length ? g : ["q4_k"]));
         }
       })
@@ -185,6 +201,7 @@ export default function NewJobPage() {
             hardware: hw,
             device: quantDevice === "gpu" || evalDevice === "gpu" ? "gpu" : "cpu",
             ...(!quantizeOnly && gguf.length ? { llamacpp: { types: gguf } } : {}),
+            ...(!quantizeOnly && useSglang ? { sglang: { mem_fraction_static: sglangMem } } : {}),
             ...(!quantizeOnly && useVllm
               ? {
                   vllm: {
@@ -525,7 +542,7 @@ export default function NewJobPage() {
                 <option value="none">不部署（仅评估量化误差）</option>
                 <option value="vllm">vLLM</option>
                 <option value="llamacpp">llama.cpp（GGUF）</option>
-                <option value="sglang">SGLang（尚未接入，T-0704）</option>
+                <option value="sglang">SGLang</option>
               </select>
               {suggestion && (
                 <div className="small muted" data-testid="export-suggestion">
@@ -581,6 +598,18 @@ export default function NewJobPage() {
                     </div>
                   )}
                 </>
+              )}
+            </div>
+          )}
+          {kind === "llm" && (
+            <div className="field" style={{ minWidth: 320, opacity: quantizeOnly ? 0.5 : 1, pointerEvents: quantizeOnly ? "none" : "auto" }}>
+              <label>
+                <input type="checkbox" checked={useSglang} disabled={quantizeOnly} onChange={(e) => setUseSglang(e.target.checked)} data-testid="opt-sglang" /> SGLang 部署实测（需要 GPU 与独立的 SGLang 环境；缺失则该阶段跳过）
+              </label>
+              {useSglang && (
+                <label className="small">
+                  静态显存占比 <input type="number" step={0.05} min={0.1} max={0.95} value={sglangMem} style={{ width: 70 }} onChange={(e) => setSglangMem(Number(e.target.value))} data-testid="opt-sglang-mem" />
+                </label>
               )}
             </div>
           )}

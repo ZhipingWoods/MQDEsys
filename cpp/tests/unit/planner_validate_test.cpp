@@ -217,6 +217,36 @@ TEST(planner_check_deploy, awq_and_compressed_tensors_load_on_vllm_with_no_known
   EXPECT_EQ(check_deploy("compressed-tensors", fp8, "vllm", hw4090()).verdict, Verdict::kNative);
 }
 
+// T-0704: every claim below was measured on a real SGLang (0.5.22.dev, 86624f14eb) serving Qwen2.5-0.5B on an RTX 4090,
+// served PPL within 0.05% of the real-weight PPL; the asymmetric-GPTQ failure is SGLang's own error text.
+TEST(planner_check_deploy, awq_gptq_and_both_compressed_tensors_kinds_load_on_sglang) {
+  estimator::Recipe r;
+  r.weight = w_int(4, Granularity::kPerGroup, false);
+  EXPECT_EQ(check_deploy("awq", r, "sglang", hw4090()).verdict, Verdict::kNative);
+  estimator::Recipe fp8;
+  fp8.weight = w_fp8();
+  EXPECT_EQ(check_deploy("compressed-tensors", fp8, "sglang", hw4090()).verdict, Verdict::kNative);
+  EXPECT_EQ(check_deploy("compressed-tensors", r, "sglang", hw4090()).verdict, Verdict::kNative);
+}
+
+TEST(planner_check_deploy, asymmetric_gptq_on_sglang_is_the_specific_known_issue_symmetric_is_not) {
+  estimator::Recipe asym;
+  asym.weight = w_int(4, Granularity::kPerGroup, /*sym=*/false);
+  auto bad = check_deploy("gptq", asym, "sglang", hw4090());
+  EXPECT_EQ(bad.verdict, Verdict::kUnsupported);
+  EXPECT_NE(bad.reason.find("gptq_marlin"), std::string::npos) << bad.reason;
+  estimator::Recipe sym;
+  sym.weight = w_int(4, Granularity::kPerGroup, /*sym=*/true);
+  EXPECT_EQ(check_deploy("gptq", sym, "sglang", hw4090()).verdict, Verdict::kNative);
+}
+
+TEST(planner_preferred_export_format, sglang_gets_the_same_weight_driven_format_as_vllm) {
+  estimator::Recipe w4;
+  w4.weight = w_int(4, Granularity::kPerGroup, false);
+  EXPECT_EQ(preferred_export_format(w4.weight, "sglang"), "awq");
+  EXPECT_EQ(preferred_export_format(w4.weight, "sglang"), preferred_export_format(w4.weight, "vllm"));
+}
+
 TEST(planner_check_deploy, hf_transformers_is_never_a_deployment_target) {
   estimator::Recipe r;
   r.weight = w_int(4);

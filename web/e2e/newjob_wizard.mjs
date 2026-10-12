@@ -109,6 +109,8 @@ try {
   check('bf16 is not per_group, so the override is now disabled', await page.getByTestId('group-size-override').isDisabled());
   await page.getByTestId('opt-no-quant').uncheck();
   check('unchecking it leaves the recipe chips selectable again', !(await page.getByTestId('opt-no-quant').isChecked()));
+  await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.quant?.recipe?.length > 1; } catch { return false; } }, null, { timeout: 10000 });
+  check('and restores the recipes that were picked before ticking it (not stuck on bf16)', JSON.stringify((await preview()).quant.recipe) === '["w4a16","w4a8","w2a16"]', JSON.stringify((await preview()).quant.recipe));
 
   // ---- 3. picking a deploy backend calls the real export-suggestion endpoint and pre-selects chips ----
   await page.getByTestId('deploy-backend').selectOption('llamacpp');
@@ -125,26 +127,39 @@ try {
   await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.vllm !== undefined; } catch { return false; } }, null, { timeout: 10000 });
   const j2 = await preview();
   check('backend=vllm turns on vLLM deployment', j2.deploy.vllm !== undefined, JSON.stringify(j2.deploy.vllm));
-  check('and pre-selects a real export format (awq, for the default w4a16-ish recipe)', Array.isArray(j2.export?.formats) && j2.export.formats.length > 0, JSON.stringify(j2.export));
+  check('and pre-selects awq (the real planner answer for a 4-bit recipe), not just any format', JSON.stringify(j2.export?.formats) === '["awq"]', JSON.stringify(j2.export));
+
+  await page.getByTestId('deploy-backend').selectOption('sglang');
+  await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.sglang !== undefined; } catch { return false; } }, null, { timeout: 10000 });
+  const jS = await preview();
+  check('backend=sglang turns on SGLang deployment (and turns vLLM off)', jS.deploy.sglang?.mem_fraction_static === 0.3 && jS.deploy.vllm === undefined, JSON.stringify([jS.deploy.sglang, jS.deploy.vllm]));
+  check('and pre-selects awq, which SGLang really loads (measured), not "unsupported"', JSON.stringify(jS.export?.formats) === '["awq"]' && (await page.getByTestId('export-suggestion').innerText()).includes('awq'), JSON.stringify(jS.export));
+  await page.getByTestId('opt-sglang-mem').fill('0.45');
+  await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.sglang?.mem_fraction_static === 0.45; } catch { return false; } }, null, { timeout: 10000 });
+  check('the static memory fraction input reaches the job', (await preview()).deploy.sglang.mem_fraction_static === 0.45);
 
   await page.getByTestId('deploy-backend').selectOption('none');
   const j3 = await preview();
-  check('switching back to "不部署" clears both', j3.deploy.vllm === undefined && j3.deploy.llamacpp === undefined, JSON.stringify([j3.deploy.vllm, j3.deploy.llamacpp]));
+  check('switching back to "不部署" clears all of them', j3.deploy.vllm === undefined && j3.deploy.llamacpp === undefined && j3.deploy.sglang === undefined, JSON.stringify([j3.deploy.vllm, j3.deploy.llamacpp, j3.deploy.sglang]));
 
   // ---- 3b. "仅量化不评测" (evaluation.skip, T-1304/T-1306 follow-up) strips export/vllm/llamacpp/analysis
   // outright -- even if they were set before the checkbox was ticked -- matching planner::validate_jobspec's
   // own rejection list exactly, so the UI can never produce a job the server would 400.
   await page.getByTestId('deploy-backend').selectOption('vllm');
   await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.vllm !== undefined; } catch { return false; } }, null, { timeout: 10000 });
+  await page.getByTestId('opt-sglang').check(); // both backends on at once is allowed (compare them)
+  await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.sglang !== undefined; } catch { return false; } }, null, { timeout: 10000 });
   await page.getByTestId('opt-quantize-only').check();
   await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.evaluation?.skip === true; } catch { return false; } }, null, { timeout: 10000 });
   const j4 = await preview();
   check('quantize-only sets evaluation.skip', j4.evaluation.skip === true);
   check('and strips deploy.vllm even though it was set moments ago', j4.deploy.vllm === undefined, JSON.stringify(j4.deploy.vllm));
+  check('and strips deploy.sglang too', j4.deploy.sglang === undefined, JSON.stringify(j4.deploy.sglang));
   check('and strips export.formats', j4.export === undefined, JSON.stringify(j4.export));
   check('and strips deploy.llamacpp', j4.deploy.llamacpp === undefined, JSON.stringify(j4.deploy.llamacpp));
   check('the deploy-backend select is disabled while quantize-only is on', await page.getByTestId('deploy-backend').isDisabled());
   check('the vLLM checkbox is disabled too', await page.getByTestId('opt-vllm').isDisabled());
+  check('and the SGLang one', await page.getByTestId('opt-sglang').isDisabled());
   await page.getByTestId('opt-quantize-only').uncheck();
   await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.evaluation?.skip === undefined; } catch { return false; } }, null, { timeout: 10000 });
   check('unchecking it brings deploy.vllm back', (await preview()).deploy.vllm !== undefined);
