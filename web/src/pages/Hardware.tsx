@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, fmtBytes, HalPlugin, HardwareProfile, ProfileResult } from "../api";
 import { useAsync } from "../hooks";
+import BackendEnvsCard from "./BackendEnvs";
 import { Tile } from "./Estimate";
 import { KindIcon, VendorIcon } from "./hwIcons";
 
@@ -197,6 +198,7 @@ export default function HardwarePage() {
           </tbody>
         </table>
       </div>
+      <BackendEnvsCard />
       <div className="card table-wrap" data-testid="plugins-card">
         <h2>硬件插件（HAL）</h2>
         <p className="note">

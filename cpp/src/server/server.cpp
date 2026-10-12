@@ -11,6 +11,7 @@
 #include <fmt/ranges.h>
 #include <httplib.h>
 
+#include "backend_envs.h"
 #include "job_runner.h"
 #include "mqde/common/log.h"
 #include "mqde/estimator/estimator.h"
@@ -124,6 +125,14 @@ estimator::RuntimeParams runtime_from(const Json& j) {
 Result<void> serve(const ServerOptions& o) {
   httplib::Server svr;
   JobRunner runner(o.runs_dir, o.repo_root, o.python, o.gpus);
+
+  // Install / update of the vLLM, SGLang and llama.cpp environments (scripts/setup_backend.py). The script is stdlib-only
+  // Python run by the executor's interpreter; MQDE_SETUP_BACKEND_BIN replaces the whole command (tests use a fake).
+  // Logs live outside runs_dir: every directory there is listed as a job.
+  std::vector<std::string> setup_cmd;
+  if (const char* b = std::getenv("MQDE_SETUP_BACKEND_BIN"); b && *b) setup_cmd = {b};
+  else setup_cmd = {o.python, (o.repo_root / "scripts" / "setup_backend.py").string()};
+  BackendEnvs backend_envs(setup_cmd, o.repo_root / "build" / "backend-installs");
 
   // T-1303: background HF catalog refresh. refresh_fn wraps the same hub::update_catalog the CLI's
   // `mqde catalog update` uses, so a running server stays current without a human running that command.
@@ -1089,6 +1098,42 @@ Result<void> serve(const ServerOptions& o) {
              it->second->cancel = true;
              send_json(res, dl_json(*it->second));
            });
+
+  // ---------------- inference backend environments ----------------
+  // GET  /api/v1/backend-envs[?check=1]   installed version / location per backend; check=1 also asks for the newest
+  // POST /api/v1/backend-envs/<id>/install  {"version": "x"} (optional) -> {"install_id"}; one install at a time
+  // GET  /api/v1/backend-envs/install/<install_id>  state, exit code and the last 200 log lines
+  auto envs_error = [](httplib::Response& res, const Error& e) {
+    const int status = e.code == Errc::kInvalidArgument ? 400 : e.code == Errc::kResourceExhausted ? 409
+                       : e.code == Errc::kNotFound ? 404 : 502;
+    send_error(res, status, errc_name(e.code), e.message);
+  };
+  svr.Get("/api/v1/backend-envs", [&](const httplib::Request& req, httplib::Response& res) {
+    const bool check = req.get_param_value("check") == "1";
+    auto st = backend_envs.status(check);
+    if (!st) return envs_error(res, st.error());
+    const auto cur = backend_envs.current_install();
+    send_json(res, {{"backends", *st}, {"checked", check}, {"installing", cur ? *cur : Json(nullptr)}});
+  });
+  svr.Post(R"(/api/v1/backend-envs/([a-z]+)/install)", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string version;
+    if (!req.body.empty()) {
+      auto body = parse_body(req, res);
+      if (!body) return;
+      if (body->contains("version")) {
+        if (!(*body)["version"].is_string()) return send_error(res, 400, "invalid_argument", "version must be a string");
+        version = (*body)["version"].get<std::string>();
+      }
+    }
+    auto id = backend_envs.start_install(req.matches[1], version);
+    if (!id) return envs_error(res, id.error());
+    send_json(res, {{"install_id", *id}}, 202);
+  });
+  svr.Get(R"(/api/v1/backend-envs/install/([0-9a-f]+))", [&](const httplib::Request& req, httplib::Response& res) {
+    auto st = backend_envs.install_status(req.matches[1]);
+    if (!st) return send_error(res, 404, "not_found", "no such install");
+    send_json(res, *st);
+  });
 
   // ---------------- jobs ----------------
   svr.Post("/api/v1/jobs", [&](const httplib::Request& req, httplib::Response& res) {

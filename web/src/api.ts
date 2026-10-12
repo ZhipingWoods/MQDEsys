@@ -465,6 +465,31 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   return data as T;
 }
 
+// ---- inference backend environments (vLLM / SGLang / llama.cpp): install and update ----
+export type BackendId = "vllm" | "sglang" | "llamacpp";
+export interface BackendEnv {
+  id: BackendId;
+  installed: boolean;
+  version: string | null;
+  path: string | null;
+  source: "env" | "managed" | "path" | "legacy" | null;
+  managed: boolean;
+  envs_dir: string;
+  latest?: string | null; // present once the newest version has been looked up
+  update_available?: boolean;
+  check_error?: string;
+}
+export interface BackendInstall {
+  id: string;
+  backend: BackendId;
+  version: string;
+  state: "running" | "succeeded" | "failed";
+  exit_code: number;
+  started_at: number;
+  finished_at: number;
+  log_tail: string[];
+}
+
 // ---- deployment pre-evaluation (llmfit-style) ----
 export interface FitSystem {
   name: string; backend: string; gpu_count: number; vram_gb: number; vram_free_gb: number; ram_gb: number;
@@ -610,6 +635,10 @@ export const api = {
   download: (model: string, opts: { quant?: string; budget?: string; list?: boolean } = {}) =>
     req<DownloadStatus & { groups?: { group: string; bytes: number; files: number; quality: number }[]; chosen?: string }>("POST", "/download", { model, ...opts }),
   downloadStatus: (id: string) => req<DownloadStatus>("GET", `/download/${id}/status`),
+  backendEnvs: (check = false) =>
+    req<{ backends: BackendEnv[]; checked: boolean; installing: BackendInstall | null }>("GET", `/backend-envs${check ? "?check=1" : ""}`),
+  installBackend: (id: BackendId, version?: string) => req<{ install_id: string }>("POST", `/backend-envs/${id}/install`, version ? { version } : undefined),
+  backendInstall: (installId: string) => req<BackendInstall>("GET", `/backend-envs/install/${installId}`),
   cancelDownload: (id: string) => req<DownloadStatus>("POST", `/download/${id}:cancel`),
   concurrency: (model: string, hardware: string, recipe: string, users: number, context: number) =>
     req<ConcurrencyEstimate>("POST", "/fit:concurrency", { model, hardware, recipe, users, context }),

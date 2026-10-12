@@ -90,7 +90,7 @@ add_library(mqde_feedback STATIC src/feedback/feedback.cpp)
 target_link_libraries(mqde_feedback PUBLIC mqde_estimator mqde_storage)
 
 # ---- server (REST + SSE, job runner) ----
-add_library(mqde_server STATIC src/server/server.cpp src/server/job_runner.cpp)
+add_library(mqde_server STATIC src/server/server.cpp src/server/job_runner.cpp src/server/backend_envs.cpp)
 target_link_libraries(mqde_server PUBLIC mqde_fit mqde_hub mqde_estimator mqde_planner mqde_feedback mqde_probe PRIVATE httplib::httplib)
 # job_runner.h is a private implementation header (not under include/mqde/), but mqde_unit_tests needs it
 # to test JobRunner's retry/backoff state machine directly.
@@ -131,6 +131,7 @@ if(MQDE_BUILD_TESTS)
     tests/unit/planner_validate_test.cpp
     tests/unit/feedback_test.cpp
     tests/unit/job_runner_test.cpp
+    tests/unit/backend_envs_test.cpp
     tests/unit/estimator_domain_test.cpp
     tests/unit/hub_catalog_refresh_test.cpp
     tests/unit/modelspec_test.cpp
