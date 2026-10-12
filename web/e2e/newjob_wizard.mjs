@@ -115,6 +115,25 @@ try {
   const j3 = await preview();
   check('switching back to "不部署" clears both', j3.deploy.vllm === undefined && j3.deploy.llamacpp === undefined, JSON.stringify([j3.deploy.vllm, j3.deploy.llamacpp]));
 
+  // ---- 3b. "仅量化不评测" (evaluation.skip, T-1304/T-1306 follow-up) strips export/vllm/llamacpp/analysis
+  // outright -- even if they were set before the checkbox was ticked -- matching planner::validate_jobspec's
+  // own rejection list exactly, so the UI can never produce a job the server would 400.
+  await page.getByTestId('deploy-backend').selectOption('vllm');
+  await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.vllm !== undefined; } catch { return false; } }, null, { timeout: 10000 });
+  await page.getByTestId('opt-quantize-only').check();
+  await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.evaluation?.skip === true; } catch { return false; } }, null, { timeout: 10000 });
+  const j4 = await preview();
+  check('quantize-only sets evaluation.skip', j4.evaluation.skip === true);
+  check('and strips deploy.vllm even though it was set moments ago', j4.deploy.vllm === undefined, JSON.stringify(j4.deploy.vllm));
+  check('and strips export.formats', j4.export === undefined, JSON.stringify(j4.export));
+  check('and strips deploy.llamacpp', j4.deploy.llamacpp === undefined, JSON.stringify(j4.deploy.llamacpp));
+  check('the deploy-backend select is disabled while quantize-only is on', await page.getByTestId('deploy-backend').isDisabled());
+  check('the vLLM checkbox is disabled too', await page.getByTestId('opt-vllm').isDisabled());
+  await page.getByTestId('opt-quantize-only').uncheck();
+  await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.evaluation?.skip === undefined; } catch { return false; } }, null, { timeout: 10000 });
+  check('unchecking it brings deploy.vllm back', (await preview()).deploy.vllm !== undefined);
+  await page.getByTestId('deploy-backend').selectOption('none');
+
   // ---- 4. catalog-backed model picker (grouped by category/family_group) resolves to a local path ----
   // Network-intercepted so this stays offline like every other e2e test in this suite: the real frontend
   // code path (list groups -> start download -> poll status -> fill the path) runs against fake responses
@@ -164,6 +183,27 @@ try {
     'the submitted VLA job keeps the pre-rework shape plus the new, optional domain field',
     vlaStored?.domain === 'vla' && vlaStored?.model?.type === 'vla' && vlaStored?.model?.modality === 'vla' && vlaStored?.model?.source === 'local' && Array.isArray(vlaStored?.quant?.recipe),
     JSON.stringify({ domain: vlaStored?.domain, model: vlaStored?.model, recipe: vlaStored?.quant?.recipe }),
+  );
+
+  // ---- 6. quantize-only forces off VLA attribution (it needs the BF16 baseline this also skips) and a
+  // real submission with it on still goes through the server's real validate_jobspec, not just the preview ----
+  await page.goto(`${base}/new`, { waitUntil: 'load' });
+  await page.getByTestId('domain-tab-vla').click();
+  await page.getByTestId('model-path').fill(MODEL);
+  await page.getByTestId('dataset-path').fill('synthetic');
+  await page.getByTestId('opt-quantize-only').check();
+  await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.evaluation?.skip === true; } catch { return false; } }, null, { timeout: 10000 });
+  const j5 = await preview();
+  check('quantize-only forces VLA attribution off', j5.evaluation.attribution === false, JSON.stringify(j5.evaluation));
+  check('and sets evaluation.skip', j5.evaluation.skip === true);
+  await page.getByRole('button', { name: '提交作业' }).click();
+  await page.waitForURL(/\/jobs\/\d{8}-\d{6}-[0-9a-f]{6}$/, { timeout: 15000 });
+  const qoId = page.url().split('/').pop();
+  const qoStored = (await (await fetch(`${base}/api/v1/jobs/${qoId}`)).json()).job;
+  check(
+    'the server accepted the quantize-only VLA job (planner::validate_jobspec, not just the frontend preview)',
+    qoStored?.evaluation?.skip === true && qoStored?.evaluation?.attribution === false,
+    JSON.stringify(qoStored?.evaluation),
   );
 
   // switching domains resets the model path to a hardcoded default (outside this test's --allow sandbox),

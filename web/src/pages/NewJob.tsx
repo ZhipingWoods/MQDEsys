@@ -25,6 +25,12 @@ export default function NewJobPage() {
   const [modelMode, setModelMode] = useState<"custom" | "catalog">("custom");
   const [picked, setPicked] = useState<string[]>(["w8a16", "fp8", "w4a16", "w4a8"]);
   const [noQuant, setNoQuant] = useState(false);
+  // T-1304/T-1306: "仅量化不评测" (evaluation.skip) -- now a real backend capability (llm_job.py/vla_job.py's
+  // quantize_only branches, planner::validate_jobspec rejects combining it with export/vllm/llamacpp/
+  // sensitivity/logits_probe/attribution). The job-construction logic below strips those fields outright
+  // when this is on, matching the server's own rejection list exactly, so the UI can never produce a job
+  // the server would 400.
+  const [quantizeOnly, setQuantizeOnly] = useState(false);
   // LLM (wikitext-2 PPL) options
   const [seqLen, setSeqLen] = useState(512);
   const [windows, setWindows] = useState(40);
@@ -70,6 +76,7 @@ export default function NewJobPage() {
     setPicked(llmLike ? ["w4a16", "w4a8", "w2a16"] : ["w8a16", "fp8", "w4a16", "w4a8"]);
     setNCalib(llmLike ? 32 : 16);
     setNoQuant(false);
+    setQuantizeOnly(false);
     setModelMode("custom");
   };
 
@@ -133,7 +140,13 @@ export default function NewJobPage() {
           model: { source: "local", path: model, type: "vla", modality: "vla" },
           quant: { recipe: picked, algorithm, ...(action ? { also_quantize: ["action"] } : {}) },
           calibration: { dataset, n_samples: nCalib },
-          evaluation: { dataset, n_samples: nEval, concurrency: [1, 4, 16, 64], attribution },
+          evaluation: {
+            dataset,
+            n_samples: nEval,
+            concurrency: [1, 4, 16, 64],
+            attribution: quantizeOnly ? false : attribution,
+            ...(quantizeOnly ? { skip: true } : {}),
+          },
           deploy: { hardware: hw },
         }
       : {
@@ -148,12 +161,17 @@ export default function NewJobPage() {
             ...(rules.length ? { mixed_precision: { rules } } : {}),
           },
           calibration: { dataset: "wikitext-2-raw-v1:train", n_samples: nCalib, seq_len: seqLen },
-          evaluation: { dataset: "wikitext-2-raw-v1:test", seq_len: seqLen, max_windows: windows },
+          evaluation: {
+            dataset: "wikitext-2-raw-v1:test",
+            seq_len: seqLen,
+            max_windows: windows,
+            ...(quantizeOnly ? { skip: true } : {}),
+          },
           deploy: {
             hardware: hw,
             device,
-            ...(gguf.length ? { llamacpp: { types: gguf } } : {}),
-            ...(useVllm
+            ...(!quantizeOnly && gguf.length ? { llamacpp: { types: gguf } } : {}),
+            ...(!quantizeOnly && useVllm
               ? {
                   vllm: {
                     gpu_memory_utilization: vllmUtil,
@@ -164,8 +182,8 @@ export default function NewJobPage() {
                 }
               : {}),
           },
-          ...(exportFmts.length ? { export: { formats: exportFmts } } : {}),
-          ...(sens || probe
+          ...(!quantizeOnly && exportFmts.length ? { export: { formats: exportFmts } } : {}),
+          ...(!quantizeOnly && (sens || probe)
             ? {
                 analysis: {
                   ...(sens ? { sensitivity: sens, sensitivity_windows: 8 } : {}),
@@ -284,6 +302,10 @@ export default function NewJobPage() {
             <label className="small" style={{ display: "block", marginBottom: 8 }}>
               <input type="checkbox" checked={noQuant} onChange={(e) => setNoQuant(e.target.checked)} data-testid="opt-no-quant" /> 不量化（保持原始精度，等同于只选 BF16 配方）
             </label>
+            <label className="small" style={{ display: "block", marginBottom: 8 }}>
+              <input type="checkbox" checked={quantizeOnly} onChange={(e) => setQuantizeOnly(e.target.checked)} data-testid="opt-quantize-only" /> 仅量化不评测（跳过
+              {kind === "vla" ? "误差归因与评测" : "PPL 评测、敏感度分析、导出一致性检查与 vLLM/llama.cpp 部署"}，只保留量化本身与层级误差追踪）
+            </label>
             <div className="chips" style={{ marginBottom: 8, opacity: noQuant ? 0.5 : 1, pointerEvents: noQuant ? "none" : "auto" }}>
               {recipes.data
                 ?.filter((r) => r.weight.format !== "none")
@@ -367,7 +389,8 @@ export default function NewJobPage() {
               </div>
             </div>
             <label className="small">
-              <input type="checkbox" checked={attribution} onChange={(e) => setAttribution(e.target.checked)} /> 分阶段误差归因（逐模态单独量化，定位误差来源环节）
+              <input type="checkbox" checked={attribution && !quantizeOnly} disabled={quantizeOnly} onChange={(e) => setAttribution(e.target.checked)} /> 分阶段误差归因（逐模态单独量化，定位误差来源环节）
+              {quantizeOnly && <span className="muted"> （仅量化不评测已关闭，需要未量化基线）</span>}
             </label>
           </>
         ) : (
@@ -389,7 +412,7 @@ export default function NewJobPage() {
             <div className="form-row">
               <div className="field">
                 <label>敏感度分析（逐组回退 FP，8 窗口 PPL）</label>
-                <select value={sens} onChange={(e) => setSens(e.target.value)}>
+                <select value={sens} onChange={(e) => setSens(e.target.value)} disabled={quantizeOnly}>
                   <option value="">不做</option>
                   <option value="block">按块（每个 decoder block）</option>
                   <option value="type">按层类型（q/k/v/o/gate/up/down）</option>
@@ -406,10 +429,10 @@ export default function NewJobPage() {
             <div className="form-row">
               <div className="field">
                 <label>
-                  <input type="checkbox" checked={probe} onChange={(e) => setProbe(e.target.checked)} data-testid="opt-probe" /> logits 探针（量化前后输出分布的 KL 与 Top-1 一致率）
+                  <input type="checkbox" checked={probe} disabled={quantizeOnly} onChange={(e) => setProbe(e.target.checked)} data-testid="opt-probe" /> logits 探针（量化前后输出分布的 KL 与 Top-1 一致率）
                 </label>
                 <label className="small">
-                  <input type="checkbox" checked={probeExact} disabled={!probe} onChange={(e) => setProbeExact(e.target.checked)} data-testid="opt-probe-exact" /> 精确 KL（保存全部 logits，约 1.2 GiB / 8 窗口；默认只存 top-256，KL 为下界）
+                  <input type="checkbox" checked={probeExact} disabled={!probe || quantizeOnly} onChange={(e) => setProbeExact(e.target.checked)} data-testid="opt-probe-exact" /> 精确 KL（保存全部 logits，约 1.2 GiB / 8 窗口；默认只存 top-256，KL 为下界）
                 </label>
               </div>
             </div>
@@ -435,7 +458,12 @@ export default function NewJobPage() {
           {kind === "llm" && (
             <div className="field" style={{ minWidth: 220 }}>
               <label>部署后端（自动建议导出格式）</label>
-              <select value={deployBackend} onChange={(e) => setDeployBackend(e.target.value as typeof deployBackend)} data-testid="deploy-backend">
+              <select
+                value={deployBackend}
+                disabled={quantizeOnly}
+                onChange={(e) => setDeployBackend(e.target.value as typeof deployBackend)}
+                data-testid="deploy-backend"
+              >
                 <option value="none">不部署（仅评估量化误差）</option>
                 <option value="vllm">vLLM</option>
                 <option value="llamacpp">llama.cpp（GGUF）</option>
@@ -447,10 +475,11 @@ export default function NewJobPage() {
                   {suggestion.reason ? `，${suggestion.reason}` : ""}）
                 </div>
               )}
+              {quantizeOnly && <div className="small muted">仅量化不评测已开启：导出/部署需要评测得到的 fake-quant 基线，本次跳过。</div>}
             </div>
           )}
           {kind === "llm" && (
-            <div className="field">
+            <div className="field" style={{ opacity: quantizeOnly ? 0.5 : 1, pointerEvents: quantizeOnly ? "none" : "auto" }}>
               <label>真实导出（S09/S10 一致性检查）</label>
               <div className="chips">
                 {["gptq", "awq"].map((f) => (
@@ -462,7 +491,7 @@ export default function NewJobPage() {
             </div>
           )}
           {kind === "llm" && (
-            <div className="field">
+            <div className="field" style={{ opacity: quantizeOnly ? 0.5 : 1, pointerEvents: quantizeOnly ? "none" : "auto" }}>
               <label>llama.cpp 部署实测（GGUF，CPU）</label>
               <div className="chips">
                 {["q8_0", "q5_0", "q4_0", "iq4_nl", "q4_k", "q2_k"].map((f) => (
@@ -474,9 +503,9 @@ export default function NewJobPage() {
             </div>
           )}
           {kind === "llm" && (
-            <div className="field" style={{ minWidth: 320 }}>
+            <div className="field" style={{ minWidth: 320, opacity: quantizeOnly ? 0.5 : 1, pointerEvents: quantizeOnly ? "none" : "auto" }}>
               <label>
-                <input type="checkbox" checked={useVllm} onChange={(e) => setUseVllm(e.target.checked)} data-testid="opt-vllm" /> vLLM 部署实测（需要 GPU 与 vLLM；缺失则该阶段跳过）
+                <input type="checkbox" checked={useVllm} disabled={quantizeOnly} onChange={(e) => setUseVllm(e.target.checked)} data-testid="opt-vllm" /> vLLM 部署实测（需要 GPU 与 vLLM；缺失则该阶段跳过）
               </label>
               {useVllm && (
                 <>
