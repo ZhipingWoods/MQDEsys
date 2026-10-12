@@ -93,7 +93,10 @@ std::string JobRunner::submit(const Json& job) {
   YAML::Emitter out;
   out << to_yaml(j);
   std::ofstream(dir / "job.yaml") << out.c_str() << "\n";
-  JobProc proc{.id = id, .state = "QUEUED", .submitted_at = now_s()};
+  JobProc proc;
+  proc.id = id;
+  proc.state = "QUEUED";
+  proc.submitted_at = now_s();
   proc.max_attempts = max_attempts_;
   if (const auto& qd = job.value("/quant_device"_json_pointer, Json()); qd.is_string()) proc.quant_device = qd.get<std::string>();
   if (const auto& ed = job.value("/evaluation/device"_json_pointer, Json()); ed.is_string()) proc.eval_device = ed.get<std::string>();
