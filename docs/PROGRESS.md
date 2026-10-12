@@ -206,6 +206,10 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 
 **验证**：`test_blockwise_llm.py`/`test_llm_job_e2e.py` 新增 5 个用例，在 4090 真实 CUDA 环境里全部真跑（不是 `skipif` 走空），4090 全量 `ctest` 288/288、`pytest python/tests` 337 passed/3 skipped。另外用真实 Qwen2.5-0.5B 跑了一次 CLI 真实作业（`--quant-device cpu --eval-device cuda:0`，非 pytest），PPL delta 5.07%，和这个配方历史上的真实结果同一量级，`report.json` 的 `env` 确认两个设备字段确实分开生效。
 
+**但这条验证留了个假口子——发现并补上了**：上面那条验证只测了"绕开服务端、直接敲命令行"这条路。真正提交作业只有一条路能走：`mqde serve` 的 `POST /api/v1/jobs` → `JobRunner::launch()`。而 `launch()` 当时无条件只传一个 `--device`（GPU 池分配到的那张卡），`llm_job.py` 的 CLI 覆盖逻辑会把这一个值铺满 `quant_device`/`eval_device` 两个字段——也就是说，**通过服务端提交的、真正要求两个设备不同的作业，当时会被悄悄拉回成同一个设备**，前端以后接上这个功能也不会生效。`JobRunner` 新增 `quant_device`/`eval_device`（从提交的 JSON 原样读出 `"cpu"`/`"gpu"` 符号），GPU 池预留逻辑改成"两者任一要 gpu 就预留"，`launch()` 按实际分配到的槽位把符号解析成真实设备串分别传给子进程。`job_runner_test.cpp` 新增 3 个用例（真 fork/exec + 一个把收到的 argv 写文件的假 worker），3 处 mutation 全部先抓到再还原。过程中撞上一次真的跨编译器坑：带指派初始化器的 `JobProc proc{.id=..., .state=...}` 在 Clang 下默默给两个新字段用默认值，GCC 的 `-Werror -Wmissing-field-initializers`（4090）直接编译失败——改成普通构造+逐字段赋值。
+
+**这次真的通过服务端验证了**：4090 上另起一个一次性 `mqde serve`（独立端口 18099，GPU 池只给 5，不碰正在跑的生产服务 18080），真实 `curl POST` 提交 `deploy.device="cpu"` 但 `evaluation.device="gpu"` 的真 Qwen2.5-0.5B 作业：`GET /api/v1/gpus` 确认 GPU 5 真被预留，作业成功跑完，`report.json` 的 `env` 确认 `quant_device=cpu, eval_device=cuda:0`。验证完关掉这个一次性 server，生产服务没受影响。
+
 **还没做**：`NewJob.tsx` 前端还没有对应的两个设备选择器（现在仍是一个"执行设备"下拉）；VLA 没做（原因同上，CUDA 专用调用散落）；配方高级参数面板仍未做。
 
 ### 2026-10-12（续） · Claude · T-1304 前端本体：用户直接问"前端更新了吗"之后动手做的
