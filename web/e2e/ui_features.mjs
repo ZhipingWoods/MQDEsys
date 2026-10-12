@@ -120,7 +120,7 @@ try {
 
   // ---- 3. new job: the options reach the submitted job ----
   await page.goto(`${base}/new`, { waitUntil: 'load' });
-  await page.getByText('LLM（HF CausalLM').click();
+  await page.getByTestId('domain-tab-llm').click();
   const preview = async () => JSON.parse(await page.locator('pre.log').innerText());
   check('options are off by default: no analysis, no vllm in the job', (await preview()).analysis === undefined && (await preview()).deploy.vllm === undefined);
   await page.getByTestId('opt-probe').check();
@@ -140,7 +140,7 @@ try {
   // submit through the real server: the job is accepted and its stored spec carries the options
   await page.getByTestId('opt-vllm').check();
   await page.getByTestId('opt-lmeval').check();
-  await page.locator('input').nth(0).fill(MODEL);
+  await page.getByTestId('model-path').fill(MODEL);
   await page.getByRole('button', { name: '提交作业' }).click();
   await page.waitForURL(/\/jobs\/\d{8}-\d{6}-[0-9a-f]{6}$/, { timeout: 30000 });
   const id = page.url().split('/').pop();

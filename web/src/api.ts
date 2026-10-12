@@ -495,6 +495,8 @@ export interface CatalogModel {
   name: string; provider: string; parameter_count: string; parameters_raw: number; quantization: string; format: string;
   context_length: number; architecture: string; pipeline_tag: string; license: string; release_date: string;
   capabilities: string[]; hf_downloads: number; hf_likes: number; demoted: boolean; demote_reason: string;
+  /** T-1303: deterministic two-level grouping for a dropdown-style browser ("LLM" / "Qwen2.5"). */
+  category: string; family_group: string;
 }
 export interface HfHit { name: string; provider: string; pipeline_tag: string; hf_downloads: number; hf_likes: number; parameters_raw: number }
 export interface DownloadStatus {
@@ -535,6 +537,21 @@ export interface FitPlan {
 
 export interface Algorithm { name: string; label: string; kind: "quantizer" | "transform" | "combo"; description: string; needs_calibration: boolean; params?: Record<string, number> }
 
+/** The top-level problem domain a JobSpec targets (T-1301, data/domains/*.yaml). */
+export interface Domain {
+  id: string;
+  display_name: string;
+  model_families: string[];
+  applicable_recipes: string[];
+  classic_algorithms: { name: string; note: string }[];
+  default_eval_dataset: string;
+  /** "implemented": a real quantization pipeline exists. "ui_only_pending_backend": selectable, but
+   * submitting a job for it is rejected by the server with a clear reason -- not silently accepted. */
+  pipeline_status: "implemented" | "ui_only_pending_backend";
+}
+
+export interface ExportSuggestion { format: string; verdict: "native" | "emulated" | "unsupported"; reason: string }
+
 export interface ConcurrencyEstimate {
   requested_users: number; max_users: number; context: number;
   weights_gb: number; kv_per_user_gb: number; overhead_gb: number;
@@ -549,6 +566,12 @@ export const api = {
   config: () => req<{ allowed_roots: string[]; gpus: number[]; runs_dir: string }>("GET", "/config"),
   recipes: () => req<Recipe[]>("GET", "/recipes"),
   algorithms: () => req<Algorithm[]>("GET", "/algorithms"),
+  domains: () => req<Domain[]>("GET", "/domains"),
+  exportSuggestion: (recipe: string, backend: string, hardware: string) =>
+    req<ExportSuggestion>(
+      "GET",
+      `/export-suggestion?recipe=${encodeURIComponent(recipe)}&backend=${encodeURIComponent(backend)}&hardware=${encodeURIComponent(hardware)}`,
+    ),
   hardwareProfiles: () => req<HardwareProfile[]>("GET", "/hardware/profiles"),
   hardwarePlugins: () => req<HalPlugin[]>("GET", "/hardware/plugins"),
   profileDevice: (plugin: string, device: number, kind: "bandwidth" | "gemm", dtype = "fp32") =>
@@ -572,7 +595,11 @@ export const api = {
   claim: (model: string, hardware: string, min_tps: number) => req<ClaimBounds>("POST", "/fit:claim", { model, hardware, min_tps }),
   installed: () => req<InstalledIndex>("GET", "/installed"),
   catalog: (search = "", provider = "", capability = "", limit = 100, include_demoted = false) =>
-    req<{ updated_at: string; total: number; demoted: number; models: CatalogModel[] }>(
+    req<{
+      updated_at: string; total: number; demoted: number; models: CatalogModel[];
+      /** T-1303: background refresh status; refresh_interval_s === 0 means it is disabled for this server. */
+      refresh_interval_s: number; last_refresh_ok: boolean; last_refresh_at: string;
+    }>(
       "GET", `/catalog?search=${encodeURIComponent(search)}&provider=${encodeURIComponent(provider)}&capability=${encodeURIComponent(capability)}&limit=${limit}&include_demoted=${include_demoted ? 1 : 0}`),
   hfSearch: (q: string, limit = 20) => req<{ models: HfHit[] }>("GET", `/hf/search?q=${encodeURIComponent(q)}&limit=${limit}`),
   download: (model: string, opts: { quant?: string; budget?: string; list?: boolean } = {}) =>

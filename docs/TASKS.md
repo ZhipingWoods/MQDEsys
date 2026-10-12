@@ -166,7 +166,7 @@
 | T-1301 | 领域（domain）注册表 | P13 | T-0206 | L2 | DONE (2026-10-10，见 P13 详情；ctest -R estimator_domain 7/7，4090 全量 264/264) |
 | T-1302 | 算法可插拔性加固 + 第三方接入指南 | P13 | T-0103 | L1（T-0609 的 ADR 部分仍 L3） | DONE (2026-10-10，见 P13 详情；4090 真实跑通 check_algo_registry_sync.py + validate_job_schema.py，ctest 277/277) |
 | T-1303 | HF 目录后台定时刷新 + 二级分类分组 | P13 | T-0204,T-R25 | L2 | DONE (2026-10-10，见 P13 详情；4090 全量 277/277) |
-| T-1304 | 新建作业向导重构（五步，领域感知） | P13 | T-1301,T-1303,T-1305,T-0210 | L1 | PARTIAL (2026-10-12，后端部分：选后端自动建议导出格式，4090 全量 281/281，见 P13 详情；前端五步向导本体未开始) |
+| T-1304 | 新建作业向导重构（五步，领域感知） | P13 | T-1301,T-1303,T-1305,T-0210 | L1 | PARTIAL (2026-10-12，前端本体已重排+接入新功能，见 P13 详情；真正的分步 Next/Back 导航改为单页多卡片保留，范围收窄有记录；"仅量化不评测"与量化/评估设备拆分没做——后端无对应能力，做了会是摆设) |
 | T-1305 | JobSpec 正式契约（T-0007 最小切片） | P13 | T-0210 | L2 | DONE (2026-10-10，见 P13 详情；ctest -R planner_validate_jobspec 全绿，4090 全量 268/268，python scripts/validate_job_schema.py 3/3 真实跑通) |
 | T-1306 | "量化与评测"信息架构拆分 | P13 | T-1304 | L1 | TODO |
 | T-1307 | 硬件与后端页面视觉改版 | P13 | T-0306 | L1 | TODO |
@@ -864,9 +864,21 @@
 - **本次完成（后端部分）**：`data/compat/matrix.yaml` 新增 `backends.llamacpp: {loads: [gguf]}`（之前完全没有这个后端的条目）；`planner::check_deploy` 新增 `format == "gguf"` 的特判——GGUF 是用 llama.cpp 自己的数值从原始 FP 权重重新量化的（`python/mqde/pipeline/llm_job.py` 的 `_llamacpp`，和 `quant.recipe` 的权重格式完全无关），所以不应该像 gptq/awq 一样去查 `hw.native_formats`（那是在检查一个无关的东西），只要后端的 `loads` 里有 `gguf` 就直接判定 native；`planner::preferred_export_format` 新增可选 `backend` 参数，`backend == "llamacpp"` 时无条件建议 `"gguf"`（忽略 weight spec），其余后端行为不变（默认参数，老调用方不用改）。新增 `GET /api/v1/export-suggestion?recipe=&backend=&hardware=`，给前端一个"选了后端，建议什么格式"的单次查询接口（和已有的 `/api/v1/recommend` 不是一回事——那个是搜索所有组合，这个是已经选定 backend 后的一次性查询）。
 - **为什么没有把 `export_formats.gguf` 加进 matrix.yaml**：`export_formats` 里现有的几个条目（gptq/awq/compressed-tensors-*）都是"打包/粒度约束"规则，本质上依赖 `quant.recipe` 的权重格式；GGUF 根本不读这个格式，给它编一套"打包规则"就是编造一个不存在的约束，和本会话早先"删掉一条编造的规则"是同一个原则，所以改成了在 `check_deploy` 里直接特判，而不是在数据文件里硬塞一个不适用的条目。
 - **真的验证了，不是只看代码**：起了一个本地 server，分别查 `(llamacpp, w4a16)`→`gguf native`、`(vllm, w4a16)`→`awq native`、`(vllm, bf16)`→空字符串+"no export needed"、`(hf_transformers, w4a16)`→`awq unsupported`（hf_transformers 从不作为部署目标），四种结果都符合预期。
-- **验收**：选 llama.cpp 后端能查到 GGUF 格式（已做到，通过新端点）；LLM/VLA 各走一遍真实提交、JobSpec 字段与重构前等价（**还没做**——这需要前端五步向导本体）。
-- **校验**：`ctest -R planner_check_deploy|planner_preferred_export_format`，4 处 mutation 验证全部先变红再恢复；`scripts/check_deps.py` 0 violation；手动 curl 验证新端点的 4 种真实场景。
-- **没做（体量最大的部分，还没开始）**：`NewJob.tsx` 的五步向导本体——领域选择器、目录浏览式模型选择器（替换今天唯一的自由文本框）、量化算法按领域过滤、配方高级参数面板（per-channel/per-group/group_size/旋转占位）、"不量化"与"仅量化不评测"开关、评估数据集卡片画廊+下载、量化/评估设备拆分、后端选择器接上这次做的 `/api/v1/export-suggestion`。现有 `NewJob.tsx` 里好几个元素被 3 个 Playwright e2e 测试（`ui_features.mjs`、`newjob_live_estimate.mjs`、`clone_from_suggestion.mjs`）按**当前 DOM 结构**精确定位（例如 `page.locator('input').first()` 假设模型路径输入框是页面第一个 `<input>`），真正做五步向导会改变 DOM 顺序，这三个测试都需要同步重写，不是小改动，需要单独一轮会话专注做，不应该在本次收尾时匆忙塞入。
+- **校验（后端部分）**：`ctest -R planner_check_deploy|planner_preferred_export_format`，4 处 mutation 验证全部先变红再恢复；`scripts/check_deps.py` 0 violation；手动 curl 验证新端点的 4 种真实场景。
+
+**2026-10-12（续）：前端本体。**`NewJob.tsx` 重排为①领域+模型 ②量化算法 ③量化配方 ④评估数据+设备 ⑤部署与导出，匹配用户要求的顺序；`kind: "vla"|"llm"` 二元开关换成 `api.domains()` 驱动的真实领域 tabs（5 个都显示，vlm/world/ewm 选中后只显示"该领域尚未接入量化流程"的提示并禁用提交——和服务端 `validate_jobspec` 的真实拒绝逻辑一致，不是前端自说自话）；模型选择新增"从模型目录选择"模式（`CatalogModelPicker` 组件，按 `category`/`family_group` 两级分组的下拉，195 个真实目录条目验证过），选中一个条目后复用已有的 `/api/v1/download` + 轮询机制（和 `Fit.tsx` 的 `HubPanel` 同一套，没有另起一个下载路径）下载后自动填入本地路径；"不量化（保持原始精度）"开关直接映射到真实存在的 `bf16` 配方（data/recipes/bf16.yaml 本来就是"不量化"的意思，不是发明一个新概念）；"部署后端"选择器调用这次新增的 `/api/v1/export-suggestion`，vLLM/llama.cpp 两个后端真实生效（切换会实际打开/关闭 `useVllm`、预填导出格式/GGUF 类型，用户仍可手动改），SGLang 列出但标注"尚未接入（T-0704）"不生效。
+
+**范围收窄，及为什么**：
+1. 没有做成真正的"五步 Next/Back"分步导航，保留了"单页多卡片"布局（只是重新排序+新增内容）——批准的计划里写的是分步向导，但三个现有 Playwright 测试按当前 DOM 结构精确定位元素，做分步导航要同时重写导航状态机和这些测试，本次时间盒子里选择优先交付真正改变能力的部分（领域/目录/后端建议），导航机制留给以后需要时再做，不算遗漏，是记录在案的取舍。
+2. **量化设备和评估设备没有拆分**（仍是一个 `执行设备` 选择器）：查了 `job_runner.cpp` 和 `llm_job.py`，量化和评估在同一个进程里用同一个 `--device`，拆成两个选择器会是两个控件做同一件事，或者给用户一个不生效的假选项——这和"仅量化不评测"是同一类问题：后端完全没有这个能力，加一个不生效的开关是误导，不是功能。两者都没做，诚实记录在这里，不是漏掉。
+3. 配方高级参数面板（per-channel/per-group/group_size 的独立可折叠面板、旋转量化占位）、校准自定义样本输入框、评估数据集卡片画廊：这些要么本来就能在已有的"配方卡片"里体现（granularity 已经是配方定义的一部分，不需要用户在向导里单独再选一遍），要么完全没有消费端（自定义校准样本谁都不会读），同样没有为了"看起来完整"而加不生效的输入框。
+
+**真实验证**：新增 Playwright e2e `web/e2e/newjob_wizard.mjs`，19 个用例，覆盖上面每一项真实能力（含一次真实的 VLA 提交，确认 JobSpec 形状和重构前一致，只多了可选的 `domain` 字段）。过程中改一次测、抓到两个真 bug，不是先写测试再编过程：
+- 切后端从 llamacpp 到 vllm 时，用于展示建议的 `suggestion` 状态和触发副作用（`setUseVllm`/`setExportFmts`）的 `useEffect` 分别依赖异步请求的"中间态"和"最终态"，导致有一个短暂窗口里新的 `deployBackend` 和上一个后端的旧 `suggestion.data`配对，把 llamacpp 的 "gguf" 错误地设进了 vllm 的导出格式。改成把"请求建议"和"应用建议"合并到同一个 effect/回调里，不再用分离的 `useAsync` + 第二个依赖它 `.data` 的 effect。
+- `deployBackend` 的应用逻辑把"要不要开启部署"和"有没有格式可建议"绑在一起判断，导致选 bf16（不量化）配方后切到 vLLM，因为 `preferred_export_format` 对 bf16 返回空字符串，`useVllm` 也跟着没被打开——但部署一个未量化模型本身是合理操作，和"有没有格式建议"是两件事，拆开了判断。
+- 另外测试本身也改过两次：一次是我的 e2e 测试用了全零字节的假 safetensors 文件（其他测试用的是真实 header），导致预估请求 400；一次是忘了给 VLA 提交设置数据集路径（默认值是沙箱外的真实路径，服务端正确地用 403 拒绝了——这是服务端现有的路径沙箱检查在正常工作，不是 bug，改成用服务端本来就豁免的 `synthetic` 值）。
+- **校验**：`web/e2e/newjob_wizard.mjs` 19/19，外加全部既有前端 e2e（`newjob_live_estimate` 10/10、`ui_features` 20/20、`clone_from_suggestion` 14/14、`layer_detail` 20/20、`attribution_highlight` 8/8、`hardware_plugin` 7/7）全部保持通过，共 98/98；两个被 DOM 重排影响的测试（`ui_features.mjs`、`newjob_live_estimate.mjs`）改用 `data-testid`（新增 `model-path`/`hw-select`/`domain-tab-<id>`）替代原来脆弱的位置定位（如"第一个 input"），顺带让它们更稳；`cd web && npx tsc -b` 全程保持干净；C++ 侧这轮没有改动，`ctest --test-dir build/mac` 285/285 不受影响。4090 验证见下一条。
+- **没做**：量化/评估设备拆分、"仅量化不评测"、配方高级参数面板、校准自定义样本、评估数据集画廊（原因见上"范围收窄"）；真正的分步 Next/Back 导航；T-1306 的导航拆分仍然依赖这次的重排结果，可以接着做。
 
 #### T-1306 "量化与评测"信息架构拆分
 - **依赖**：T-1304 **级别**：L1

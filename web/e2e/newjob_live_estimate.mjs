@@ -77,7 +77,7 @@ try {
   await page.goto(`${base}/new`, { waitUntil: 'load' });
   const side = page.getByTestId('live-estimate');
   await side.waitFor({ timeout: 20000 });
-  const input = page.locator('input').first();
+  const input = page.getByTestId('model-path');
   await input.fill(MODEL);
   await page.waitForSelector('[data-testid="live-w4a16"]', { timeout: 20000 });
 
@@ -115,7 +115,7 @@ try {
   check('typing a path character by character sends few requests (debounced)', calls.length - n0 <= 3 && calls.length - n0 >= 1, `${calls.length - n0} for ${MODEL2.length} characters`);
 
   // hardware changes capacity: a small GPU makes the large recipe infeasible or the numbers differ
-  const hwSelect = page.locator('select').filter({ has: page.locator('option[value="nvidia/rtx4090"]') }).first();
+  const hwSelect = page.getByTestId('hw-select');
   const options = await hwSelect.locator('option').evaluateAll((os) => os.map((o) => o.value));
   const other = options.find((o) => o !== HW);
   if (other) {

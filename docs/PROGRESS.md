@@ -180,6 +180,24 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-12（续） · Claude · T-1304 前端本体：用户直接问"前端更新了吗"之后动手做的
+
+用户看了一眼当前站点，发现确实什么都没变，直接问了。之前那条记录里我判断前端重排风险太大想单独放一轮会话，但用户显然希望现在就看到真东西，所以这次就动手做了，没有再犟着"按计划分阶段"。
+
+**做了什么**（都是真实生效的，不是摆设，详细清单见 `docs/TASKS.md` T-1304）：`NewJob.tsx` 重排顺序为①领域+模型②算法③配方④评估+设备⑤部署导出；`kind` 二元开关换成 `/api/v1/domains` 驱动的 5 个真实领域 tab，vlm/world/ewm 选中后只显示阻断提示、禁用提交（和服务端拒绝逻辑一致）；新增 `CatalogModelPicker`（按 T-1303 的 category/family_group 两级分组，195 条真实目录数据），选中后复用 `Fit.tsx` 的 `HubPanel` 已经验证过的下载+轮询机制；"不量化"开关映射到真实的 `bf16` 配方；"部署后端"选择器调用上一条做的 `/api/v1/export-suggestion`，vLLM/llama.cpp 真实生效。
+
+**范围收窄，当场决定，写进了 TASKS.md**：没做真正的分步 Next/Back 导航（保留单页多卡片，只重排+加内容）；没做量化/评估设备拆分和"仅量化不评测"——查了 `job_runner.cpp`/`llm_job.py` 确认量化和评估在同一进程用同一个 `--device`，拆两个选择器会是摆设；没做配方高级参数面板、校准自定义样本、评估数据集画廊——同样没有真实消费端。这些都不是漏掉，是查完代码之后diff出"做了会是假功能"的东西，主动不做。
+
+**写 e2e 测试的过程中真的抓到两个 bug，不是顺利写完的**：
+1. 切换部署后端从 llamacpp→vllm 时，展示用的 `suggestion` 和触发副作用的 `useEffect` 分别依赖异步请求的中间态/最终态，有个窗口期让新 backend 配对上旧 backend 的建议结果，把 llamacpp 的 "gguf" 错误地设进了 vllm 的导出格式里。测试第一次跑验证到这个问题（`and pre-selects a real export format` 显示 `{"formats":["gguf"]}` 而不是 `awq`/`gptq`），改成把"发请求"和"应用结果"合并进同一个 effect/回调，不再用分离的 `useAsync` 加一个依赖它 `.data` 的第二个 effect。
+2. "是否开启部署"和"有没有格式可建议"原来绑在一起判断，选了"不量化"（bf16）配方后切 vLLM，因为 bf16 没有导出格式建议，`useVllm` 也跟着没被打开——但部署一个未量化模型本来就是合理操作，和"有没有格式"是两件事，拆开了。
+3. 测试本身也错了两次：假 safetensors 文件用了全零字节（其他测试是真实 header），导致预估请求 400，复制了已有测试的真实 fixture 构造方式才对；VLA 提交一直超时，是因为忘了把默认的 LeRobot 路径换成服务端本来就豁免路径检查的 `synthetic`，这其实是服务端路径沙箱在正确工作，不是应用的 bug。
+
+**新测试**：`web/e2e/newjob_wizard.mjs`，19 个用例，包含一次真实 VLA 提交确认 JobSpec 形状和重构前等价（只多了可选的 `domain` 字段）。受 DOM 重排影响的两个既有测试（`ui_features.mjs`、`newjob_live_estimate.mjs`）改用新增的 `data-testid`（`model-path`/`hw-select`/`domain-tab-<id>`）替代原来脆弱的"第一个 input"之类的位置定位。
+
+- **校验**：7 个前端 e2e 文件全部跑通，合计 98/98（`newjob_wizard` 19、`newjob_live_estimate` 10、`ui_features` 20、`clone_from_suggestion` 14、`layer_detail` 20、`attribution_highlight` 8、`hardware_plugin` 7）；`cd web && npx tsc -b` 全程干净；`npm run build` 成功；C++ 侧这轮没有改动，`ctest --test-dir build/mac` 285/285、`scripts/check_deps.py` 0 violation 确认不受影响。4090 没有新增 C++ 改动，这次不需要单独去 4090 验证（4090 不跑前端 e2e，Playwright/Chrome 只在 Mac 上装了，这点在 `web/e2e/README.md` 里也写明过）。
+- **未完成 / 下一步**：T-1306（导航拆分）可以接着做了，依赖这次的重排结果；真正的分步导航、设备拆分、仅量化不评测这几项仍然需要对应的后端能力先补上才值得做前端。
+
 ### 2026-10-12 · Claude · T-1304 第一片：选后端自动建议导出格式（前端五步向导本体未动）
 
 P13 阶段顺序走到"前端主体重构"阶段。在真正动 `NewJob.tsx` 之前，先读了它的完整当前实现（434 行）和 3 个依赖它 DOM 结构的 Playwright e2e 测试（`ui_features.mjs`/`newjob_live_estimate.mjs`/`clone_from_suggestion.mjs`），确认了一个会显著放大风险的事实：`newjob_live_estimate.mjs` 用 `page.locator('input').first()` 定位模型路径输入框（假设它是页面第一个 `<input>`），用 `page.locator('select').filter({has: page.locator('option[value="nvidia/rtx4090"]')})` 定位硬件下拉——这些都是按**今天的单页长表单 DOM 顺序**精确定位的，真正做五步向导会重排整个 DOM，这三个测试需要同步重写，工作量不小。

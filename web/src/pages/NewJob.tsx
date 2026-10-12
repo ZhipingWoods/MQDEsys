@@ -1,21 +1,30 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, fmtBytes, RuntimeParams } from "../api";
+import { api, CatalogModel, DownloadStatus, fmtBytes, RuntimeParams } from "../api";
 import { DEFAULT_DATASET, DEFAULT_LLM, DEFAULT_MODEL, useAsync, useDebounced } from "../hooks";
+import { Meter } from "./Fit";
 
 const LIVE_RUNTIME: RuntimeParams = { concurrency: 1, images_per_step: 2, text_tokens: 42, image_resolution: 448, gpu_memory_utilization: 0.9, extra_modalities: [] };
 
+// T-1301/T-1304: domains with a real quantization pipeline today. Anything else from the registry (vlm,
+// world, ewm) is selectable but shown as a blocked notice instead of a form that would just be rejected by
+// the server's own validate_jobspec check -- see docs/TASKS.md T-1304 for why those are not wired up yet.
+const LLM_LIKE = new Set(["llm"]);
+
 export default function NewJobPage() {
   const nav = useNavigate();
+  const domainsQ = useAsync(api.domains, []);
   const recipes = useAsync(api.recipes, []);
   const algos = useAsync(api.algorithms, []);
   const [algorithm, setAlgorithm] = useState("recipe");
   const profiles = useAsync(api.hardwareProfiles, []);
   const cfg = useAsync(api.config, []);
-  const [kind, setKind] = useState<"vla" | "llm">("vla");
+  const [domain, setDomain] = useState("vla");
   const [name, setName] = useState("minicpm-vla-eval");
   const [model, setModel] = useState(DEFAULT_MODEL);
+  const [modelMode, setModelMode] = useState<"custom" | "catalog">("custom");
   const [picked, setPicked] = useState<string[]>(["w8a16", "fp8", "w4a16", "w4a8"]);
+  const [noQuant, setNoQuant] = useState(false);
   // LLM (wikitext-2 PPL) options
   const [seqLen, setSeqLen] = useState(512);
   const [windows, setWindows] = useState(40);
@@ -45,14 +54,71 @@ export default function NewJobPage() {
   const [action, setAction] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // T-1304: which real backend this job deploys to, if any. Drives an auto-suggested export format
+  // instead of leaving the GPTQ/AWQ/GGUF chip lists below to be lined up with vLLM/llama.cpp by hand.
+  const [deployBackend, setDeployBackend] = useState<"none" | "vllm" | "llamacpp" | "sglang">("none");
 
-  const switchKind = (k: "vla" | "llm") => {
-    setKind(k);
-    setModel(k === "llm" ? DEFAULT_LLM : DEFAULT_MODEL);
-    setName(k === "llm" ? "qwen-wikitext-ppl" : "minicpm-vla-eval");
-    setPicked(k === "llm" ? ["w4a16", "w4a8", "w2a16"] : ["w8a16", "fp8", "w4a16", "w4a8"]);
-    setNCalib(k === "llm" ? 32 : 16);
+  const kind: "vla" | "llm" = LLM_LIKE.has(domain) ? "llm" : "vla";
+  const currentDomain = domainsQ.data?.find((d) => d.id === domain);
+  const blocked = currentDomain != null && currentDomain.pipeline_status !== "implemented";
+
+  const switchDomain = (d: string) => {
+    setDomain(d);
+    const llmLike = LLM_LIKE.has(d);
+    setModel(llmLike ? DEFAULT_LLM : DEFAULT_MODEL);
+    setName(llmLike ? "qwen-wikitext-ppl" : "minicpm-vla-eval");
+    setPicked(llmLike ? ["w4a16", "w4a8", "w2a16"] : ["w8a16", "fp8", "w4a16", "w4a8"]);
+    setNCalib(llmLike ? 32 : 16);
+    setNoQuant(false);
+    setModelMode("custom");
   };
+
+  // "不量化（保持原始精度）": bf16 (data/recipes/bf16.yaml) already means "no quantization" end to end, so
+  // this reuses that real recipe rather than inventing a new, unimplemented concept.
+  useEffect(() => {
+    if (noQuant) setPicked(["bf16"]);
+  }, [noQuant]);
+
+  // Picking a real deploy backend suggests (and can override) the export chips below, via the C++
+  // planner's own compat-matrix logic (GET /api/v1/export-suggestion, T-1304) -- not a frontend guess.
+  // Fetching and applying happen inside the same effect/callback (not a separate useAsync + a second
+  // effect keyed on its .data) so there is no window where a stale suggestion from the *previous* backend
+  // pairs with the *new* deployBackend value -- that combination briefly set llamacpp's "gguf" suggestion
+  // onto a vllm selection in testing before this was merged into one effect.
+  const primaryRecipe = picked.find((r) => r !== "bf16") ?? picked[0];
+  const [suggestion, setSuggestion] = useState<Awaited<ReturnType<typeof api.exportSuggestion>> | null>(null);
+  useEffect(() => {
+    if (deployBackend === "none") {
+      setUseVllm(false);
+      setGguf([]);
+      setSuggestion(null);
+      return;
+    }
+    if (deployBackend === "sglang" || kind !== "llm" || !primaryRecipe) {
+      setSuggestion(null);
+      return; // sglang isn't wired into llm_job.py yet (T-0704); nothing to suggest
+    }
+    let alive = true;
+    api
+      .exportSuggestion(primaryRecipe, deployBackend, hw)
+      .then((s) => {
+        if (!alive) return;
+        setSuggestion(s);
+        // Turning deployment on does not depend on there being a format to suggest (e.g. a bf16/no-quant
+        // recipe legitimately has no export format but can still be served as-is).
+        if (deployBackend === "vllm") {
+          setUseVllm(true);
+          if (s.format && s.verdict !== "unsupported") setExportFmts([s.format]);
+        } else if (deployBackend === "llamacpp") {
+          setUseVllm(false);
+          if (s.format) setGguf((g) => (g.length ? g : ["q4_k"]));
+        }
+      })
+      .catch(() => alive && setSuggestion(null));
+    return () => {
+      alive = false;
+    };
+  }, [deployBackend, primaryRecipe, hw, kind]);
 
   const kvSpec = kv === "" ? null : kv === "fp8" ? { format: "fp8_e4m3", bits: 8 } : { format: "int", bits: Number(kv.slice(3)), symmetric: false };
   const rules = [
@@ -62,6 +128,7 @@ export default function NewJobPage() {
   const job =
     kind === "vla"
       ? {
+          domain,
           metadata: { name },
           model: { source: "local", path: model, type: "vla", modality: "vla" },
           quant: { recipe: picked, algorithm, ...(action ? { also_quantize: ["action"] } : {}) },
@@ -70,6 +137,7 @@ export default function NewJobPage() {
           deploy: { hardware: hw },
         }
       : {
+          domain,
           metadata: { name },
           model: { source: "local", path: model, type: "llm" },
           quant: {
@@ -136,125 +204,158 @@ export default function NewJobPage() {
     <>
       <h1>新建评估作业</h1>
       <p className="subtitle">
-        指定模型 → 量化配方 → 评估数据 → 部署硬件。作业由 C++ 调度到 GPU 池（{cfg.data?.gpus.join(", ") ?? "…"}）上的 Python 执行器，全过程事件实时推送。
+        选领域 → 选模型 → 选量化算法 → 选配方 → 评估数据与设备 → 部署与导出。作业由 C++ 调度到 GPU 池（{cfg.data?.gpus.join(", ") ?? "…"}）上的 Python 执行器，全过程事件实时推送。
       </p>
       {err && <div className="error-box">{err}</div>}
       <div className="split">
       <div>
       <div className="card">
-        <h2>① 模型</h2>
+        <h2>① 领域 + 模型</h2>
         <div className="tabs" style={{ marginBottom: 12 }}>
-          <div className={`tab ${kind === "vla" ? "on" : ""}`} onClick={() => switchKind("vla")}>
-            VLA（MiniCPM-VLA · 动作误差）
-          </div>
-          <div className={`tab ${kind === "llm" ? "on" : ""}`} onClick={() => switchKind("llm")}>
-            LLM（HF CausalLM · wikitext-2 PPL）
-          </div>
+          {(domainsQ.data ?? [{ id: "vla", display_name: "VLA（视觉-语言-动作）" }, { id: "llm", display_name: "LLM（HF CausalLM · wikitext-2 PPL）" }]).map((d) => (
+            <div key={d.id} className={`tab ${domain === d.id ? "on" : ""}`} onClick={() => switchDomain(d.id)} data-testid={`domain-tab-${d.id}`}>
+              {d.display_name}
+            </div>
+          ))}
         </div>
-        <div className="form-row">
-          <div className="field grow">
-            <label>本地模型路径（允许根目录：{cfg.data?.allowed_roots.join(", ")}）</label>
-            <input value={model} onChange={(e) => setModel(e.target.value)} />
+        {blocked ? (
+          <div className="error-box" data-testid="domain-blocked">
+            领域"{currentDomain?.display_name}"目前只在界面上可选，还没有真正的量化流水线（pipeline_status: {currentDomain?.pipeline_status}）。
+            提交作业会被服务端拒绝并给出同样的理由。参考方法（尚未实现，仅作记录）：
+            {currentDomain?.classic_algorithms.map((a) => a.name).join("、") || "—"}。
           </div>
-          <div className="field">
-            <label>作业名称</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-        </div>
-        <h2>② 量化配方</h2>
-        <div className="chips" style={{ marginBottom: 8 }}>
-          {recipes.data
-            ?.filter((r) => r.weight.format !== "none")
-            .map((r) => (
-              <span key={r.id} className={`chip ${picked.includes(r.id) ? "on" : ""}`} onClick={() => toggle(r.id)} title={r.summary}>
-                {r.name}
-                {r.maturity === "experimental" && <span className="exp">实验</span>}
-              </span>
-            ))}
-        </div>
-        {kind === "vla" ? (
-          <label className="small">
-            <input type="checkbox" checked={action} onChange={(e) => setAction(e.target.checked)} /> 同时量化 DiT 动作头（默认保持 FP32）
-          </label>
         ) : (
-          <div className="form-row">
-            <div className="field">
-              <label>激活量化</label>
-              <select value={actStatic} onChange={(e) => setActStatic(e.target.value)}>
-                <option value="">动态 per-token</option>
-                <option value="minmax">静态 per-tensor · minmax</option>
-                <option value="ema">静态 per-tensor · EMA</option>
-                <option value="percentile">静态 per-tensor · 99.99% 分位</option>
-              </select>
+          <>
+            {kind === "llm" && (
+              <div className="tabs" style={{ marginBottom: 8, borderBottom: "none" }}>
+                <div className={`tab ${modelMode === "custom" ? "on" : ""}`} onClick={() => setModelMode("custom")}>
+                  自定义路径
+                </div>
+                <div className={`tab ${modelMode === "catalog" ? "on" : ""}`} onClick={() => setModelMode("catalog")}>
+                  从模型目录选择
+                </div>
+              </div>
+            )}
+            {modelMode === "catalog" && kind === "llm" ? (
+              <CatalogModelPicker onPick={setModel} currentPath={model} />
+            ) : (
+              <div className="form-row">
+                <div className="field grow">
+                  <label>本地模型路径（允许根目录：{cfg.data?.allowed_roots.join(", ")}）</label>
+                  <input value={model} onChange={(e) => setModel(e.target.value)} data-testid="model-path" />
+                </div>
+                <div className="field">
+                  <label>作业名称</label>
+                  <input value={name} onChange={(e) => setName(e.target.value)} />
+                </div>
+              </div>
+            )}
+            <h2 style={{ marginTop: 16 }}>② 量化算法</h2>
+            <div className="form-row">
+              <div className="field" style={{ minWidth: 260 }}>
+                <label>算法（所有勾选配方共用）</label>
+                <select value={algorithm} onChange={(e) => setAlgorithm(e.target.value)} disabled={noQuant}>
+                  <option value="recipe">按配方默认（{recipes.data?.filter((r) => picked.includes(r.id)).map((r) => `${r.name}:${r.default_algorithm}`).join(" · ") || "—"}）</option>
+                  {algos.data?.map((a) => (
+                    <option key={a.name} value={a.name}>
+                      {a.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field grow">
+                <label>说明</label>
+                <div className="small muted" style={{ minHeight: 32, display: "flex", alignItems: "center" }}>
+                  {algorithm === "recipe"
+                    ? "每个配方使用 data/recipes/*.yaml 里的 default_algorithm。"
+                    : algos.data?.find((a) => a.name === algorithm)?.description}
+                  {algos.data?.find((a) => a.name === algorithm)?.needs_calibration && " 需要校准数据。"}
+                </div>
+              </div>
             </div>
-            <div className="field">
-              <label>KV Cache 量化</label>
-              <select value={kv} onChange={(e) => setKv(e.target.value)}>
-                <option value="">按配方（多数为不量化）</option>
-                <option value="int8">INT8</option>
-                <option value="int4">INT4</option>
-                <option value="int2">INT2</option>
-                <option value="fp8">FP8 E4M3</option>
-              </select>
+            {currentDomain && currentDomain.classic_algorithms.length > 0 && (
+              <p className="note">
+                {currentDomain.display_name} 领域经典方法参考：{currentDomain.classic_algorithms.map((a) => a.name).join("、")}
+                （上面的下拉框列出的是本系统实际实现并可选的算法，不是这个参考列表本身）。
+              </p>
+            )}
+            {algos.error && <div className="error-box">{algos.error}</div>}
+            <h2 style={{ marginTop: 16 }}>③ 量化配方</h2>
+            <label className="small" style={{ display: "block", marginBottom: 8 }}>
+              <input type="checkbox" checked={noQuant} onChange={(e) => setNoQuant(e.target.checked)} data-testid="opt-no-quant" /> 不量化（保持原始精度，等同于只选 BF16 配方）
+            </label>
+            <div className="chips" style={{ marginBottom: 8, opacity: noQuant ? 0.5 : 1, pointerEvents: noQuant ? "none" : "auto" }}>
+              {recipes.data
+                ?.filter((r) => r.weight.format !== "none")
+                .map((r) => (
+                  <span key={r.id} className={`chip ${picked.includes(r.id) ? "on" : ""}`} onClick={() => toggle(r.id)} title={r.summary}>
+                    {r.name}
+                    {r.maturity === "experimental" && <span className="exp">实验</span>}
+                  </span>
+                ))}
             </div>
-            <div className="field">
-              <label>KV 方法</label>
-              <select value={kvMethod} onChange={(e) => setKvMethod(e.target.value)} disabled={!kv}>
-                <option value="kivi">KIVI（K per-channel / V per-token）</option>
-                <option value="naive">naive（K、V 均 per-token）</option>
-              </select>
-            </div>
-            <div className="field">
-              <label>混合精度：首尾块</label>
-              <select value={keepEnds ? "8" : ""} onChange={(e) => setKeepEnds(e.target.value === "8")}>
-                <option value="">同配方</option>
-                <option value="8">首块 + 末块 8 bit</option>
-              </select>
-            </div>
-            <div className="field">
-              <label>混合精度：down_proj</label>
-              <select value={downBits} onChange={(e) => setDownBits(e.target.value)}>
-                <option value="">同配方</option>
-                <option value="8">8 bit</option>
-                <option value="4">4 bit</option>
-                <option value="fp">保持 FP（不量化）</option>
-              </select>
-            </div>
-          </div>
+            {kind === "vla" ? (
+              <label className="small">
+                <input type="checkbox" checked={action} onChange={(e) => setAction(e.target.checked)} /> 同时量化 DiT 动作头（默认保持 FP32）
+              </label>
+            ) : (
+              <div className="form-row">
+                <div className="field">
+                  <label>激活量化</label>
+                  <select value={actStatic} onChange={(e) => setActStatic(e.target.value)} disabled={noQuant}>
+                    <option value="">动态 per-token</option>
+                    <option value="minmax">静态 per-tensor · minmax</option>
+                    <option value="ema">静态 per-tensor · EMA</option>
+                    <option value="percentile">静态 per-tensor · 99.99% 分位</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>KV Cache 量化</label>
+                  <select value={kv} onChange={(e) => setKv(e.target.value)} disabled={noQuant}>
+                    <option value="">按配方（多数为不量化）</option>
+                    <option value="int8">INT8</option>
+                    <option value="int4">INT4</option>
+                    <option value="int2">INT2</option>
+                    <option value="fp8">FP8 E4M3</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>KV 方法</label>
+                  <select value={kvMethod} onChange={(e) => setKvMethod(e.target.value)} disabled={!kv || noQuant}>
+                    <option value="kivi">KIVI（K per-channel / V per-token）</option>
+                    <option value="naive">naive（K、V 均 per-token）</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>混合精度：首尾块</label>
+                  <select value={keepEnds ? "8" : ""} onChange={(e) => setKeepEnds(e.target.value === "8")} disabled={noQuant}>
+                    <option value="">同配方</option>
+                    <option value="8">首块 + 末块 8 bit</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>混合精度：down_proj</label>
+                  <select value={downBits} onChange={(e) => setDownBits(e.target.value)} disabled={noQuant}>
+                    <option value="">同配方</option>
+                    <option value="8">8 bit</option>
+                    <option value="4">4 bit</option>
+                    <option value="fp">保持 FP（不量化）</option>
+                  </select>
+                </div>
+              </div>
+            )}
+          </>
         )}
-        <h2 style={{ marginTop: 16 }}>③ 量化算法</h2>
-        <div className="form-row">
-          <div className="field" style={{ minWidth: 260 }}>
-            <label>算法（所有勾选配方共用）</label>
-            <select value={algorithm} onChange={(e) => setAlgorithm(e.target.value)}>
-              <option value="recipe">按配方默认（{recipes.data?.filter((r) => picked.includes(r.id)).map((r) => `${r.name}:${r.default_algorithm}`).join(" · ") || "—"}）</option>
-              {algos.data?.map((a) => (
-                <option key={a.name} value={a.name}>
-                  {a.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="field grow">
-            <label>说明</label>
-            <div className="small muted" style={{ minHeight: 32, display: "flex", alignItems: "center" }}>
-              {algorithm === "recipe"
-                ? "每个配方使用 data/recipes/*.yaml 里的 default_algorithm。"
-                : algos.data?.find((a) => a.name === algorithm)?.description}
-              {algos.data?.find((a) => a.name === algorithm)?.needs_calibration && " 需要校准数据。"}
-            </div>
-          </div>
-        </div>
-        {algos.error && <div className="error-box">{algos.error}</div>}
       </div>
+      {!blocked && (
       <div className="card">
-        <h2>④ 评估数据</h2>
+        <h2>④ 评估数据 + 设备</h2>
         {kind === "vla" ? (
           <>
             <div className="form-row">
               <div className="field grow">
                 <label>数据集（LeRobot v3 目录，或 synthetic）</label>
-                <input value={dataset} onChange={(e) => setDataset(e.target.value)} />
+                <input value={dataset} onChange={(e) => setDataset(e.target.value)} data-testid="dataset-path" />
               </div>
               <div className="field">
                 <label>校准样本</label>
@@ -294,6 +395,13 @@ export default function NewJobPage() {
                   <option value="type">按层类型（q/k/v/o/gate/up/down）</option>
                 </select>
               </div>
+              <div className="field">
+                <label>执行设备</label>
+                <select value={device} onChange={(e) => setDevice(e.target.value)}>
+                  <option value="cpu">CPU（不占 GPU 池）</option>
+                  <option value="gpu">GPU 池（{cfg.data?.gpus.join(", ") ?? "…"}）</option>
+                </select>
+              </div>
             </div>
             <div className="form-row">
               <div className="field">
@@ -305,16 +413,18 @@ export default function NewJobPage() {
                 </label>
               </div>
             </div>
-            <p className="note">评估位点：pretrain（原模型）→ fake_quant_wo_kv（权重+激活量化）→ fake_quant（再加 KV Cache 量化）。PPL 为不重叠窗口的 token 级困惑度。</p>
+            <p className="note">评估位点：pretrain（原模型）→ fake_quant_wo_kv（权重+激活量化）→ fake_quant（再加 KV Cache 量化）。PPL 为不重叠窗口的 token 级困惑度。量化设备与评估设备目前共用同一个（见上），执行器尚不支持两者分离。</p>
           </>
         )}
       </div>
+      )}
+      {!blocked && (
       <div className="card">
-        <h2>⑤ 部署硬件</h2>
+        <h2>⑤ 部署与导出</h2>
         <div className="form-row">
           <div className="field">
             <label>目标硬件画像（用于资源预估）</label>
-            <select value={hw} onChange={(e) => setHw(e.target.value)}>
+            <select value={hw} onChange={(e) => setHw(e.target.value)} data-testid="hw-select">
               {profiles.data?.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -322,6 +432,23 @@ export default function NewJobPage() {
               ))}
             </select>
           </div>
+          {kind === "llm" && (
+            <div className="field" style={{ minWidth: 220 }}>
+              <label>部署后端（自动建议导出格式）</label>
+              <select value={deployBackend} onChange={(e) => setDeployBackend(e.target.value as typeof deployBackend)} data-testid="deploy-backend">
+                <option value="none">不部署（仅评估量化误差）</option>
+                <option value="vllm">vLLM</option>
+                <option value="llamacpp">llama.cpp（GGUF）</option>
+                <option value="sglang">SGLang（尚未接入，T-0704）</option>
+              </select>
+              {suggestion && (
+                <div className="small muted" data-testid="export-suggestion">
+                  建议格式：{suggestion.format || "—"}（{suggestion.verdict}
+                  {suggestion.reason ? `，${suggestion.reason}` : ""}）
+                </div>
+              )}
+            </div>
+          )}
           {kind === "llm" && (
             <div className="field">
               <label>真实导出（S09/S10 一致性检查）</label>
@@ -370,25 +497,17 @@ export default function NewJobPage() {
               )}
             </div>
           )}
-          {kind === "llm" && (
-            <div className="field">
-              <label>执行设备</label>
-              <select value={device} onChange={(e) => setDevice(e.target.value)}>
-                <option value="cpu">CPU（不占 GPU 池）</option>
-                <option value="gpu">GPU 池（{cfg.data?.gpus.join(", ") ?? "…"}）</option>
-              </select>
-            </div>
-          )}
         </div>
-        <p className="note">当前执行后端为 PyTorch fake-quant（评估量化误差）；真实低比特内核部署（vLLM / llama.cpp）在后续里程碑接入。</p>
+        <p className="note">当前执行后端为 PyTorch fake-quant（评估量化误差）；选择一个部署后端后，上面的导出格式/GGUF 类型会按建议自动勾选，仍可手动调整。</p>
       </div>
+      )}
       <div className="card">
         <h2>JobSpec 预览</h2>
         <pre className="log" style={{ height: "auto", maxHeight: 240 }}>
           {JSON.stringify(job, null, 2)}
         </pre>
-        <button disabled={busy || picked.length === 0} onClick={submit}>
-          {busy ? "提交中…" : "提交作业"}
+        <button disabled={busy || blocked || picked.length === 0} onClick={submit}>
+          {busy ? "提交中…" : blocked ? "该领域尚未支持提交" : "提交作业"}
         </button>
       </div>
       </div>
@@ -426,9 +545,113 @@ export default function NewJobPage() {
             </tbody>
           </table>
         )}
-        {est.data && <p className="note">显存容量 {fmtBytes(est.data.estimates[0]?.capacity_bytes)}（利用率 0.9）。由 C++ 预估器计算，与“资源预估”页同源。</p>}
+        {est.data && <p className="note">显存容量 {fmtBytes(est.data.estimates[0]?.capacity_bytes)}（利用率 0.9）。由 C++ 预估器计算，与"资源预估"页同源。</p>}
       </aside>
       </div>
     </>
+  );
+}
+
+// ---- T-1304: catalog-backed model picker, replacing free-text-only entry for LLM-domain jobs ----
+// Grouped two levels deep (category -> family_group, T-1303) so same-series different-size variants
+// collapse into one dropdown group instead of 200+ flat rows. Picking an entry that is not available
+// locally downloads it (reusing the same /api/v1/download machinery Fit.tsx's HubPanel already uses, not
+// a new download path) and fills the model path once it lands.
+function CatalogModelPicker({ onPick, currentPath }: { onPick: (path: string) => void; currentPath: string }) {
+  const catalog = useAsync(() => api.catalog("", "", "", 500), []);
+  const [picked, setPicked] = useState("");
+  const [dl, setDl] = useState<DownloadStatus | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!dl || (dl.state !== "running" && dl.state !== "queued")) return;
+    const t = setInterval(() => {
+      api
+        .downloadStatus(dl.id)
+        .then((s) => {
+          setDl(s);
+          if (s.state === "succeeded") onPick(s.dir);
+        })
+        .catch(() => {});
+    }, 1000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dl?.id, dl?.state]);
+
+  const groups = useMemo(() => {
+    const byKey = new Map<string, CatalogModel[]>();
+    for (const m of catalog.data?.models ?? []) {
+      const key = `${m.category || "Other"} · ${m.family_group || m.name}`;
+      const arr = byKey.get(key);
+      if (arr) arr.push(m);
+      else byKey.set(key, [m]);
+    }
+    return [...byKey.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [catalog.data]);
+
+  const start = async () => {
+    if (!picked) return;
+    setErr(null);
+    setBusy(true);
+    try {
+      const d = await api.download(picked);
+      setDl(d);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="form-row">
+      <div className="field grow">
+        <label>模型目录（{catalog.data?.total ?? 0} 条，按领域 · 系列分组）</label>
+        <select
+          value={picked}
+          onChange={(e) => {
+            setPicked(e.target.value);
+            setDl(null);
+            setErr(null);
+          }}
+          data-testid="catalog-model-select"
+        >
+          <option value="">— 选择一个模型 —</option>
+          {groups.map(([group, models]) => (
+            <optgroup key={group} label={group}>
+              {models.map((m) => (
+                <option key={m.name} value={m.name}>
+                  {m.name} ({m.parameter_count}, {m.quantization})
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+        {catalog.error && <div className="error-box">{catalog.error}</div>}
+      </div>
+      <div className="field">
+        <label>&nbsp;</label>
+        <button onClick={start} disabled={!picked || busy || dl?.state === "running" || dl?.state === "queued"} data-testid="catalog-download">
+          {dl?.state === "succeeded" ? "已下载" : busy ? "启动中…" : "下载并使用"}
+        </button>
+      </div>
+      {err && <div className="error-box">{err}</div>}
+      {dl && (
+        <div className="field grow">
+          <Meter pct={dl.bytes_total ? (100 * dl.bytes_done) / dl.bytes_total : 0} />
+          <span className="muted small">
+            {fmtBytes(dl.bytes_done)} / {fmtBytes(dl.bytes_total)} · {dl.state}
+            {dl.state === "succeeded" && ` · ${dl.dir}`}
+            {dl.error && ` · ${dl.error}`}
+          </span>
+        </div>
+      )}
+      {!dl && currentPath && (
+        <p className="note" style={{ width: "100%" }}>
+          当前使用路径：{currentPath}
+        </p>
+      )}
+    </div>
   );
 }
