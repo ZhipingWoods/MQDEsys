@@ -37,7 +37,12 @@ export default function NewJobPage() {
   const [actStatic, setActStatic] = useState("");
   const [kv, setKv] = useState("int8");
   const [kvMethod, setKvMethod] = useState("kivi");
-  const [device, setDevice] = useState("cpu");
+  // T-1304/T-1306: quant_device/eval_device split (real backend: schemas/job_spec.schema.json's
+  // quant_device/evaluation.device, consumed by llm_job.py and resolved by JobRunner against the GPU
+  // pool). Omitted from the submitted job when equal -- an unsplit job looks exactly like it did before
+  // this existed (single deploy.device, no new fields).
+  const [quantDevice, setQuantDevice] = useState("cpu");
+  const [evalDevice, setEvalDevice] = useState("cpu");
   const [keepEnds, setKeepEnds] = useState(false);
   const [downBits, setDownBits] = useState("");
   const [exportFmts, setExportFmts] = useState<string[]>(["gptq"]);
@@ -160,16 +165,18 @@ export default function NewJobPage() {
             ...(kvSpec ? { kv: { ...kvSpec, method: kvMethod } } : {}),
             ...(rules.length ? { mixed_precision: { rules } } : {}),
           },
+          ...(quantDevice !== evalDevice ? { quant_device: quantDevice } : {}),
           calibration: { dataset: "wikitext-2-raw-v1:train", n_samples: nCalib, seq_len: seqLen },
           evaluation: {
             dataset: "wikitext-2-raw-v1:test",
             seq_len: seqLen,
             max_windows: windows,
+            ...(quantDevice !== evalDevice ? { device: evalDevice } : {}),
             ...(quantizeOnly ? { skip: true } : {}),
           },
           deploy: {
             hardware: hw,
-            device,
+            device: quantDevice === "gpu" || evalDevice === "gpu" ? "gpu" : "cpu",
             ...(!quantizeOnly && gguf.length ? { llamacpp: { types: gguf } } : {}),
             ...(!quantizeOnly && useVllm
               ? {
@@ -419,8 +426,15 @@ export default function NewJobPage() {
                 </select>
               </div>
               <div className="field">
-                <label>执行设备</label>
-                <select value={device} onChange={(e) => setDevice(e.target.value)}>
+                <label>量化设备</label>
+                <select value={quantDevice} onChange={(e) => setQuantDevice(e.target.value)} data-testid="quant-device-select">
+                  <option value="cpu">CPU（不占 GPU 池）</option>
+                  <option value="gpu">GPU 池（{cfg.data?.gpus.join(", ") ?? "…"}）</option>
+                </select>
+              </div>
+              <div className="field">
+                <label>评估设备</label>
+                <select value={evalDevice} onChange={(e) => setEvalDevice(e.target.value)} data-testid="eval-device-select">
                   <option value="cpu">CPU（不占 GPU 池）</option>
                   <option value="gpu">GPU 池（{cfg.data?.gpus.join(", ") ?? "…"}）</option>
                 </select>
@@ -436,7 +450,7 @@ export default function NewJobPage() {
                 </label>
               </div>
             </div>
-            <p className="note">评估位点：pretrain（原模型）→ fake_quant_wo_kv（权重+激活量化）→ fake_quant（再加 KV Cache 量化）。PPL 为不重叠窗口的 token 级困惑度。量化设备与评估设备目前共用同一个（见上），执行器尚不支持两者分离。</p>
+            <p className="note">评估位点：pretrain（原模型）→ fake_quant_wo_kv（权重+激活量化）→ fake_quant（再加 KV Cache 量化）。PPL 为不重叠窗口的 token 级困惑度。量化设备与评估设备可以不同（例如量化在 CPU 上跑以保证可复现，评估用 GPU 加速）；两者相同时不影响今天的提交行为。</p>
           </>
         )}
       </div>

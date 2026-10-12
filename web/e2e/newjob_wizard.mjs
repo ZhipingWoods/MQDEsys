@@ -134,6 +134,20 @@ try {
   check('unchecking it brings deploy.vllm back', (await preview()).deploy.vllm !== undefined);
   await page.getByTestId('deploy-backend').selectOption('none');
 
+  // ---- 3c. quant_device/eval_device split (T-1304/T-1306 follow-up): omitted when equal (today's
+  // default, unchanged job shape), appear only once they differ, resolved for real end to end by
+  // JobRunner (see job_runner_test.cpp / docs/PROGRESS.md for the server-side half of this) ----
+  const j5a = await preview();
+  check('both devices default to cpu and add no new fields', j5a.quant_device === undefined && j5a.evaluation.device === undefined && j5a.deploy.device === 'cpu', JSON.stringify({ quant_device: j5a.quant_device, eval_device: j5a.evaluation.device, deploy_device: j5a.deploy.device }));
+  await page.getByTestId('quant-device-select').selectOption('gpu');
+  await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.quant_device === 'gpu'; } catch { return false; } }, null, { timeout: 10000 });
+  const j5b = await preview();
+  check('quant_device=gpu, eval_device still cpu: both fields appear once they differ', j5b.quant_device === 'gpu' && j5b.evaluation.device === 'cpu', JSON.stringify({ quant_device: j5b.quant_device, eval_device: j5b.evaluation.device }));
+  check('deploy.device reflects "either one wants gpu"', j5b.deploy.device === 'gpu');
+  await page.getByTestId('quant-device-select').selectOption('cpu');
+  await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.quant_device === undefined; } catch { return false; } }, null, { timeout: 10000 });
+  check('setting it back to cpu (matching eval_device again) removes both fields', (await preview()).quant_device === undefined);
+
   // ---- 4. catalog-backed model picker (grouped by category/family_group) resolves to a local path ----
   // Network-intercepted so this stays offline like every other e2e test in this suite: the real frontend
   // code path (list groups -> start download -> poll status -> fill the path) runs against fake responses
