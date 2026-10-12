@@ -180,6 +180,16 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-12（再续） · Claude · 补回"仅量化不评测"真实后端（用户明确要求回去把摆设做成真功能）
+
+上一条记录里把"仅量化不评测"和"量化/评估设备拆分"都标记为"没做——后端无对应能力，做了会是摆设"。用户看完前端重排后明确要求：既要继续 P13 剩余任务，也要回去把这一轮确实没做的几项中能做的补成真的。这条先补"仅量化不评测"（设备拆分和高级参数面板留在下一条）。
+
+**做了什么**：`llm_job.py`/`vla_job.py` 的 `LLMJobSpec`/`JobSpec` 各加 `quantize_only: bool`（YAML `evaluation.skip`），`_run()` 里让这个开关真的跳过所有需要已评估 baseline 的阶段（LLM：eval_baseline/lm_eval_baseline/logits_probe/sensitivity/export/llama.cpp 部署；VLA：eval_baseline/attribution/eval_fake），量化阶段照常跑，`summary` 里的 `worst_layers` 改从量化时的层级误差追踪（`res.traces`）取,不是从需要 baseline 的 eval 阶段取。`planner::validate_jobspec` 新增校验块，把"quantize_only 和 export/vllm/llamacpp/sensitivity/logits_probe/VLA attribution 同时出现"在提交前就拒绝，而不是让 Python 侧默默产出一份字段残缺的报告。
+
+**验证，不是只看代码**：C++ 侧新校验的 6 个子分支（outer gate + 5 个具体条件）**逐一**改成 `if (false)` 做 mutation test，每个都确认对应测试变红再还原——不是只测外层总开关就假设里面都对；Mac 全量 288/288、4090 全量 284/284。Python 侧 `test_llm_job_e2e.py` 新增 2 个用例，在 4090 `mqde` conda 环境真实跑通（13/13），`pytest python/tests -q` 全量 333 passed/3 skipped。VLA 侧照项目一贯做法（VLA 需要真实 GPU + checkpoint，没有 CPU fixture 式单测，一直是手工跑真实作业）在 4090 GPU 4 上跑了一次真实的 quantize-only smoke job（`recipe: [w4a16, w2a16]`），`report.json` 的 `stages` 确认没有 `eval_baseline`/`attribution`/`eval_fake`，两个配方的 `eval` 都是 `{}` 但 `layers` 非空，字段形状和实现逐一对上。
+
+**还没做**：`NewJob.tsx` 还没有对应的开关——今天前端拼不出冲突组合，但也享受不到这个新能力，纯后端能力，下一步接进前端。设备拆分和高级参数面板留给下一条记录。
+
 ### 2026-10-12（续） · Claude · T-1304 前端本体：用户直接问"前端更新了吗"之后动手做的
 
 用户看了一眼当前站点，发现确实什么都没变，直接问了。之前那条记录里我判断前端重排风险太大想单独放一轮会话，但用户显然希望现在就看到真东西，所以这次就动手做了，没有再犟着"按计划分阶段"。

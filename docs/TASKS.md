@@ -166,7 +166,7 @@
 | T-1301 | 领域（domain）注册表 | P13 | T-0206 | L2 | DONE (2026-10-10，见 P13 详情；ctest -R estimator_domain 7/7，4090 全量 264/264) |
 | T-1302 | 算法可插拔性加固 + 第三方接入指南 | P13 | T-0103 | L1（T-0609 的 ADR 部分仍 L3） | DONE (2026-10-10，见 P13 详情；4090 真实跑通 check_algo_registry_sync.py + validate_job_schema.py，ctest 277/277) |
 | T-1303 | HF 目录后台定时刷新 + 二级分类分组 | P13 | T-0204,T-R25 | L2 | DONE (2026-10-10，见 P13 详情；4090 全量 277/277) |
-| T-1304 | 新建作业向导重构（五步，领域感知） | P13 | T-1301,T-1303,T-1305,T-0210 | L1 | PARTIAL (2026-10-12，前端本体已重排+接入新功能，见 P13 详情；真正的分步 Next/Back 导航改为单页多卡片保留，范围收窄有记录；"仅量化不评测"与量化/评估设备拆分没做——后端无对应能力，做了会是摆设) |
+| T-1304 | 新建作业向导重构（五步，领域感知） | P13 | T-1301,T-1303,T-1305,T-0210 | L1 | PARTIAL (2026-10-12，前端本体已重排+接入新功能，见 P13 详情；真正的分步 Next/Back 导航改为单页多卡片保留，范围收窄有记录；"仅量化不评测"补上了真实后端（C++ 校验 + llm_job.py/vla_job.py），4090 真机跑通，但还没接进 NewJob.tsx；量化/评估设备拆分仍未做) |
 | T-1305 | JobSpec 正式契约（T-0007 最小切片） | P13 | T-0210 | L2 | DONE (2026-10-10，见 P13 详情；ctest -R planner_validate_jobspec 全绿，4090 全量 268/268，python scripts/validate_job_schema.py 3/3 真实跑通) |
 | T-1306 | "量化与评测"信息架构拆分 | P13 | T-1304 | L1 | TODO |
 | T-1307 | 硬件与后端页面视觉改版 | P13 | T-0306 | L1 | TODO |
@@ -878,7 +878,13 @@
 - `deployBackend` 的应用逻辑把"要不要开启部署"和"有没有格式可建议"绑在一起判断，导致选 bf16（不量化）配方后切到 vLLM，因为 `preferred_export_format` 对 bf16 返回空字符串，`useVllm` 也跟着没被打开——但部署一个未量化模型本身是合理操作，和"有没有格式建议"是两件事，拆开了判断。
 - 另外测试本身也改过两次：一次是我的 e2e 测试用了全零字节的假 safetensors 文件（其他测试用的是真实 header），导致预估请求 400；一次是忘了给 VLA 提交设置数据集路径（默认值是沙箱外的真实路径，服务端正确地用 403 拒绝了——这是服务端现有的路径沙箱检查在正常工作，不是 bug，改成用服务端本来就豁免的 `synthetic` 值）。
 - **校验**：`web/e2e/newjob_wizard.mjs` 19/19，外加全部既有前端 e2e（`newjob_live_estimate` 10/10、`ui_features` 20/20、`clone_from_suggestion` 14/14、`layer_detail` 20/20、`attribution_highlight` 8/8、`hardware_plugin` 7/7）全部保持通过，共 98/98；两个被 DOM 重排影响的测试（`ui_features.mjs`、`newjob_live_estimate.mjs`）改用 `data-testid`（新增 `model-path`/`hw-select`/`domain-tab-<id>`）替代原来脆弱的位置定位（如"第一个 input"），顺带让它们更稳；`cd web && npx tsc -b` 全程保持干净；C++ 侧这轮没有改动，`ctest --test-dir build/mac` 285/285 不受影响。4090 验证见下一条。
-- **没做**：量化/评估设备拆分、"仅量化不评测"、配方高级参数面板、校准自定义样本、评估数据集画廊（原因见上"范围收窄"）；真正的分步 Next/Back 导航；T-1306 的导航拆分仍然依赖这次的重排结果，可以接着做。
+- **没做（本轮）**：量化/评估设备拆分、配方高级参数面板、校准自定义样本、评估数据集画廊（原因见上"范围收窄"）；真正的分步 Next/Back 导航；T-1306 的导航拆分仍然依赖这次的重排结果，可以接着做。
+
+**2026-10-12（续，补回"仅量化不评测"）**：用户明确要求把这次早先标记"没做"的三项之一补成真实能力，而不是摆设。
+- **产出**：`LLMJobSpec`/`JobSpec`（vla_job.py）各新增 `quantize_only: bool`（YAML 路径 `evaluation.skip`）。`llm_job.py` 的 `_run()`：`quantize_only=True` 时跳过 `eval_baseline`/`lm_eval_baseline`/`logits_probe`/每个配方的 `eval_fake_wo_kv`/`eval_real`/`sensitivity`/`export`，以及最后的 `deploy_llamacpp`；每个配方仍跑 `quantize`，`summary` 里 `ppl`/`ppl_delta_pct`/`kv_delta_pct` 置 `None`，`worst_layers` 改从 `res.traces`（量化时的层级误差追踪）取,而不是从需要 baseline 的 eval 阶段取。`vla_job.py` 的 `_run()`：跳过 `eval_baseline`/`attribution`/`eval_fake`，`quantize` 仍跑；`_summarize(quantize_only=True)` 分支在不碰 `self.report["baseline"]` 或 `rep["eval"]` 的前提下，仅用 `rep["layers"]` 算出 `worst_layers`/`component_mean_out_sqnr_db`，`worst_stage`/`action_rel_l2_over_noise_floor` 置 `None`。两个模块都新增 `--quantize-only` CLI flag。顺带修了 `vla_job.py` `main()` 里一个真 bug：quantize_only 模式下打印摘要会对不存在的 `rep["eval"]["action_rel_l2"]` 抛 KeyError。
+- **C++ 侧**：`planner::validate_jobspec` 新增校验块——`evaluation.skip=true` 与 LLM 的 `export.formats`/`deploy.vllm`/`deploy.llamacpp`/`analysis.sensitivity`/`analysis.logits_probe` 任一同时出现、或 VLA 的 `evaluation.attribution=true`（含默认值）同时出现，直接在提交前拒绝并给出"关掉哪个"的理由，而不是让 Python 侧默默跑出一个一半字段是空的报告。
+- **真实验证，不是只看代码**：`planner_validate_test.cpp` 新增 3 个用例，**6 个子分支逐一 mutation 测试**（不是只测外层总开关）——outer gate、`export.formats`、`deploy.vllm`、`deploy.llamacpp`、`analysis.*`、VLA `attribution` 各自改成 `if (false)` 后对应测试必须变红，再还原，Mac 全量 288/288、4090 全量 284/284。Python 侧 `test_llm_job_e2e.py` 新增 2 个用例，4090 conda 环境 `mqde` 真实跑通（13/13，全文件），`pytest python/tests -q` 全量 333 passed/3 skipped。VLA 侧没有 pytest 覆盖（项目一贯做法：VLA 需要真实 GPU + MiniCPM-RobotManip checkpoint，一直是手工跑真实作业验证，见 `docs/PROGRESS.md` 里历次 VLA 验证记录），所以在 4090 GPU 4 上真实跑了一次 `recipe: [w4a16, w2a16]` 的 quantize-only smoke job：`report.json` 的 `stages` 是 `[validate, preflight, inspect, calib_prepare, quantize, quantize, report]`（没有 `eval_baseline`/`attribution`/`eval_fake`），顶层没有 `baseline` 键，两个配方的 `eval` 都是 `{}`，`layers` 非空，`summary` 只有 `worst_layers`/`component_mean_out_sqnr_db`/`worst_stage: null`/`action_rel_l2_over_noise_floor: null` 四个键——和实现逐字段对上。
+- **还没做**：`NewJob.tsx` 还没有对应的 `quantize-only` 开关（UI 上选中后要隐藏/禁用 export、vLLM、llama.cpp、sensitivity、logits-probe 控件，VLA 要禁用 attribution 勾选），今天如果用户在前端手动拼出冲突组合会在提交时被服务端 400 挡住（校验是对的，只是体验上还没前置），留给下一步。
 
 #### T-1306 "量化与评测"信息架构拆分
 - **依赖**：T-1304 **级别**：L1
