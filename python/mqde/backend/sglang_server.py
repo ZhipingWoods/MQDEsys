@@ -2,9 +2,9 @@
 
 SGLang pins its own torch / transformers / flashinfer, so (like vLLM) it lives in its own environment and is
 launched by interpreter path and spoken to over HTTP; nothing from SGLang is imported. The interpreter comes from
-``MQDE_SGLANG_PYTHON``, then ``build/sglang/bin/python``, then ``/cache/.../envs/sglang`` is NOT guessed: a missing
-environment is reported, not papered over. The source tree is the ``3rdpart/sglang`` checkout, installed editable
-into that environment, so the adapter and the engine it runs always agree.
+``MQDE_SGLANG_PYTHON``, then ``build/sglang/bin/python``; a missing environment is reported, not guessed. The source
+tree is the ``3rdpart/sglang`` submodule installed editable into that environment (``SGLANG_BUILD_RUST_EXTS=none``:
+only ``launch_server`` is used, not the Rust gateway), so the adapter and the engine it runs always agree.
 
 Failures seen on real runs are recognised from the log; ``engine_info`` reads what SGLang prints at startup
 (weight memory, KV-cache capacity) so it can be compared with the estimator's numbers.
@@ -63,8 +63,8 @@ def launch_args(python: str | Path, model: str | Path, port: int, *, max_model_l
          "--skip-server-warmup"]  # warmup would send an extra generate request before /health; we smoke it ourselves
     if max_running_requests:
         a += ["--max-running-requests", str(max_running_requests)]
-    if disable_cuda_graph:
-        a.append("--disable-cuda-graph")
+    if disable_cuda_graph:  # `--disable-cuda-graph` is deprecated upstream in favour of these two
+        a += ["--cuda-graph-backend-decode", "disabled", "--cuda-graph-backend-prefill", "disabled"]
     if served_name:
         a += ["--served-model-name", served_name]
     return a + (extra or [])

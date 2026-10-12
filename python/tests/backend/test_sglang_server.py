@@ -26,9 +26,10 @@ def test_launch_args() -> None:
     assert flags["--model-path"] == "/m/ckpt" and flags["--host"] == "127.0.0.1" and flags["--port"] == "8123"
     assert flags["--context-length"] == "1024" and flags["--mem-fraction-static"] == "0.4" and flags["--dtype"] == "float16"
     assert flags["--max-running-requests"] == "8" and flags["--served-model-name"] == "q"
-    assert "--disable-cuda-graph" in a and "--skip-server-warmup" in a and a[-2:] == ["--seed", "1"]
+    assert flags["--cuda-graph-backend-decode"] == "disabled" and flags["--cuda-graph-backend-prefill"] == "disabled"
+    assert "--skip-server-warmup" in a and a[-2:] == ["--seed", "1"]
     plain = ss.launch_args("p", "m", 1)
-    assert "--max-running-requests" not in plain and "--disable-cuda-graph" not in plain  # left to SGLang's defaults
+    assert "--max-running-requests" not in plain and "--cuda-graph-backend-decode" not in plain  # left to SGLang's defaults
     assert "--trust-remote-code" not in plain, "remote code execution is never on by default"
 
 
