@@ -585,6 +585,19 @@ def test_when_every_build_fails_the_error_says_why_for_each(github: dict[str, ob
     assert not (clean / "envs/llamacpp/current").exists()
 
 
+def test_leftovers_of_an_installer_that_was_killed_are_cleaned_up_but_real_releases_are_not(github: dict[str, object], clean: Path) -> None:
+    put_release(github, "b11566")
+    root = clean / "envs/llamacpp"
+    (root / ".b11500.abcd1234/x").mkdir(parents=True)  # temp dir of a killed run (SIGTERM skips the finally block)
+    (root / ".b11500.abcd1234/x/partial").write_text("half")
+    keep = root / "b11500"
+    keep.mkdir()
+    (keep / "llama-server").write_text("a real, installed release")
+    envs.install("llamacpp", "b11566", lambda _l: None)
+    assert not list(root.glob(".b*.*")), "stale temp directories are removed"
+    assert (keep / "llama-server").read_text() == "a real, installed release"
+
+
 def test_archive_members_cannot_escape_the_install_directory(github: dict[str, object], clean: Path) -> None:
     github["tags"].append("b11565")  # type: ignore[attr-defined]
     evil = tarfile.TarInfo("../../escaped.txt")

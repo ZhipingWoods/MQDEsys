@@ -552,6 +552,8 @@ def install_llamacpp(version: str | None, r: Runner) -> str:
             r.log(f"+ download {by_name[n]['browser_download_url']} -> {dest}")
         return tag
     root.mkdir(parents=True, exist_ok=True)
+    for stale in root.glob(".b*.*"):  # temp dirs of a killed run; install_lock() means nobody else is using them
+        shutil.rmtree(stale, ignore_errors=True)
     cache = root / ".cache"  # archives survive a failed install: re-downloading 700 MB over a flaky link is the expensive part
     cache.mkdir(exist_ok=True)
     failures: list[str] = []
