@@ -108,12 +108,19 @@ class SglangServer(ServerBackend):
             "weights_gib": (r"Load weight end\..*?mem usage=([\d.]+) GB", lambda m: float(m.group(1))),
             "weight_load_s": (r"Load weight end\. elapsed=([\d.]+) s", lambda m: float(m.group(1))),
             "kv_cache_tokens": (r"KV Cache is allocated\..*?#tokens: (\d+)", lambda m: int(m.group(1))),
-            "kv_cache_gib": (r"KV Cache is allocated\..*?(?:KV size|K size): ([\d.]+) GB", lambda m: float(m.group(1))),
             "avail_after_pool_gib": (r"Memory pool end\. avail mem=([\d.]+) GB", lambda m: float(m.group(1))),
-            "cuda_graph_s": (r"Capture cuda graph end\. Time elapsed: ([\d.]+) s", lambda m: float(m.group(1))),
+            "cuda_graph_prefill_s": (r"Capture target prefill CUDA graph end\. elapsed=([\d.]+) s", lambda m: float(m.group(1))),
+            "cuda_graph_decode_s": (r"Capture target decode CUDA graph end\. elapsed=([\d.]+) s", lambda m: float(m.group(1))),
         }
         for k, (rx, conv) in pats.items():
             m = re.search(rx, log)
             if m:
                 out[k] = conv(m)
+        # K and V are separate pools (MHA/GQA: "K size: a GB, V size: b GB"); MLA-style caches print one "KV size: c GB".
+        # kv_cache_gib is the total either way.
+        m = re.search(r"KV Cache is allocated\..*?K size: ([\d.]+) GB, V size: ([\d.]+) GB", log) 
+        if m:
+            out["kv_cache_gib"] = float(m.group(1)) + float(m.group(2))
+        elif m := re.search(r"KV Cache is allocated\..*?KV size: ([\d.]+) GB", log):
+            out["kv_cache_gib"] = float(m.group(1))
         return out

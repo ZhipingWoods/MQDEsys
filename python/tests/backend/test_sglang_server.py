@@ -53,20 +53,27 @@ def test_lifecycle_info_smoke_and_load(tmp_path: Path) -> None:
         info = srv.engine_info()
     assert srv.proc is None
     assert r["ok"] == 4 and r["failed"] == 0
-    assert info["kv_cache_tokens"] == 12345 and info["weights_gib"] == 0.93 and info["weight_load_s"] == 1.2
-    assert info["kv_cache_gib"] == 0.07 and info["avail_after_pool_gib"] == 19.5 and info["cuda_graph_s"] == 3.4
+    assert info["kv_cache_tokens"] == 12345 and info["weights_gib"] == 0.98 and info["weight_load_s"] == 0.98
+    assert info["kv_cache_gib"] == pytest.approx(0.14), "K and V are separate pools: the total is their sum"
+    assert info["avail_after_pool_gib"] == 19.5 and info["cuda_graph_prefill_s"] == 52.09 and info["cuda_graph_decode_s"] == 1.27
 
 
 def test_engine_info_reads_the_log_lines_sglang_really_prints(tmp_path: Path) -> None:
-    """The format strings come from sglang/srt/model_executor/model_runner.py and mem_cache/memory_pool.py."""
+    """Verbatim from a real run (SGLang 0.5.22.dev, Qwen2.5-0.5B, RTX 4090, mem_fraction_static 0.3)."""
     srv = mock_backend.sglang(tmp_path)
     srv.log_path.write_text(
-        "[2026-10-12 15:00:01] Load weight end. elapsed=2.51 s, type=Qwen2ForCausalLM, avail mem=21.40 GB, mem usage=0.93 GB.\n"
-        "[2026-10-12 15:00:01] KV Cache is allocated. #tokens: 521264, KV size: 5.97 GB\n"  # MLA-style single KV size
-        "[2026-10-12 15:00:02] Memory pool end. avail mem=14.10 GB\n")
+        "[2026-10-12 18:13:58] Load weight end. elapsed=0.98 s, type=Qwen2ForCausalLM, avail mem=22.07 GB, mem usage=0.98 GB.\n"
+        "[2026-10-12 18:13:59] KV Cache is allocated. dtype: torch.float16, #tokens: 517664, K size: 2.96 GB, V size: 2.96 GB\n"
+        "[2026-10-12 18:14:00] Memory pool end. avail mem=16.03 GB\n"
+        "[2026-10-12 18:15:01] Capture target prefill CUDA graph end. elapsed=52.09 s, mem usage=0.43 GB, avail mem=15.04 GB.\n"
+        "[2026-10-12 18:15:03] Capture target decode CUDA graph end. elapsed=1.27 s, mem usage=0.11 GB, avail mem=14.93 GB.\n")
     info = srv.engine_info()
-    assert info == {"weights_gib": 0.93, "weight_load_s": 2.51, "kv_cache_tokens": 521264, "kv_cache_gib": 5.97,
-                    "avail_after_pool_gib": 14.1}
+    assert info == {"weights_gib": 0.98, "weight_load_s": 0.98, "kv_cache_tokens": 517664, "kv_cache_gib": pytest.approx(5.92),
+                    "avail_after_pool_gib": 16.03, "cuda_graph_prefill_s": 52.09, "cuda_graph_decode_s": 1.27}
+    # 517664 tokens x 12288 B/token (Qwen2.5-0.5B: 24 layers x 2 x 2 KV heads x 64 x 2 B) = 5.92 GiB: K + V, not K alone
+    assert info["kv_cache_gib"] == pytest.approx(517664 * 12288 / 2**30, abs=0.01)
+    srv.log_path.write_text("KV Cache is allocated. dtype: torch.bfloat16, #tokens: 1000, KV size: 1.50 GB\n")  # MLA-style single pool
+    assert srv.engine_info() == {"kv_cache_tokens": 1000, "kv_cache_gib": 1.5}
 
 
 @pytest.mark.parametrize(("model", "why"), [

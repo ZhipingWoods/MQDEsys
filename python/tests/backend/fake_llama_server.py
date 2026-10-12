@@ -81,10 +81,11 @@ def main() -> None:
         if "lowmem" in Path(model).name:
             print("RuntimeError: Not enough memory. Please try to increase --mem-fraction-static.", flush=True)
             sys.exit(1)
-        print("Load weight end. elapsed=1.20 s, type=Qwen2ForCausalLM, avail mem=20.10 GB, mem usage=0.93 GB.", flush=True)
+        print("Load weight end. elapsed=0.98 s, type=Qwen2ForCausalLM, avail mem=22.07 GB, mem usage=0.98 GB.", flush=True)
         print("KV Cache is allocated. dtype: torch.float16, #tokens: 12345, K size: 0.07 GB, V size: 0.07 GB", flush=True)
         print("Memory pool end. avail mem=19.50 GB", flush=True)
-        print("Capture cuda graph end. Time elapsed: 3.40 s. mem usage=0.20 GB. avail mem=19.30 GB.", flush=True)
+        print("Capture target prefill CUDA graph end. elapsed=52.09 s, mem usage=0.43 GB, avail mem=15.04 GB.", flush=True)
+        print("Capture target decode CUDA graph end. elapsed=1.27 s, mem usage=0.11 GB, avail mem=14.93 GB.", flush=True)
     elif vllm_style:
         if not Path(model).exists():
             print(f"OSError: Invalid repository ID or local directory specified: '{model}'", flush=True)
