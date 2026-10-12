@@ -123,13 +123,18 @@ def test_quant_device_and_eval_device_default_to_the_shared_device_and_are_repor
 def test_quant_device_and_eval_device_can_differ_and_the_job_still_produces_a_consistent_report(job_env: None, tmp_path: Path) -> None:
     """Real cross-device round trip (see test_blockwise_llm.py's unit-level version of the same sequencing):
     quantize on cpu, move to cuda:0 for eval, move back before restore() so the detached FP originals
-    (pinned on cpu since capture) match the live model's device again."""
-    job = LLMJob(spec(tmp_path, quant_device="cpu", eval_device="cuda:0"), job_dir=tmp_path / "j")
+    (pinned on cpu since capture) match the live model's device again. Two recipes, not one: skipping the
+    move-back is invisible on a single recipe (nothing forwards through the model again after its only
+    restore()) and only breaks the *next* recipe's quantize, which forwards calibration data through a
+    model now split across devices -- caught by hand by mutating moves_devices to False here and
+    confirming this test (not the one-recipe version) goes from a clean pass to a device-mismatch error."""
+    job = LLMJob(spec(tmp_path, recipes=["w4a16", "w2a16"], quant_device="cpu", eval_device="cuda:0"), job_dir=tmp_path / "j")
     rep = job.run()
     assert "error" not in rep
     assert rep["env"]["quant_device"] == "cpu" and rep["env"]["eval_device"] == "cuda:0"
-    r = rep["recipes"]["W4A16"]
-    assert r["summary"]["ppl"] > 0 and r["summary"]["ppl_delta_pct"] != 0
+    for name in ("W4A16", "W2A16"):
+        r = rep["recipes"][name]
+        assert r["summary"]["ppl"] > 0 and r["summary"]["ppl_delta_pct"] != 0, name
 
 
 def test_a_failure_in_the_html_writer_does_not_fail_the_job(job_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
