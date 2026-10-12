@@ -65,6 +65,18 @@ try {
     check('hardware page shows device 0: NPU, tmpl1, 16.00 GiB, vendor', /NPU/.test(r0) && r0.includes('tmpl1') && r0.includes('16.00 GiB') && r0.includes('template'), r0);
     check('hardware page shows device 1 as its own row (12.00 GiB free)', r1.includes('12.00 GiB') && r0 !== r1, r1);
     check('no page errors', errors.length === 0, errors.slice(0, 2).join(' | '));
+
+    // ---- T-1307: hardware_db profile rows expand into a detail view with a vendor source link ----
+    await page.getByTestId('profile-row-nvidia/rtx4090').waitFor({ timeout: 10000 });
+    check('detail view is closed before any row is clicked', (await page.getByTestId('profile-detail-nvidia/rtx4090').count()) === 0);
+    await page.getByTestId('profile-row-nvidia/rtx4090').click();
+    await page.getByTestId('profile-detail-nvidia/rtx4090').waitFor({ timeout: 5000 });
+    const detailText = (await page.getByTestId('profile-detail-nvidia/rtx4090').innerText()).replace(/\s+/g, ' ');
+    check('detail view shows more than the table row (native formats spelled out)', detailText.includes('原生格式'));
+    const sourceHref = await page.getByTestId('profile-source-nvidia/rtx4090').getAttribute('href');
+    check('detail view links to the real vendor datasheet from data/hardware_db', sourceHref != null && sourceHref.startsWith('https://'), sourceHref);
+    await page.getByTestId('profile-row-nvidia/rtx4090').click();
+    check('clicking again closes the detail view', (await page.getByTestId('profile-detail-nvidia/rtx4090').count()) === 0);
     await page.close();
   });
   await withServer({}, async (base) => {

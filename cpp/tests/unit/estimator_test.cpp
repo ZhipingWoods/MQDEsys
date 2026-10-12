@@ -134,6 +134,14 @@ TEST(estimator_recipes, all_builtin_recipes_load) {
   EXPECT_EQ(m->id, "nvidia/rtx4090");
 }
 
+// T-1307: hardware page detail view links out to the vendor doc every real entry's "source" field names.
+TEST(estimator_recipes, hardware_profile_source_url_round_trips_through_to_json) {
+  auto hw = load_hardware("nvidia/rtx4090");
+  ASSERT_TRUE(hw);
+  EXPECT_EQ(hw->source.rfind("https://", 0), 0u) << hw->source;
+  EXPECT_EQ(to_json(*hw).at("source").get<std::string>(), hw->source);
+}
+
 TEST(estimator_recipes, w2_warns_on_missing_native_kernel) {
   auto spec = tiny_spec();
   auto r = load_recipe("w2a16");

@@ -28,6 +28,9 @@ struct HardwareProfile {
   double mem_bw_gbps = 0;
   std::map<std::string, double> peak_tflops;  // fp32/bf16/fp16/fp8/int8/int4
   std::vector<std::string> native_formats;
+  std::string source;  // T-1307: vendor datasheet/doc URL these numbers came from, shown in the hardware
+                       // page's detail view; every data/hardware_db/**/*.yaml entry has one, so this is
+                       // optional (empty string) only for an entry someone adds without it.
 };
 
 struct BackendProfile {

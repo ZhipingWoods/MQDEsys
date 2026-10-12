@@ -38,6 +38,7 @@ Result<HardwareProfile> load_hardware(std::string_view id_or_path) {
   MQDE_ASSIGN_OR_RETURN(h.mem_bw_gbps, get_required<double>(j, "mem_bw_gbps", where));
   h.peak_tflops = get_or<std::map<std::string, double>>(j, "peak_tflops", {});
   h.native_formats = get_or<std::vector<std::string>>(j, "native_formats", {});
+  h.source = get_or<std::string>(j, "source", "");
   return h;
 }
 
@@ -96,7 +97,8 @@ Json to_json(const HardwareProfile& h) {
           {"mem_bytes", h.mem_bytes},
           {"mem_bw_gbps", h.mem_bw_gbps},
           {"peak_tflops", h.peak_tflops},
-          {"native_formats", h.native_formats}};
+          {"native_formats", h.native_formats},
+          {"source", h.source}};
 }
 
 }  // namespace mqde::estimator

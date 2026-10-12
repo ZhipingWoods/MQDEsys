@@ -34,6 +34,7 @@ export interface HardwareProfile {
   mem_bw_gbps: number;
   peak_tflops: Record<string, number>;
   native_formats: string[];
+  source?: string;
 }
 
 export interface CurvePoint {
