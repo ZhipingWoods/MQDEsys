@@ -364,6 +364,26 @@ def test_a_download_that_never_completes_gives_up_with_a_clear_error(tmp_path: P
         srv.close()
 
 
+def test_a_failed_download_of_unknown_size_is_an_error_not_an_empty_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(envs.time, "sleep", lambda _s: None)
+    srv = RangeServer(DATA, drops=99)  # always cut off half way, and the caller does not know the size
+    try:
+        with pytest.raises(RuntimeError, match=r"download of f\.bin failed"):
+            envs.download(srv.url, tmp_path / "f.bin", None, lambda _l: None, retries=2)
+    finally:
+        srv.close()
+
+
+def test_unknown_size_download_still_resumes_and_completes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(envs.time, "sleep", lambda _s: None)
+    srv = RangeServer(DATA, drops=1)
+    try:
+        envs.download(srv.url, tmp_path / "f.bin", None, lambda _l: None)
+    finally:
+        srv.close()
+    assert (tmp_path / "f.bin").read_bytes() == DATA
+
+
 def test_a_file_of_the_wrong_size_is_not_accepted(tmp_path: Path) -> None:
     srv = RangeServer(DATA)
     try:

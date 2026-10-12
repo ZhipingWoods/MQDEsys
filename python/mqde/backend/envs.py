@@ -316,13 +316,16 @@ def _safe_extract(tf: tarfile.TarFile, dest: Path) -> None:
 
 def download(url: str, dest: Path, expected_size: int | None, log: Log, retries: int = 8, timeout: float = 60) -> None:
     """Download `url` to `dest`, resuming with HTTP Range after a stalled or dropped connection (GitHub's asset CDN does
-    that on slow links) and restarting from zero when the server ignores Range. The result must have `expected_size` bytes."""
+    that on slow links) and restarting from zero when the server ignores Range. With `expected_size` the result must have
+    exactly that many bytes; without it, a response that was read to its end counts as complete (a body cut short of its
+    Content-Length raises and is retried like any other drop)."""
     have = 0
     dest.unlink(missing_ok=True)
     for attempt in range(retries + 1):
         headers = {"User-Agent": "mqde-setup"}
         if have:
             headers["Range"] = f"bytes={have}-"
+        complete = False
         try:
             with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout) as resp, \
                     dest.open("ab" if have else "wb") as out:  # noqa: S310
@@ -330,25 +333,29 @@ def download(url: str, dest: Path, expected_size: int | None, log: Log, retries:
                     have = 0
                     out.seek(0)
                     out.truncate()
-                mark = have
+                start = have
                 while chunk := resp.read(1 << 20):
                     out.write(chunk)
                     have += len(chunk)
                     if have // (64 << 20) != (have - len(chunk)) // (64 << 20):
                         log(f"  {dest.name}: {have >> 20} MiB" + (f" of {expected_size >> 20}" if expected_size else ""))
-                if mark == have and expected_size and have < expected_size:
-                    raise OSError("connection closed before any data")
+                # HTTPResponse.read(amt) does not raise when the peer closes early: compare with Content-Length ourselves
+                clen = resp.headers.get("Content-Length")
+                if clen and clen.isdigit() and have - start < int(clen):
+                    raise OSError(f"connection closed after {have - start} of {clen} bytes")
+            complete = expected_size is None or have >= expected_size
         except urllib.error.HTTPError as e:
             if e.code == 416 and expected_size and have >= expected_size:  # everything was already there
-                break
-            if e.code < 500 and e.code != 429:
+                complete = True
+            elif e.code < 500 and e.code != 429:
                 raise RuntimeError(f"download of {dest.name} failed: HTTP {e.code}") from e
         except (OSError, http.client.HTTPException):
             pass
-        if expected_size is None or have >= expected_size:
+        if complete:
             break
         if attempt == retries:
-            raise RuntimeError(f"download of {dest.name} failed after {retries + 1} attempts ({have} of {expected_size} bytes)")
+            raise RuntimeError(f"download of {dest.name} failed after {retries + 1} attempts ({have} bytes"
+                               + (f" of {expected_size})" if expected_size else ")"))
         log(f"  {dest.name}: connection interrupted at {have >> 20} MiB, resuming (attempt {attempt + 2}/{retries + 1})")
         time.sleep(min(2 ** attempt, 20))
     if expected_size is not None and dest.stat().st_size != expected_size:
