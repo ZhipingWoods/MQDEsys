@@ -189,6 +189,13 @@ def test_asset_choice(system: str, machine: str, cuda: tuple[int, int] | None, w
     assert envs.pick_llamacpp_assets(NAMES, TAG, system, machine, cuda) == want
 
 
+def test_candidates_are_ordered_cuda_build_first_with_the_cpu_build_as_the_fallback() -> None:
+    c = envs.llamacpp_candidates(NAMES, TAG, "Linux", "x86_64", (13, 4))
+    assert c == [[asset(TAG, "ubuntu-cuda-13.4-x64"), f"cudart-llama-{TAG}-bin-ubuntu-cuda-13.4-x64.tar.gz"], [asset(TAG, "ubuntu-x64")]]
+    assert envs.llamacpp_candidates(NAMES, TAG, "Linux", "x86_64", None) == [[asset(TAG, "ubuntu-x64")]]
+    assert envs.llamacpp_candidates(NAMES, TAG, "Darwin", "arm64", None) == [[asset(TAG, "macos-arm64")]]
+
+
 def test_asset_choice_errors_clearly_when_nothing_fits() -> None:
     with pytest.raises(RuntimeError, match="no llama.cpp b11565 release asset for Linux/riscv64"):
         envs.pick_llamacpp_assets(NAMES, TAG, "Linux", "riscv64", None)
@@ -428,7 +435,7 @@ def github(monkeypatch: pytest.MonkeyPatch, clean: Path) -> Iterator[dict[str, o
     def releases() -> bytes:
         base = holder["f"].url
         sizes = {n: len(b) for n, b in state["assets"].items()}  # type: ignore[attr-defined]
-        return json.dumps([release(t, [asset(t, "ubuntu-x64")], base, sizes) for t in sorted(state["tags"], reverse=True)]).encode()  # type: ignore[arg-type]
+        return json.dumps([release(t, [n for n in sizes if t in n], base, sizes) for t in sorted(state["tags"], reverse=True)]).encode()  # type: ignore[arg-type]
 
     routes: dict[str, object] = {"/repos/ggml-org/llama.cpp/releases": releases}
 
@@ -522,6 +529,59 @@ def test_a_cached_archive_of_the_wrong_size_is_downloaded_again(github: dict[str
     (cache / asset("b11566", "ubuntu-x64")).write_bytes(b"truncated garbage")
     envs.install("llamacpp", "b11566", lambda _l: None)
     assert envs.resolve("llamacpp") is not None
+
+
+# a CUDA release that needs a newer glibc than this machine has (real: llama.cpp's CUDA builds vs Ubuntu 22.04)
+GLIBC_FAIL = (
+    "#!/bin/sh\n"
+    "printf '%s\\n' \"./llama-server: /lib/x86_64-linux-gnu/libc.so.6: version \\`GLIBC_2.38' not found (required by ./libggml-base.so.0)\" >&2\n"
+    "exit 1"
+)
+
+
+def put_cuda_release(state: dict[str, object], tag: str, main_script: str, cudart_file: bool = True) -> None:
+    state["tags"].append(tag)  # type: ignore[attr-defined]
+    state["assets"][asset(tag, "ubuntu-cuda-12.8-x64")] = tarball({f"llama-{tag}/llama-server": (main_script, 0o755), f"llama-{tag}/libggml-cuda.so": ("lib", 0o644)})  # type: ignore[index]
+    state["assets"][f"cudart-llama-{tag}-bin-ubuntu-cuda-12.8-x64.tar.gz"] = tarball({f"llama-{tag}/libcudart.so.12": ("rt", 0o644)} if cudart_file else {"x": ("", 0o644)})  # type: ignore[index]
+
+
+def test_a_cuda_build_this_glibc_cannot_run_falls_back_to_the_cpu_build_without_downloading_cudart(
+        github: dict[str, object], clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(envs, "driver_cuda_version", lambda: (12, 8))
+    put_cuda_release(github, "b11566", GLIBC_FAIL)
+    put_release(github, "b11566")  # also publishes the plain CPU build
+    logs: list[str] = []
+    assert envs.install("llamacpp", "b11566", logs.append) == "b11566"
+    fake: Fake = github["fake"]  # type: ignore[assignment]
+    got = [h for h in fake.hits if h.startswith("/dl/")]
+    assert not any("cudart" in h for h in got), f"the 566 MB runtime bundle is pointless for a binary that cannot load: {got}"
+    assert any("GLIBC_2.38" in line and "ubuntu-x64" in line for line in logs) or any("CPU" in line or "ubuntu-x64" in line for line in logs)
+    r = envs.resolve("llamacpp")
+    assert r is not None and r.source == "managed" and envs.installed_version("llamacpp", r) == "b11566"
+    assert not (r.path.parent / "libggml-cuda.so").exists(), "the CPU build, not a half-installed CUDA one"
+
+
+def test_a_missing_cuda_runtime_is_fixed_by_the_cudart_bundle_not_treated_as_incompatible(
+        github: dict[str, object], clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(envs, "driver_cuda_version", lambda: (12, 8))
+    needs_rt = ('#!/bin/sh\n[ -f "${0%/*}/libcudart.so.12" ] || { echo "error while loading shared libraries: '
+                'libcudart.so.12: cannot open shared object file: No such file or directory" >&2; exit 127; }\n'
+                'echo "version: 0.6.0-dev (build 11566, commit abc)"')
+    put_cuda_release(github, "b11566", needs_rt)
+    assert envs.install("llamacpp", "b11566", lambda _l: None) == "b11566"
+    r = envs.resolve("llamacpp")
+    assert r is not None and (r.path.parent / "libggml-cuda.so").exists() and (r.path.parent / "libcudart.so.12").exists()
+
+
+def test_when_every_build_fails_the_error_says_why_for_each(github: dict[str, object], clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(envs, "driver_cuda_version", lambda: (12, 8))
+    put_cuda_release(github, "b11566", GLIBC_FAIL)
+    put_release(github, "b11566", server_script="#!/bin/sh\necho 'Illegal instruction' >&2\nexit 132")
+    with pytest.raises(RuntimeError) as e:
+        envs.install("llamacpp", "b11566", lambda _l: None)
+    msg = str(e.value)
+    assert "GLIBC_2.38" in msg and "Illegal instruction" in msg and "cuda-12.8" in msg and "ubuntu-x64" in msg
+    assert not (clean / "envs/llamacpp/current").exists()
 
 
 def test_archive_members_cannot_escape_the_install_directory(github: dict[str, object], clean: Path) -> None:

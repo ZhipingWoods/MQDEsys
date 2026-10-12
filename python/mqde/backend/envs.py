@@ -323,6 +323,25 @@ def pick_llamacpp_assets(names: list[str], tag: str, system: str, machine: str,
     raise RuntimeError(f"no llama.cpp {tag} release asset for {system}/{machine}; build it from source and set MQDE_LLAMA_SERVER_BIN")
 
 
+def llamacpp_candidates(names: list[str], tag: str, system: str, machine: str, cuda: tuple[int, int] | None) -> list[list[str]]:
+    """Asset sets to try in order: the CUDA build that fits the driver (with its cudart bundle), then the plain CPU build. The
+    CUDA builds are made on a newer distribution than many servers run (Ubuntu 24.04 vs 22.04), so a host can be unable to load
+    them at all; the CPU build is the fallback that still gives a working llama-server."""
+    out: list[list[str]] = []
+    with contextlib.suppress(RuntimeError):
+        best = pick_llamacpp_assets(names, tag, system, machine, cuda)
+        if best:
+            out.append(best)
+    if cuda is not None:
+        with contextlib.suppress(RuntimeError):
+            cpu = pick_llamacpp_assets(names, tag, system, machine, None)
+            if cpu and cpu not in out:
+                out.append(cpu)
+    if not out:
+        pick_llamacpp_assets(names, tag, system, machine, cuda)  # raises the "no asset for this platform" error
+    return out
+
+
 def _safe_extract(tf: tarfile.TarFile, dest: Path) -> None:
     root = dest.resolve()
     for m in tf.getmembers():
@@ -463,6 +482,55 @@ def install_pypi(backend: str, version: str | None, r: Runner) -> str:
     return version
 
 
+class StartFailure(RuntimeError):
+    """A build was downloaded and unpacked but its llama-server does not start; another build may still work."""
+
+
+class HostIncompatible(StartFailure):
+    """The binary needs a newer C library than this machine has: no extra package can fix that, only a different build."""
+
+
+LOADER_VERSION_ERROR = re.compile(r"(GLIBC|GLIBCXX|CXXABI)_[0-9.]+' not found")
+
+
+def _install_llamacpp_assets(tag: str, names: list[str], by_name: dict[str, Any], tmp: Path, cache: Path, r: Runner) -> None:
+    """Fetch and unpack `names` into tmp/x and check that llama-server starts. The main archive is probed before the rest is
+    downloaded: a loader-version error means the remaining (large) runtime bundle could not help."""
+    for k, n in enumerate(names):
+        f = cache / n
+        size = int(by_name[n].get("size") or 0) or None
+        if f.is_file() and size and f.stat().st_size == size:
+            r.log(f"using the downloaded {n}")
+        else:
+            r.log(f"downloading {n}")
+            download(by_name[n]["browser_download_url"], f, size, r.log)
+        with tarfile.open(f) as tf:
+            _safe_extract(tf, tmp / "x")
+        srv = next((p for p in sorted((tmp / "x").rglob("llama-server")) if p.is_file()), None)
+        if srv is None:
+            if k == 0:
+                raise RuntimeError(f"llama.cpp {tag} archive has no llama-server")
+            continue
+        for p in srv.parent.iterdir():
+            if p.is_file() and not p.suffix and not p.name.startswith("lib"):
+                p.chmod(p.stat().st_mode | 0o111)
+        if parse_llama_version(_run_out([str(srv), "--version"], 30) or "") is not None:
+            return
+        why = why_not_starting(srv)
+        if LOADER_VERSION_ERROR.search(why) or LOADER_VERSION_ERROR.search(_start_output(srv)):
+            raise HostIncompatible(why)
+        if k == len(names) - 1:
+            raise StartFailure(f"the downloaded llama-server does not start ({why})")
+
+
+def _start_output(binary: Path) -> str:
+    try:
+        r = subprocess.run([str(binary), "--version"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+        return r.stderr + r.stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
 def install_llamacpp(version: str | None, r: Runner) -> str:
     rels = llamacpp_releases()
     if version:
@@ -475,45 +543,34 @@ def install_llamacpp(version: str | None, r: Runner) -> str:
         rel = rels[0]
     tag = str(rel["tag_name"])
     by_name = {a["name"]: a for a in rel.get("assets", [])}
-    names = pick_llamacpp_assets(list(by_name), tag, platform.system(), platform.machine(), driver_cuda_version())
-    if not names:
-        raise RuntimeError(f"llama.cpp {tag} has no asset matching this machine's CUDA driver")
+    candidates = llamacpp_candidates(list(by_name), tag, platform.system(), platform.machine(), driver_cuda_version())
     root = envs_dir() / "llamacpp"
     dest = root / tag
-    r.log(f"llama.cpp {tag}: " + ", ".join(f"{n} ({by_name[n].get('size', 0) // 2**20} MiB)" for n in names))
     if r.dry_run:
-        for n in names:
+        r.log(f"llama.cpp {tag}: " + " | fallback: ".join(", ".join(f"{n} ({by_name[n].get('size', 0) // 2**20} MiB)" for n in c) for c in candidates))
+        for n in candidates[0]:
             r.log(f"+ download {by_name[n]['browser_download_url']} -> {dest}")
         return tag
     root.mkdir(parents=True, exist_ok=True)
     cache = root / ".cache"  # archives survive a failed install: re-downloading 700 MB over a flaky link is the expensive part
     cache.mkdir(exist_ok=True)
-    tmp = Path(tempfile.mkdtemp(prefix=f".{tag}.", dir=root))
-    try:
-        for n in names:
-            f = cache / n
-            size = int(by_name[n].get("size") or 0) or None
-            if f.is_file() and size and f.stat().st_size == size:
-                r.log(f"using the downloaded {n}")
-            else:
-                r.log(f"downloading {n}")
-                download(by_name[n]["browser_download_url"], f, size, r.log)
-            with tarfile.open(f) as tf:
-                _safe_extract(tf, tmp / "x")
-        srv = next((p for p in sorted((tmp / "x").rglob("llama-server")) if p.is_file()), None)
-        if srv is None:
-            raise RuntimeError(f"llama.cpp {tag} archive has no llama-server")
-        for p in srv.parent.iterdir():
-            if p.is_file() and not p.suffix and not p.name.startswith("lib"):
-                p.chmod(p.stat().st_mode | 0o111)
-        got = parse_llama_version(_run_out([str(srv), "--version"], 30) or "")
-        if got is None:
-            raise RuntimeError(f"the downloaded llama-server does not start ({why_not_starting(srv)})")
-        shutil.rmtree(dest, ignore_errors=True)
-        (tmp / "x").rename(dest)
-        shutil.rmtree(cache, ignore_errors=True)  # installed: the archives are no longer needed
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+    failures: list[str] = []
+    for names in candidates:
+        r.log(f"llama.cpp {tag}: trying {', '.join(f'{n} ({by_name[n].get('size', 0) // 2**20} MiB)' for n in names)}")
+        tmp = Path(tempfile.mkdtemp(prefix=f".{tag}.", dir=root))
+        try:
+            _install_llamacpp_assets(tag, names, by_name, tmp, cache, r)
+            shutil.rmtree(dest, ignore_errors=True)
+            (tmp / "x").rename(dest)
+            shutil.rmtree(cache, ignore_errors=True)  # installed: the archives are no longer needed
+            break
+        except StartFailure as e:
+            failures.append(f"{names[0]}: {e}")
+            r.log(f"{names[0]} cannot run on this machine ({e}); " + ("trying the next build" if names is not candidates[-1] else "no build left to try"))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    else:
+        raise RuntimeError("no llama.cpp build could be installed: " + "; ".join(failures))
     link, new = root / "current", root / ".current.new"
     with contextlib.suppress(FileNotFoundError):
         new.unlink()
