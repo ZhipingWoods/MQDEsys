@@ -166,7 +166,7 @@
 | T-1301 | 领域（domain）注册表 | P13 | T-0206 | L2 | DONE (2026-10-10，见 P13 详情；ctest -R estimator_domain 7/7，4090 全量 264/264) |
 | T-1302 | 算法可插拔性加固 + 第三方接入指南 | P13 | T-0103 | L1（T-0609 的 ADR 部分仍 L3） | DONE (2026-10-10，见 P13 详情；4090 真实跑通 check_algo_registry_sync.py + validate_job_schema.py，ctest 277/277) |
 | T-1303 | HF 目录后台定时刷新 + 二级分类分组 | P13 | T-0204,T-R25 | L2 | DONE (2026-10-10，见 P13 详情；4090 全量 277/277) |
-| T-1304 | 新建作业向导重构（五步，领域感知） | P13 | T-1301,T-1303,T-1305,T-0210 | L1 | PARTIAL (2026-10-12，前端本体已重排+接入新功能，见 P13 详情；真正的分步 Next/Back 导航改为单页多卡片保留，范围收窄有记录；"仅量化不评测"、LLM 量化/评估设备拆分都补上了真实后端并 4090 真机跑通（VLA 设备拆分因 CUDA 专用调用散落暂缓）；"仅量化不评测"接入了 NewJob.tsx 前端开关，设备拆分前端与配方高级参数面板仍未做) |
+| T-1304 | 新建作业向导重构（五步，领域感知） | P13 | T-1301,T-1303,T-1305,T-0210 | L1 | PARTIAL (2026-10-12，前端本体已重排+接入新功能，见 P13 详情；真正的分步 Next/Back 导航改为单页多卡片保留，范围收窄有记录；"仅量化不评测"、LLM 量化/评估设备拆分（schema→Python→C++ JobRunner→前端）均已打通并 4090 真机通过真实 mqde serve 验证（VLA 设备拆分因 CUDA 专用调用散落暂缓）；配方高级参数面板仍未做) |
 | T-1305 | JobSpec 正式契约（T-0007 最小切片） | P13 | T-0210 | L2 | DONE (2026-10-10，见 P13 详情；ctest -R planner_validate_jobspec 全绿，4090 全量 268/268，python scripts/validate_job_schema.py 3/3 真实跑通) |
 | T-1306 | "量化与评测"信息架构拆分 | P13 | T-1304 | L1 | TODO |
 | T-1307 | 硬件与后端页面视觉改版 | P13 | T-0306 | L1 | TODO |
@@ -892,6 +892,9 @@
 - **发现并补上一个真缺口：直接 CLI 能用，但服务端提交这条路当时是假的**：`mqde serve` 提交作业的真实路径里，`JobRunner::launch()` 之前无条件只传一个 `--device`（GPU 池分配到哪个真实卡，就把那张卡交给子进程，`CUDA_VISIBLE_DEVICES` 让它在子进程里永远显示成 `cuda:0`），`llm_job.py` 的 CLI 覆盖逻辑会把这一个值铺满 `quant_device`/`eval_device` 两个字段——也就是说，如果真的提交一个 `quant_device`/`evaluation.device` 不同的作业，只要是**通过服务端**（前端唯一能走的路）提交的，两个设备会被服务端悄悄拉回成同一个，前面那条"真实验证"只验证了绕开服务端的直接 CLI 调用，没验证前端真正会用的那条路。`JobRunner`（`job_runner.h`/`.cpp`）新增 `quant_device`/`eval_device`（`std::optional<std::string>`，从提交的 JSON 里原样读出 `"cpu"`/`"gpu"` 这两个和 `deploy.device` 同一套的符号），GPU 池预留逻辑改成"只要两者任一要 `"gpu"` 就预留一个槽位"（即使 `deploy.device` 是 `"cpu"`）；`launch()` 按实际分配到的槽位把符号解析成真实设备串，分别传 `--quant-device`/`--eval-device`（没设置就不传，原来只传 `--device` 的作业行为完全不变）。`job_runner_test.cpp` 新增 3 个用例（真 fork/exec，用一个会把收到的 argv 写文件的假 worker 脚本验证），3 处 mutation 全部先抓到问题再还原。中途撞上一次真的跨编译器坑：`JobProc proc{.id=..., .state=..., .submitted_at=...}` 这种带指派初始化器的写法在 Clang（Mac）下默默地给两个新字段用了默认值，GCC 的 `-Werror -Wmissing-field-initializers`（4090）直接编译失败——改成普通的默认构造+逐字段赋值，不再用指派初始化器。
 - **真实验证到底（通过真实 mqde serve，不是直接 CLI）**：在 4090 上另起一个一次性 `mqde serve`（独立端口 18099、独立 runs 目录、GPU 池只给 5，不碰正在跑的生产服务 18080），真实 `curl POST /api/v1/jobs` 提交一个 `deploy.device="cpu"` 但 `quant_device="cpu"`、`evaluation.device="gpu"` 的真 Qwen2.5-0.5B 作业：`GET /api/v1/gpus` 确认 GPU 5 真的被预留（即使 `deploy.device` 说的是 cpu）；作业成功跑完，`report.json` 的 `env` 确认 `quant_device=cpu, eval_device=cuda:0`，PPL delta 13.89%（RTN+4 校准样本的量级，合理）。验证完整后关掉这个一次性 server，生产服务不受影响。
 - **还没做**：`NewJob.tsx` 前端还没有设备拆分的两个选择器（今天前端仍是一个"执行设备"下拉）；配方高级参数面板、校准自定义样本、评估数据集画廊仍未做。
+
+**2026-10-12（再再再再续，前端接入）**：原来的单个"执行设备"下拉换成"量化设备"/"评估设备"两个独立选择器（仅 LLM 领域，VLA 后端本就没读这两个字段）。两者相同（默认都是 CPU，和重构前行为一致）时提交的 JobSpec 完全不带 `quant_device`/`evaluation.device` 这两个新字段，`deploy.device` 还是原来那套（和今天任何既有作业的提交形状逐字节一致）；两者不同时才带上这两个字段，`deploy.device` 则反映"只要有一个要 GPU 就要"，和 `JobRunner` 这次新实现的解析逻辑完全对应。新增 4 个 `newjob_wizard.mjs` 用例，`web/e2e/*` 全量 112/112；`npx tsc -b`/`npm run build` 干净。至此"量化/评估设备拆分"和"仅量化不评测"两项都已经从 schema 占位 → Python 实现 → C++ 服务端调度 → 前端控件，完整打通。
+- **校验**：`node web/e2e/newjob_wizard.mjs` 33/33；`newjob_live_estimate` 10/10、`ui_features` 20/20 不受影响。这轮没碰 C++/Python，不需要去 4090 跑前端 e2e（4090 不装 Playwright，见 `web/e2e/README.md`）。
 
 #### T-1306 "量化与评测"信息架构拆分
 - **依赖**：T-1304 **级别**：L1
