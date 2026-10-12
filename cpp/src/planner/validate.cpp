@@ -299,6 +299,35 @@ std::vector<Problem> validate_jobspec(const Json& job) {
       add(out, "/domain", fmt::format("domain '{}' has no real quantization pipeline yet", domain_id), "");
     }
   }
+  // quantize_only (T-1304/T-1306): calibration + quantization only. Every stage that reads export/deploy/
+  // sensitivity/logits_probe/attribution needs an evaluated baseline this skips (see llm_job.py's and
+  // vla_job.py's own quantize_only branches), so combining them is a job the Python pipeline cannot honor.
+  if (job.value(Json::json_pointer("/evaluation/skip"), false)) {
+    if (mtype == "llm") {
+      if (!job.value(Json::json_pointer("/export/formats"), Json::array()).empty())
+        add(out, "/evaluation/skip",
+            "quantize-only is incompatible with export.formats (export needs the fake-quant PPL this skips)",
+            "remove export.formats, or turn off evaluation.skip");
+      if (job.contains("deploy") && job["deploy"].is_object() && job["deploy"].contains("vllm"))
+        add(out, "/evaluation/skip", "quantize-only is incompatible with deploy.vllm",
+            "remove deploy.vllm, or turn off evaluation.skip");
+      if (!job.value(Json::json_pointer("/deploy/llamacpp/types"), Json::array()).empty())
+        add(out, "/evaluation/skip", "quantize-only is incompatible with deploy.llamacpp",
+            "remove deploy.llamacpp, or turn off evaluation.skip");
+      if (job.contains("analysis") && job["analysis"].is_object() &&
+          (job["analysis"].contains("sensitivity") || job["analysis"].contains("logits_probe")))
+        add(out, "/evaluation/skip",
+            "quantize-only is incompatible with analysis.sensitivity/logits_probe (both need an evaluated "
+            "baseline)",
+            "remove them, or turn off evaluation.skip");
+    } else if (mtype == "vla") {
+      if (job.value(Json::json_pointer("/evaluation/attribution"), true))
+        add(out, "/evaluation/skip",
+            "quantize-only is incompatible with evaluation.attribution=true (attribution needs the BF16 "
+            "baseline this skips)",
+            "set evaluation.attribution to false, or turn off evaluation.skip");
+    }
+  }
   const auto device = job.value(Json::json_pointer("/deploy/device"), std::string());
   if (device == "cpu" && mtype != "llm")
     add(out, "/deploy/device", "cpu is only supported for model.type=llm",

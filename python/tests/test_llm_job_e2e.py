@@ -67,6 +67,35 @@ def test_full_job_writes_report_and_both_html_pages(job_env: None, tmp_path: Pat
         assert f'{r["summary"]["ppl"]:.3f}' in html and "compressed-tensors" in html
 
 
+def test_quantize_only_skips_every_eval_export_and_deploy_stage(job_env: None, tmp_path: Path) -> None:
+    job = LLMJob(spec(tmp_path, quantize_only=True, export=["awq"], sensitivity="block", llamacpp=["q4_k"],
+                      logits_probe={}), job_dir=tmp_path / "j")
+    rep = job.run()
+    assert "error" not in rep
+    stages = [s["stage"] for s in rep["stages"]]
+    # the stages that need a baseline/reference (eval, export's real_check, llama.cpp deploy) never ran
+    for skipped_stage in ("eval_baseline", "eval_fake_wo_kv", "eval_logits", "sensitivity", "export",
+                          "real_check", "eval_real", "deploy_llamacpp", "lm_eval_baseline"):
+        assert skipped_stage not in stages, f"{skipped_stage} ran despite quantize_only"
+    assert stages == ["validate", "inspect", "calib_prepare", "quantize", "report"]
+    assert "baseline" not in rep
+    assert "llamacpp" not in rep
+    r = rep["recipes"]["W4A16"]
+    assert r["layers"], "the quantize-time trace is still produced"
+    assert r["eval"] == {}
+    assert r["summary"]["ppl"] is None and r["summary"]["ppl_delta_pct"] is None
+    assert r["summary"]["worst_layers"], "worst_layers still comes from the quantize-time trace, not an eval stage"
+    assert "export" not in r and "sensitivity" not in r
+
+
+def test_quantize_only_still_quantizes_multiple_recipes(job_env: None, tmp_path: Path) -> None:
+    job = LLMJob(spec(tmp_path, recipes=["w4a16", "w2a16"], quantize_only=True), job_dir=tmp_path / "j")
+    rep = job.run()
+    assert set(rep["recipes"]) == {"W4A16", "W2A16"}
+    for r in rep["recipes"].values():
+        assert r["layers"] and r["eval"] == {}
+
+
 def test_a_failure_in_the_html_writer_does_not_fail_the_job(job_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import mqde.report.html as html_mod
 

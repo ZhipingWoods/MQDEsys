@@ -378,6 +378,67 @@ TEST(planner_validate_jobspec, domain_is_entirely_optional_and_omitting_it_adds_
   EXPECT_TRUE(validate_jobspec(job).empty());
 }
 
+// ---- quantize-only (evaluation.skip, T-1304/T-1306): conflicts with anything that needs an evaluated
+// baseline, matching llm_job.py's / vla_job.py's own quantize_only branches exactly (see their comments).
+
+TEST(planner_validate_jobspec, quantize_only_alone_is_fine_for_llm_and_vla) {
+  Json llm_job = {{"model", {{"type", "llm"}}},
+                  {"quant", {{"recipe", Json::array({"w4a16"})}}},
+                  {"evaluation", {{"skip", true}}}};
+  EXPECT_TRUE(validate_jobspec(llm_job).empty());
+  Json vla_job = {{"model", {{"type", "vla"}}},
+                  {"quant", {{"recipe", Json::array({"w4a16"})}}},
+                  {"deploy", {{"device", "gpu"}}},
+                  {"evaluation", {{"skip", true}, {"attribution", false}}}};
+  EXPECT_TRUE(validate_jobspec(vla_job).empty());
+}
+
+TEST(planner_validate_jobspec, quantize_only_conflicts_with_export_vllm_llamacpp_and_analysis_for_llm) {
+  Json base = {{"model", {{"type", "llm"}}},
+              {"quant", {{"recipe", Json::array({"w4a16"})}}},
+              {"evaluation", {{"skip", true}}}};
+  Json with_export = base;
+  with_export["export"] = {{"formats", Json::array({"awq"})}};
+  EXPECT_EQ(validate_jobspec(with_export).size(), 1u);
+
+  Json with_vllm = base;
+  with_vllm["deploy"] = {{"vllm", Json::object()}};
+  EXPECT_EQ(validate_jobspec(with_vllm).size(), 1u);
+
+  Json with_llamacpp = base;
+  with_llamacpp["deploy"] = {{"llamacpp", {{"types", Json::array({"q4_k"})}}}};
+  EXPECT_EQ(validate_jobspec(with_llamacpp).size(), 1u);
+
+  Json with_sensitivity = base;
+  with_sensitivity["analysis"] = {{"sensitivity", "block"}};
+  EXPECT_EQ(validate_jobspec(with_sensitivity).size(), 1u);
+
+  Json with_logits_probe = base;
+  with_logits_probe["analysis"] = {{"logits_probe", Json::object()}};
+  EXPECT_EQ(validate_jobspec(with_logits_probe).size(), 1u);
+
+  for (const auto& j : {with_export, with_vllm, with_llamacpp, with_sensitivity, with_logits_probe}) {
+    auto p = validate_jobspec(j);
+    ASSERT_EQ(p.size(), 1u);
+    EXPECT_EQ(p[0].field, "/evaluation/skip");
+  }
+}
+
+TEST(planner_validate_jobspec, quantize_only_conflicts_with_vla_attribution_true_including_the_default) {
+  Json explicit_true = {{"model", {{"type", "vla"}}},
+                        {"quant", {{"recipe", Json::array({"w4a16"})}}},
+                        {"deploy", {{"device", "gpu"}}},
+                        {"evaluation", {{"skip", true}, {"attribution", true}}}};
+  ASSERT_EQ(validate_jobspec(explicit_true).size(), 1u);
+  // attribution defaults to true in vla_job.py's JobSpec dataclass when the field is absent entirely, so
+  // the check must use the same default -- omitting it must be flagged exactly like setting it explicitly.
+  Json omitted = {{"model", {{"type", "vla"}}},
+                  {"quant", {{"recipe", Json::array({"w4a16"})}}},
+                  {"deploy", {{"device", "gpu"}}},
+                  {"evaluation", {{"skip", true}}}};
+  EXPECT_EQ(validate_jobspec(omitted).size(), 1u);
+}
+
 // ---------------------------------------------------------------- recommend
 
 namespace {

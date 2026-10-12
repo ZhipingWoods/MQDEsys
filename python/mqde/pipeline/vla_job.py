@@ -60,6 +60,10 @@ class JobSpec:
     concurrency: list[int] = field(default_factory=lambda: [1, 4, 16])
     attribution: bool = True
     extra_modalities: list[str] = field(default_factory=list)  # e.g. ["action"]
+    # T-1304/T-1306: calibrate + quantize only, skip S05 eval_baseline, S06 attribution and S08 eval_fake --
+    # all three need the BF16 reference predictions eval_baseline produces. S01 preflight (pure C++
+    # estimation, no model forward pass) and S07 quantize still run.
+    quantize_only: bool = False
     seed: int = 0
     output_dir: str = "runs"
 
@@ -82,6 +86,7 @@ class JobSpec:
             concurrency=list(e.get("concurrency", [1, 4, 16])),
             attribution=bool(e.get("attribution", True)),
             extra_modalities=list(q.get("also_quantize", [])),
+            quantize_only=bool(e.get("skip", False)),
             seed=int(d.get("seed", 0)),
             output_dir=d.get("output_dir", "runs"),
         )
@@ -268,7 +273,11 @@ class VLAJob:
             self.ev.emit("metric", name="baseline.noise_floor.action_rel_l2", value=floor["action_rel_l2"], msg="flow-matching noise floor")
             return ref
 
-        ref = self._stage("eval_baseline", baseline)
+        ref: list[dict] | None = None
+        if spec.quantize_only:
+            self.ev.log("quantize_only: skipping eval_baseline, attribution and eval_fake")
+        else:
+            ref = self._stage("eval_baseline", baseline)
         self._save()
 
         def calibrate() -> None:
@@ -290,8 +299,9 @@ class VLAJob:
             if not recipe.weight.enabled:
                 continue
 
-            # S06 per-modality attribution
-            if spec.attribution:
+            # S06 per-modality attribution (needs the BF16 reference from S05, so quantize_only skips it too)
+            if spec.attribution and not spec.quantize_only:
+                assert ref is not None
                 def attribution() -> list[dict[str, Any]]:
                     rows = []
                     for mod in modalities:
@@ -321,8 +331,17 @@ class VLAJob:
             q = self._stage("quantize", quantize, msg=recipe.name)
             rep["layers"] = q["layers"]
 
+            if spec.quantize_only:
+                rep["eval"] = {}
+                rep["summary"] = self._summarize(rep, quantize_only=True)
+                engine.restore()
+                self.report["recipes"][recipe.name] = rep
+                self._save()
+                continue
+
             # S08 eval fake-quant
             def eval_fake() -> dict[str, Any]:
+                assert ref is not None
                 torch.cuda.synchronize()
                 torch.cuda.reset_peak_memory_stats(spec.device)
                 t0 = time.perf_counter()
@@ -342,12 +361,24 @@ class VLAJob:
 
         self._stage("report", self._save)
 
-    def _summarize(self, rep: dict[str, Any]) -> dict[str, Any]:
+    def _summarize(self, rep: dict[str, Any], quantize_only: bool = False) -> dict[str, Any]:
         layers = [t for t in rep["layers"] if t.get("out_sqnr_db") is not None]
         worst = sorted(layers, key=lambda t: t["out_sqnr_db"])[:10]
         by_comp: dict[str, list[float]] = {}
         for t in layers:
             by_comp.setdefault(t["component"], []).append(t["out_sqnr_db"])
+        # quantize_only ran neither S05 (no self.report["baseline"]) nor S06/S08 (no attribution/eval on rep),
+        # so the action-error fields below have nothing to compute from; worst_layers/component means still
+        # come entirely from the quantize-time trace captured on calibration data, not from an eval stage.
+        if quantize_only:
+            return {
+                "worst_layers": [
+                    {"name": t["name"], "out_sqnr_db": t["out_sqnr_db"], "act_kurtosis": t["act_kurtosis"]} for t in worst
+                ],
+                "component_mean_out_sqnr_db": {k: float(np.mean(v)) for k, v in by_comp.items()},
+                "worst_stage": None,
+                "action_rel_l2_over_noise_floor": None,
+            }
         attr = rep.get("attribution") or []
         worst_stage = max(attr, key=lambda r: r["action_rel_l2"] or 0.0)["modality"] if attr else None
         nf = self.report["baseline"]["noise_floor"]["action_rel_l2"] or 0.0
@@ -369,6 +400,7 @@ def main() -> None:
     ap.add_argument("--algorithm", default=None, help="rtn | gptq | awq | smoothquant | awq+gptq | smoothquant+gptq")
     ap.add_argument("--eval-samples", type=int, default=None)
     ap.add_argument("--calib-samples", type=int, default=None)
+    ap.add_argument("--quantize-only", action="store_true", help="skip eval_baseline, attribution and eval_fake")
     ap.add_argument("--job-id", default=None, help="assigned by mqde-server")
     args = ap.parse_args()
     spec = JobSpec.from_yaml(args.job)
@@ -382,9 +414,12 @@ def main() -> None:
         spec.eval_samples = args.eval_samples
     if args.calib_samples:
         spec.calib_samples = args.calib_samples
+    if args.quantize_only:
+        spec.quantize_only = True
     job = VLAJob(spec, job_id=args.job_id)
     rep = job.run()
-    summary = {k: v["summary"] | {"action_rel_l2": v["eval"]["action_rel_l2"]} for k, v in rep["recipes"].items()}
+    summary = {k: v["summary"] | ({} if spec.quantize_only else {"action_rel_l2": v["eval"]["action_rel_l2"]})
+              for k, v in rep["recipes"].items()}
     print(json.dumps({"job_id": job.job_id, "report": str(job.out / "report.json"), "recipes": summary}, indent=2, default=str))
 
 

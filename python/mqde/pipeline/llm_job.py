@@ -79,6 +79,12 @@ class LLMJobSpec:
     sensitivity: str | None = None  # block | type: per-group FP fallback ranking + mixed-precision suggestion
     sensitivity_windows: int = 8
     suggest_target: float = 0.5  # share of the PPL degradation the suggested rules should win back
+    # T-1304/T-1306: run calibration + quantization only, skip every stage that evaluates quality (PPL,
+    # logits probe, sensitivity) or that reports a quality delta (export's real_vs_fake_ppl_pct, vLLM/
+    # llama.cpp serving). export/llamacpp/vllm/sensitivity/logits_probe are still read from the spec but
+    # ignored (logged, not silently dropped) when this is set -- validate_jobspec rejects the combination
+    # before a server-submitted job gets this far; a direct CLI invocation is trusted to not combine them.
+    quantize_only: bool = False
     seed: int = 0
     output_dir: str = "runs"
 
@@ -110,6 +116,7 @@ class LLMJobSpec:
             logits_probe=_opt_dict((d.get("analysis") or {}).get("logits_probe")),
             sensitivity=(d.get("analysis") or {}).get("sensitivity"),
             sensitivity_windows=int((d.get("analysis") or {}).get("sensitivity_windows", 8)),
+            quantize_only=bool(e.get("skip", False)),
             output_dir=d.get("output_dir", "runs"),
         )
 
@@ -420,18 +427,22 @@ class LLMJob:
         cal, ids = self._stage("calib_prepare", prep)
         self.report["data"] = {"calib": {"dataset": "wikitext-2 train", "n": len(cal), "seq_len": s.calib_seq_len},
                                "eval": {"dataset": "wikitext-2 test", "windows": s.eval_windows, "seq_len": s.eval_seq_len}}
-        base = self._stage("eval_baseline", lambda: self._ppl(ad, ids, "pretrain"))
-        if wants_lm_eval_baseline(s.vllm):
-            self.report["baseline_lm_eval"] = self._stage("lm_eval_baseline", self._lm_eval_baseline)
         probe_windows, probe_ref = None, None
-        if s.logits_probe is not None:
-            pc = s.logits_probe
-            probe_windows = split_windows(ids, s.eval_seq_len, int(pc.get("windows", 8)))
-            probe_ref = self._stage("logits_reference", lambda: capture_reference(
-                ad.logits, probe_windows, k=int(pc.get("k", 256)), exact=bool(pc.get("exact", False))), "pretrain")
-            self.report["logits_probe"] = {"windows": int(probe_windows.shape[0]), "seq_len": s.eval_seq_len, "k": probe_ref.k,
-                                           "exact": probe_ref.exact, "reference_mib": probe_ref.nbytes() / 2**20}
-        self.report["baseline"] = base
+        base: dict[str, float] | None = None
+        if s.quantize_only:
+            self.ev.log("quantize_only: skipping eval_baseline, logits probe, sensitivity, export and deploy")
+        else:
+            base = self._stage("eval_baseline", lambda: self._ppl(ad, ids, "pretrain"))
+            if wants_lm_eval_baseline(s.vllm):
+                self.report["baseline_lm_eval"] = self._stage("lm_eval_baseline", self._lm_eval_baseline)
+            if s.logits_probe is not None:
+                pc = s.logits_probe
+                probe_windows = split_windows(ids, s.eval_seq_len, int(pc.get("windows", 8)))
+                probe_ref = self._stage("logits_reference", lambda: capture_reference(
+                    ad.logits, probe_windows, k=int(pc.get("k", 256)), exact=bool(pc.get("exact", False))), "pretrain")
+                self.report["logits_probe"] = {"windows": int(probe_windows.shape[0]), "seq_len": s.eval_seq_len, "k": probe_ref.k,
+                                               "exact": probe_ref.exact, "reference_mib": probe_ref.nbytes() / 2**20}
+            self.report["baseline"] = base
         self._save()
         policy = MixedPrecisionPolicy.from_dict(s.mixed_precision)
         self.report["recipes"] = {}
@@ -446,6 +457,23 @@ class LLMJob:
             rep["layers"] = [t.to_dict() for t in res.traces]
             rep["skipped"] = res.skipped
             rep["quantize_seconds"] = res.seconds
+            if s.quantize_only:
+                # No evaluation ran, so there is no PPL to report -- worst_layers still comes from the
+                # quantize-time trace (weight SQNR, or output SQNR when the algorithm captured activations),
+                # not from an eval stage, so it is still meaningful here.
+                rep["eval"] = {}
+                rep["summary"] = {
+                    "ppl": None,
+                    "ppl_delta_pct": None,
+                    "kv_delta_pct": None,
+                    "worst_layers": sorted(({"name": t.name, "out_sqnr_db": t.out_sqnr_db, "w_sqnr_db": t.w_sqnr_db} for t in res.traces),
+                                           key=lambda d: d["out_sqnr_db"] if d["out_sqnr_db"] is not None else d["w_sqnr_db"])[:10],
+                }
+                q.restore()
+                self.report["recipes"][recipe.name] = rep
+                self._save()
+                continue
+            assert base is not None
             wo = self._stage("eval_fake_wo_kv", lambda: self._ppl(ad, ids, f"{recipe.name}.fake_quant_wo_kv"), recipe.name)
             rep["eval"] = {"fake_quant_wo_kv": wo}
             if probe_ref is not None:
@@ -478,7 +506,9 @@ class LLMJob:
             q.restore()
             self.report["recipes"][recipe.name] = rep
             self._save()
-        if s.llamacpp:
+        if s.llamacpp and s.quantize_only:
+            self.ev.log("quantize_only: skipping llama.cpp deploy")
+        elif s.llamacpp:
             self.report["llamacpp"] = self._stage("deploy_llamacpp", self._llamacpp, ",".join(s.llamacpp))
             self._save()
         self._stage("report", self._save)
@@ -514,6 +544,7 @@ def main() -> None:
     ap.add_argument("--llamacpp-gpu-layers", type=int, help="llama.cpp -ngl (0 = CPU, 99 = offload all on Metal/CUDA)")
     ap.add_argument("--llamacpp-serve", help="llama-server load test as JSON, e.g. '{\"concurrency\": 8}'; 'off' disables")
     ap.add_argument("--sensitivity-windows", type=int)
+    ap.add_argument("--quantize-only", action="store_true", help="skip every evaluation/export/deploy stage")
     ap.add_argument("--job-dir")
     ap.add_argument("--job-id", help="server-assigned id; output goes to <output_dir>/<job-id>")
     a = ap.parse_args()
@@ -544,6 +575,8 @@ def main() -> None:
         spec.llamacpp_serve = None if a.llamacpp_serve == "off" else json.loads(a.llamacpp_serve)
     if a.sensitivity_windows:
         spec.sensitivity_windows = a.sensitivity_windows
+    if a.quantize_only:
+        spec.quantize_only = True
     if a.mixed_precision:
         mp = Path(a.mixed_precision)
         spec.mixed_precision = yaml.safe_load(mp.read_text() if mp.is_file() else a.mixed_precision)
