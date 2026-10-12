@@ -71,7 +71,10 @@ std::vector<Problem> validate_jobspec(const Json& job);
 // concrete to test: int4 prefers awq (broadest vLLM support per docs/PROGRESS.md), other int bit widths
 // prefer gptq (wider bits_ok), fp8 uses compressed-tensors. Exposed so callers can show the reader which
 // format a recommendation assumes.
-std::string preferred_export_format(const quant::QuantSpec& weight);
+// `backend`, when it names "llamacpp", always suggests "gguf" regardless of weight (GGUF re-quantizes from
+// the original FP weights with llama.cpp's own numerics, independent of the recipe -- see check_deploy's
+// matching special case); any other backend (or the default "") keeps the weight-based logic above.
+std::string preferred_export_format(const quant::QuantSpec& weight, const std::string& backend = "");
 
 struct Recommendation {
   std::string recipe, algorithm, backend, hardware;

@@ -166,7 +166,7 @@
 | T-1301 | 领域（domain）注册表 | P13 | T-0206 | L2 | DONE (2026-10-10，见 P13 详情；ctest -R estimator_domain 7/7，4090 全量 264/264) |
 | T-1302 | 算法可插拔性加固 + 第三方接入指南 | P13 | T-0103 | L1（T-0609 的 ADR 部分仍 L3） | DONE (2026-10-10，见 P13 详情；4090 真实跑通 check_algo_registry_sync.py + validate_job_schema.py，ctest 277/277) |
 | T-1303 | HF 目录后台定时刷新 + 二级分类分组 | P13 | T-0204,T-R25 | L2 | DONE (2026-10-10，见 P13 详情；4090 全量 277/277) |
-| T-1304 | 新建作业向导重构（五步，领域感知） | P13 | T-1301,T-1303,T-1305,T-0210 | L1 | TODO |
+| T-1304 | 新建作业向导重构（五步，领域感知） | P13 | T-1301,T-1303,T-1305,T-0210 | L1 | PARTIAL (2026-10-12，后端部分：选后端自动建议导出格式，见 P13 详情；前端五步向导本体未开始) |
 | T-1305 | JobSpec 正式契约（T-0007 最小切片） | P13 | T-0210 | L2 | DONE (2026-10-10，见 P13 详情；ctest -R planner_validate_jobspec 全绿，4090 全量 268/268，python scripts/validate_job_schema.py 3/3 真实跑通) |
 | T-1306 | "量化与评测"信息架构拆分 | P13 | T-1304 | L1 | TODO |
 | T-1307 | 硬件与后端页面视觉改版 | P13 | T-0306 | L1 | TODO |
@@ -860,9 +860,13 @@
 
 #### T-1304 新建作业向导重构（五步，领域感知）
 - **依赖**：T-1301, T-1303, T-1305, T-0210 **级别**：L1
-- **产出**：`NewJob.tsx` 从单页长表单改为五步向导（领域+模型 → 量化算法 → 配方+校准 → 评估数据+设备 → 部署与导出）；模型选择接入 T-1303 的目录浏览（保留自定义路径兜底）；量化/评估设备拆成两个独立选择器；"不量化/保持原始精度"与"仅量化不评测"两个显式开关；选后端自动从扩展后的 `data/compat/matrix.yaml`（新增 llama.cpp/GGUF、sglang 条目）建议导出格式。
-- **验收**：LLM/VLA 各走一遍真实提交，JobSpec 字段与重构前等价；选 llama.cpp 后端自动勾好 GGUF 格式。
-- **校验**：新 Playwright e2e，至少 2 处 mutation 验证变红。
+- **产出（计划）**：`NewJob.tsx` 从单页长表单改为五步向导（领域+模型 → 量化算法 → 配方+校准 → 评估数据+设备 → 部署与导出）；模型选择接入 T-1303 的目录浏览（保留自定义路径兜底）；量化/评估设备拆成两个独立选择器；"不量化/保持原始精度"与"仅量化不评测"两个显式开关；选后端自动建议导出格式。
+- **本次完成（后端部分）**：`data/compat/matrix.yaml` 新增 `backends.llamacpp: {loads: [gguf]}`（之前完全没有这个后端的条目）；`planner::check_deploy` 新增 `format == "gguf"` 的特判——GGUF 是用 llama.cpp 自己的数值从原始 FP 权重重新量化的（`python/mqde/pipeline/llm_job.py` 的 `_llamacpp`，和 `quant.recipe` 的权重格式完全无关），所以不应该像 gptq/awq 一样去查 `hw.native_formats`（那是在检查一个无关的东西），只要后端的 `loads` 里有 `gguf` 就直接判定 native；`planner::preferred_export_format` 新增可选 `backend` 参数，`backend == "llamacpp"` 时无条件建议 `"gguf"`（忽略 weight spec），其余后端行为不变（默认参数，老调用方不用改）。新增 `GET /api/v1/export-suggestion?recipe=&backend=&hardware=`，给前端一个"选了后端，建议什么格式"的单次查询接口（和已有的 `/api/v1/recommend` 不是一回事——那个是搜索所有组合，这个是已经选定 backend 后的一次性查询）。
+- **为什么没有把 `export_formats.gguf` 加进 matrix.yaml**：`export_formats` 里现有的几个条目（gptq/awq/compressed-tensors-*）都是"打包/粒度约束"规则，本质上依赖 `quant.recipe` 的权重格式；GGUF 根本不读这个格式，给它编一套"打包规则"就是编造一个不存在的约束，和本会话早先"删掉一条编造的规则"是同一个原则，所以改成了在 `check_deploy` 里直接特判，而不是在数据文件里硬塞一个不适用的条目。
+- **真的验证了，不是只看代码**：起了一个本地 server，分别查 `(llamacpp, w4a16)`→`gguf native`、`(vllm, w4a16)`→`awq native`、`(vllm, bf16)`→空字符串+"no export needed"、`(hf_transformers, w4a16)`→`awq unsupported`（hf_transformers 从不作为部署目标），四种结果都符合预期。
+- **验收**：选 llama.cpp 后端能查到 GGUF 格式（已做到，通过新端点）；LLM/VLA 各走一遍真实提交、JobSpec 字段与重构前等价（**还没做**——这需要前端五步向导本体）。
+- **校验**：`ctest -R planner_check_deploy|planner_preferred_export_format`，4 处 mutation 验证全部先变红再恢复；`scripts/check_deps.py` 0 violation；手动 curl 验证新端点的 4 种真实场景。
+- **没做（体量最大的部分，还没开始）**：`NewJob.tsx` 的五步向导本体——领域选择器、目录浏览式模型选择器（替换今天唯一的自由文本框）、量化算法按领域过滤、配方高级参数面板（per-channel/per-group/group_size/旋转占位）、"不量化"与"仅量化不评测"开关、评估数据集卡片画廊+下载、量化/评估设备拆分、后端选择器接上这次做的 `/api/v1/export-suggestion`。现有 `NewJob.tsx` 里好几个元素被 3 个 Playwright e2e 测试（`ui_features.mjs`、`newjob_live_estimate.mjs`、`clone_from_suggestion.mjs`）按**当前 DOM 结构**精确定位（例如 `page.locator('input').first()` 假设模型路径输入框是页面第一个 `<input>`），真正做五步向导会改变 DOM 顺序，这三个测试都需要同步重写，不是小改动，需要单独一轮会话专注做，不应该在本次收尾时匆忙塞入。
 
 #### T-1306 "量化与评测"信息架构拆分
 - **依赖**：T-1304 **级别**：L1

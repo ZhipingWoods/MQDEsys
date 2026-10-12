@@ -244,6 +244,28 @@ TEST(planner_check_deploy, an_unknown_backend_is_unsupported) {
   EXPECT_EQ(check_deploy("gptq", r, "made_up_backend", hw4090()).verdict, Verdict::kUnsupported);
 }
 
+// GGUF re-quantizes from the original FP weights with llama.cpp's own numerics (python/mqde/pipeline/
+// llm_job.py's _llamacpp, independent of quant.recipe) -- so unlike gptq/awq/compressed-tensors, whether it
+// "fits" has nothing to do with the recipe's weight format, and checking hw.native_formats against the
+// recipe's int/fp8 spec would be checking the wrong thing entirely.
+TEST(planner_check_deploy, gguf_on_llamacpp_is_always_native_regardless_of_the_recipes_weight_format) {
+  estimator::Recipe int4;
+  int4.weight = w_int(4, Granularity::kPerGroup, true);
+  EXPECT_EQ(check_deploy("gguf", int4, "llamacpp", hw4090()).verdict, Verdict::kNative);
+  estimator::Recipe fp8r;
+  fp8r.weight = w_fp8();
+  EXPECT_EQ(check_deploy("gguf", fp8r, "llamacpp", hw4090()).verdict, Verdict::kNative)
+      << "gguf ignores the recipe's weight spec entirely, so an fp8 recipe must not be rejected either";
+  estimator::Recipe bf16r;  // no quantization at all (weight disabled)
+  EXPECT_EQ(check_deploy("gguf", bf16r, "llamacpp", hw4090()).verdict, Verdict::kNative);
+}
+
+TEST(planner_check_deploy, gguf_does_not_load_on_backends_other_than_llamacpp) {
+  estimator::Recipe r;
+  r.weight = w_int(4);
+  EXPECT_EQ(check_deploy("gguf", r, "vllm", hw4090()).verdict, Verdict::kUnsupported);
+}
+
 // ---------------------------------------------------------------- validate_jobspec
 
 TEST(planner_validate_jobspec, a_valid_llm_job_has_no_problems) {
@@ -478,4 +500,15 @@ TEST(planner_preferred_export_format, matches_what_check_deploy_and_check_export
   EXPECT_EQ(preferred_export_format(w_int(2)), "gptq");
   EXPECT_EQ(preferred_export_format(w_int(8)), "gptq");
   EXPECT_EQ(preferred_export_format(w_fp8()), "compressed-tensors");
+}
+
+TEST(planner_preferred_export_format, llamacpp_always_suggests_gguf_regardless_of_weight_format) {
+  EXPECT_EQ(preferred_export_format(none(), "llamacpp"), "gguf");
+  EXPECT_EQ(preferred_export_format(w_int(4), "llamacpp"), "gguf");
+  EXPECT_EQ(preferred_export_format(w_fp8(), "llamacpp"), "gguf");
+}
+
+TEST(planner_preferred_export_format, other_backends_are_unaffected_by_the_new_backend_parameter) {
+  EXPECT_EQ(preferred_export_format(w_int(4), "vllm"), "awq");
+  EXPECT_EQ(preferred_export_format(w_int(4), ""), "awq");
 }

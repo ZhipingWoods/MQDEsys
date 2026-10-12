@@ -57,3 +57,11 @@ backends:
     loads: [compressed-tensors-int, compressed-tensors-fp8]  # per compressed_tensors.py's declared `backends`; not yet exercised end to end (T-0704)
   hf_transformers:
     loads: []  # fake-quant evaluation only, never a deployment target for an exported checkpoint
+  llamacpp:
+    loads: [gguf]
+    # gguf is not in export_formats above and never will be: it is not produced from quant.recipe's weight
+    # spec at all (python/mqde/pipeline/llm_job.py's _llamacpp re-quantizes the original FP weights with
+    # llama.cpp's own numerics via mqde._core.gguf_quantize, picked independently via deploy.llamacpp.types).
+    # planner::check_deploy special-cases format=="gguf" to skip the weight-dependent checks entirely instead
+    # of a fabricated packing rule here (T-0705 shipped this backend; this compat entry was only added in
+    # T-1304 when the new-job wizard needed a backend->format lookup that includes it).

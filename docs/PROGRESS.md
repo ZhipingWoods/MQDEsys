@@ -180,6 +180,18 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-12 · Claude · T-1304 第一片：选后端自动建议导出格式（前端五步向导本体未动）
+
+P13 阶段顺序走到"前端主体重构"阶段。在真正动 `NewJob.tsx` 之前，先读了它的完整当前实现（434 行）和 3 个依赖它 DOM 结构的 Playwright e2e 测试（`ui_features.mjs`/`newjob_live_estimate.mjs`/`clone_from_suggestion.mjs`），确认了一个会显著放大风险的事实：`newjob_live_estimate.mjs` 用 `page.locator('input').first()` 定位模型路径输入框（假设它是页面第一个 `<input>`），用 `page.locator('select').filter({has: page.locator('option[value="nvidia/rtx4090"]')})` 定位硬件下拉——这些都是按**今天的单页长表单 DOM 顺序**精确定位的，真正做五步向导会重排整个 DOM，这三个测试需要同步重写，工作量不小。
+
+**决定**：不在本次收尾时间里匆忙塞入整个向导重排（高风险、低验证质量），而是先把向导需要、但完全不触碰现有页面 DOM 的后端部分做扎实——"选后端自动建议导出格式"（用户 item 5.4）。前端五步向导本体（领域选择器、目录浏览式模型选择器、配方高级参数面板、设备拆分、评估数据画廊等）作为明确未完成项留给下一轮专注的会话，不是遗漏。
+
+- **做了什么**：查 `data/compat/matrix.yaml` 才发现计划里写的"完全没有 llama.cpp/sglang 条目"只对了一半——`sglang` 其实已经有条目（标注"未端到端验证"），真正完全缺失的只有 `llamacpp`。加了 `backends.llamacpp: {loads: [gguf]}`；`planner::check_deploy` 新增 `format == "gguf"` 特判——没有像 gptq/awq 一样编一套"打包规则"塞进 `export_formats`，因为查了 `llm_job.py` 的 `_llamacpp` 实现确认 GGUF 是用 llama.cpp 自己的数值从**原始 FP 权重**重新量化的，和 `quant.recipe` 选的权重格式完全无关——给它编打包规则就是编造一个不存在的约束，和本会话前面"删掉一条编造的 static_act_needs_per_tensor 规则"是同一个原则。`planner::preferred_export_format` 加了可选 `backend` 参数（默认空字符串，老行为不变），`backend=="llamacpp"` 时无条件建议 `gguf`。新增 `GET /api/v1/export-suggestion?recipe=&backend=&hardware=` 给前端用。
+- **真实验证**（起了本地 server，不是只看代码）：`(llamacpp, w4a16)` → `gguf native`；`(vllm, w4a16)` → `awq native`；`(vllm, bf16)` → 空字符串 + "no export needed"；`(hf_transformers, w4a16)` → `awq unsupported`（hf_transformers 从不是部署目标）。四种结果都符合预期。
+- **测试**：`cpp/tests/unit/planner_validate_test.cpp` 新增 4 个用例（gguf 在 llamacpp 上无视权重格式总是 native，包括 bf16 这种边界情况；gguf 在其他后端上不可用；`preferred_export_format` 的 llamacpp 分支；其他后端不受影响）。4 处破坏性验证全部先变红再恢复，其中 bf16 recipe 那个分支值得一提：`check_deploy` 特判删掉后，int4/fp8 两个权重格式**可能**碰巧还是 native（取决于 4090 画像的 native_formats 刚好有没有对应格式），但 bf16（weight 禁用，`weight_format_name` 返回 "none"）这个边界情况稳定地变成 emulated，确认了测试组合里一定要有一个"generic 路径也会给出不同答案"的输入，不能只测可能碰巧矛盾不出来的情况。
+- **校验**：`ctest --test-dir build/mac` 285/285；`cmake --build build/mac` 整个项目无警告；`scripts/check_deps.py` 102 files 0 violation；手动起服务验证新端点 4 种场景。4090 验证见下一条。
+- **未完成 / 下一步**：T-1304 的前端五步向导本体是 P13 里最大的剩余工作，需要单独一轮会话专注做（预期要重写 3 个现有 e2e 测试，不是增量添加）；T-1306（导航拆分）依赖它，自然也跟着推后；T-1307（硬件页视觉）和 T-1308（多硬件对比）仍然独立，可以插空做。
+
 ### 2026-10-10/12（再再再再续） · Claude · T-1302 算法可插拔性加固 + 第三方接入指南
 
 P13 阶段顺序里 T-1303 之后做 T-1302（和 T-1303 本可并行，这次是顺序做的）。

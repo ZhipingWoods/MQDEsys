@@ -192,6 +192,17 @@ CompatResult check_deploy(const std::string& format, const estimator::Recipe& re
     return {Verdict::kUnsupported, fmt::format("unknown backend '{}'", backend), ""};
   const auto& b = backends[backend];
   const auto loads = b.value("loads", Json::array());
+  // GGUF re-quantizes from the original FP weights with llama.cpp's own numerics (python/mqde/pipeline/
+  // llm_job.py's _llamacpp), independent of the recipe's weight spec -- so whether it fits a device has
+  // nothing to do with `recipe.weight`, and checking it against hw.native_formats below would be checking
+  // the wrong thing. If the backend loads gguf at all, it is simply native.
+  if (format == "gguf") {
+    bool loads_gguf = false;
+    for (const auto& f : loads) loads_gguf = loads_gguf || f.get<std::string>() == "gguf";
+    return loads_gguf ? CompatResult{Verdict::kNative, "", "gguf"}
+                      : CompatResult{Verdict::kUnsupported,
+                                     fmt::format("{} does not load gguf checkpoints", backend), ""};
+  }
   const std::string key = format == "compressed-tensors" ? (recipe.weight.fmt == NumFormat::kFp8E4M3 ||
                                                                     recipe.weight.fmt == NumFormat::kFp8E5M2
                                                                 ? "compressed-tensors-fp8"
@@ -318,7 +329,8 @@ std::vector<Problem> validate_jobspec(const Json& job) {
 
 // ---------------------------------------------------------------- recommend
 
-std::string preferred_export_format(const QuantSpec& weight) {
+std::string preferred_export_format(const QuantSpec& weight, const std::string& backend) {
+  if (backend == "llamacpp") return "gguf";  // ignores weight entirely; see check_deploy's matching case
   if (!weight.enabled()) return "";  // bf16: nothing to export
   if (weight.fmt == NumFormat::kFp8E4M3 || weight.fmt == NumFormat::kFp8E5M2) return "compressed-tensors";
   return weight.bits == 4 ? "awq" : "gptq";
@@ -348,7 +360,7 @@ RecommendResult recommend(const modelspec::ModelSpec& spec,
         rec.peak_bytes = est.peak_bytes;
         rec.capacity_bytes = est.capacity_bytes;
         rec.max_concurrency = est.max_concurrency;
-        rec.export_format = preferred_export_format(recipe->weight);
+        rec.export_format = preferred_export_format(recipe->weight, be.id);
         if (!est.feasible) {
           rec.reasons = est.reasons;
           rec.reasons.push_back(fmt::format("peak {} exceeds capacity {} at {}% utilization", est.peak_bytes,

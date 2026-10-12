@@ -501,6 +501,29 @@ Result<void> serve(const ServerOptions& o) {
         {{"top", top}, {"excluded", r.excluded}, {"considered", static_cast<int>(top.size()) + r.excluded}});
   });
 
+  // Which export format a chosen (recipe, backend) pair should default to (T-1304): query params
+  // recipe, backend, hardware (all required). Separate from /recommend, which searches every
+  // combination; this is the one-shot lookup the new-job wizard needs once the user has already picked a
+  // backend, so it can pre-select a format instead of leaving two independent chip lists to line up by hand.
+  svr.Get("/api/v1/export-suggestion", [&](const httplib::Request& req, httplib::Response& res) {
+    const auto recipe_id = req.get_param_value("recipe");
+    const auto backend_id = req.get_param_value("backend");
+    const auto hw_id = req.get_param_value("hardware");
+    if (recipe_id.empty() || backend_id.empty() || hw_id.empty())
+      return send_error(res, 400, "invalid_argument", "recipe, backend and hardware are all required");
+    auto recipe = estimator::load_recipe(recipe_id);
+    if (!recipe) return send_error(res, recipe.error());
+    auto hw = estimator::load_hardware(hw_id);
+    if (!hw) return send_error(res, hw.error());
+    const auto format = planner::preferred_export_format(recipe->weight, backend_id);
+    if (format.empty())
+      return send_json(res, {{"format", ""}, {"verdict", "native"}, {"reason", "bf16: no export needed"}});
+    const auto c = planner::check_deploy(format, *recipe, backend_id, *hw);
+    send_json(res, {{"format", format},
+                    {"verdict", std::string(planner::verdict_name(c.verdict))},
+                    {"reason", c.reason}});
+  });
+
   // ---------------- model library + graph (netron-style) ----------------
   auto scan_library = [&]() {
     std::vector<fs::path> out;
