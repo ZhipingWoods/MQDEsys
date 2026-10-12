@@ -196,8 +196,9 @@ def test_asset_choice_errors_clearly_when_nothing_fits() -> None:
         envs.pick_llamacpp_assets(NAMES, TAG, "Windows", "AMD64", None)
 
 
-def release(tag: str, names: list[str], base: str) -> dict[str, object]:
-    return {"tag_name": tag, "draft": False, "assets": [{"name": n, "size": 100, "browser_download_url": f"{base}/dl/{n}"} for n in names]}
+def release(tag: str, names: list[str], base: str, sizes: dict[str, int] | None = None) -> dict[str, object]:
+    return {"tag_name": tag, "draft": False,
+            "assets": [{"name": n, "size": (sizes or {}).get(n, 100), "browser_download_url": f"{base}/dl/{n}"} for n in names]}
 
 
 def test_only_numbered_builds_count_as_releases(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -282,6 +283,96 @@ def test_llama_version_parsing(out: str, want: str | None) -> None:
     assert envs.parse_llama_version(out) == want
 
 
+# ---------------------------------------------------------------- resumable download
+class RangeServer:
+    """Serves `data`; the first `drops` responses are cut off half way (a stalled CDN connection). `honor_range=False`
+    models a server that ignores Range and always answers 200 with the whole body."""
+
+    def __init__(self, data: bytes, drops: int = 0, honor_range: bool = True) -> None:
+        outer = self
+        self.requests: list[str | None] = []
+        self.left = drops
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a: object) -> None:
+                pass
+
+            def do_GET(self) -> None:
+                rng = self.headers.get("Range")
+                outer.requests.append(rng)
+                start = int(rng.split("=")[1].rstrip("-")) if rng and honor_range else 0
+                if start >= len(data):
+                    self.send_response(416)
+                    self.end_headers()
+                    return
+                body = data[start:]
+                self.send_response(206 if start else 200)
+                self.send_header("Content-Length", str(len(body)))
+                if start:
+                    self.send_header("Content-Range", f"bytes {start}-{len(data) - 1}/{len(data)}")
+                self.end_headers()
+                if outer.left > 0:
+                    outer.left -= 1
+                    self.wfile.write(body[: len(body) // 2])
+                    self.wfile.flush()
+                    self.connection.close()  # cut mid-body: the client sees an incomplete read
+                    return
+                self.wfile.write(body)
+
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.url = f"http://127.0.0.1:{self.srv.server_address[1]}/f.bin"
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self.srv.shutdown()
+
+
+DATA = bytes(range(256)) * 4096  # 1 MiB
+
+
+def test_a_dropped_connection_is_resumed_from_where_it_stopped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(envs.time, "sleep", lambda _s: None)
+    srv = RangeServer(DATA, drops=2)
+    logs: list[str] = []
+    try:
+        envs.download(srv.url, tmp_path / "f.bin", len(DATA), logs.append)
+    finally:
+        srv.close()
+    assert (tmp_path / "f.bin").read_bytes() == DATA, "the resumed file is byte-identical, not truncated or duplicated"
+    assert srv.requests[0] is None and srv.requests[1].startswith("bytes=") and srv.requests[2].startswith("bytes="), srv.requests
+    assert int(srv.requests[2].split("=")[1].rstrip("-")) > int(srv.requests[1].split("=")[1].rstrip("-")), "each retry continues further on"
+    assert sum("resuming" in line for line in logs) == 2
+
+
+def test_a_server_that_ignores_range_restarts_the_download_instead_of_corrupting_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(envs.time, "sleep", lambda _s: None)
+    srv = RangeServer(DATA, drops=1, honor_range=False)
+    try:
+        envs.download(srv.url, tmp_path / "f.bin", len(DATA), lambda _l: None)
+    finally:
+        srv.close()
+    assert (tmp_path / "f.bin").read_bytes() == DATA
+
+
+def test_a_download_that_never_completes_gives_up_with_a_clear_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(envs.time, "sleep", lambda _s: None)
+    srv = RangeServer(DATA, drops=99)
+    try:
+        with pytest.raises(RuntimeError, match=r"download of f\.bin failed after \d+ attempts"):
+            envs.download(srv.url, tmp_path / "f.bin", len(DATA), lambda _l: None, retries=3)
+    finally:
+        srv.close()
+
+
+def test_a_file_of_the_wrong_size_is_not_accepted(tmp_path: Path) -> None:
+    srv = RangeServer(DATA)
+    try:
+        with pytest.raises(RuntimeError, match="expected 1000 bytes"):
+            envs.download(srv.url, tmp_path / "f.bin", 1000, lambda _l: None, retries=0)
+    finally:
+        srv.close()
+
+
 # ---------------------------------------------------------------- llama.cpp install against a fake GitHub
 def tarball(files: dict[str, tuple[str, int]], extra: Iterator[tarfile.TarInfo] | None = None) -> bytes:
     buf = io.BytesIO()
@@ -306,7 +397,8 @@ def github(monkeypatch: pytest.MonkeyPatch, clean: Path) -> Iterator[dict[str, o
 
     def releases() -> bytes:
         base = holder["f"].url
-        return json.dumps([release(t, [asset(t, "ubuntu-x64")], base) for t in sorted(state["tags"], reverse=True)]).encode()  # type: ignore[arg-type]
+        sizes = {n: len(b) for n, b in state["assets"].items()}  # type: ignore[attr-defined]
+        return json.dumps([release(t, [asset(t, "ubuntu-x64")], base, sizes) for t in sorted(state["tags"], reverse=True)]).encode()  # type: ignore[arg-type]
 
     routes: dict[str, object] = {"/repos/ggml-org/llama.cpp/releases": releases}
 

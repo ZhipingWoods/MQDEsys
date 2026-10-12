@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import configparser
 import contextlib
+import http.client
 import json
 import os
 import platform
@@ -31,6 +32,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
@@ -311,6 +314,47 @@ def _safe_extract(tf: tarfile.TarFile, dest: Path) -> None:
     tf.extractall(dest)  # noqa: S202 - members validated above
 
 
+def download(url: str, dest: Path, expected_size: int | None, log: Log, retries: int = 8, timeout: float = 60) -> None:
+    """Download `url` to `dest`, resuming with HTTP Range after a stalled or dropped connection (GitHub's asset CDN does
+    that on slow links) and restarting from zero when the server ignores Range. The result must have `expected_size` bytes."""
+    have = 0
+    dest.unlink(missing_ok=True)
+    for attempt in range(retries + 1):
+        headers = {"User-Agent": "mqde-setup"}
+        if have:
+            headers["Range"] = f"bytes={have}-"
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout) as resp, \
+                    dest.open("ab" if have else "wb") as out:  # noqa: S310
+                if have and resp.status != 206:  # Range ignored: the body is the whole file again
+                    have = 0
+                    out.seek(0)
+                    out.truncate()
+                mark = have
+                while chunk := resp.read(1 << 20):
+                    out.write(chunk)
+                    have += len(chunk)
+                    if have // (64 << 20) != (have - len(chunk)) // (64 << 20):
+                        log(f"  {dest.name}: {have >> 20} MiB" + (f" of {expected_size >> 20}" if expected_size else ""))
+                if mark == have and expected_size and have < expected_size:
+                    raise OSError("connection closed before any data")
+        except urllib.error.HTTPError as e:
+            if e.code == 416 and expected_size and have >= expected_size:  # everything was already there
+                break
+            if e.code < 500 and e.code != 429:
+                raise RuntimeError(f"download of {dest.name} failed: HTTP {e.code}") from e
+        except (OSError, http.client.HTTPException):
+            pass
+        if expected_size is None or have >= expected_size:
+            break
+        if attempt == retries:
+            raise RuntimeError(f"download of {dest.name} failed after {retries + 1} attempts ({have} of {expected_size} bytes)")
+        log(f"  {dest.name}: connection interrupted at {have >> 20} MiB, resuming (attempt {attempt + 2}/{retries + 1})")
+        time.sleep(min(2 ** attempt, 20))
+    if expected_size is not None and dest.stat().st_size != expected_size:
+        raise RuntimeError(f"download of {dest.name} has {dest.stat().st_size} bytes, expected {expected_size} bytes")
+
+
 # ------------------------------------------------------------------------------------------------ install
 class Runner:
     """Runs (or, with ``dry_run``, only prints) the commands an install needs; output is streamed to `log`."""
@@ -418,8 +462,7 @@ def install_llamacpp(version: str | None, r: Runner) -> str:
         for n in names:
             r.log(f"downloading {n}")
             f = tmp / n
-            with urllib.request.urlopen(urllib.request.Request(by_name[n]["browser_download_url"], headers={"User-Agent": "mqde-setup"}), timeout=60) as resp, f.open("wb") as out:  # noqa: S310
-                shutil.copyfileobj(resp, out, 1 << 20)
+            download(by_name[n]["browser_download_url"], f, int(by_name[n].get("size") or 0) or None, r.log)
             with tarfile.open(f) as tf:
                 _safe_extract(tf, tmp / "x")
             f.unlink()
