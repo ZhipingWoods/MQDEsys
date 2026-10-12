@@ -789,3 +789,9 @@ P13 还剩 T-1308（多硬件对比闭环）和配方高级参数面板。
 发现 `llm_job.py` 报告原本不记录任何硬件标识，补上 `env.hardware`/`quant_device_name`/`eval_device_name`（后两个是真实测到的设备名，不是提交时填的标签）。Mac 没装 torch，不为这一项单独装；用 4090 上 CPU vs CUDA 两种真实硬件各跑一次同一个 Qwen2.5-0.5B W4A16 GPTQ 作业：量化 175.3s vs 59.6s、评估 2.0s vs 0.065s（真实吞吐差异），PPL 17.46 vs 17.86（CPU/CUDA 数值路径不同，预期内，不是 bug）。`Compare.tsx` 新增"按硬件对比"表，仅 ≥2 种硬件才显示。`hardware_compare.mjs` 7/7。
 
 P13（领域泛化与前端重构）全部 8 个任务（T-1301～T-1308）完成。T-1304 范围收窄记录在案的几项（配方高级参数面板、校准自定义样本、评估数据集画廊）仍未做，是下一步候选。
+
+### 2026-10-12（×8续） · Claude · 配方高级参数面板（group_size 覆盖），三项补齐全部完成
+
+`quant.group_size` 覆盖所选配方自身的 per-group 分组大小，非 per_group 配方是有日志的 no-op。`NewJob.tsx` 加了默认收起的"高级参数"面板（group_size 输入 + 禁用的 QuaRot 占位）。踩了一个真 bug：`QuantSpec` 是 frozen dataclass，直接赋值在 Mac `py_compile` 查不出来，4090 pytest 才炸出 `FrozenInstanceError`，改 `dataclasses.replace()` 修好。2 个新 pytest + 4090 真实 GPU 跑了一次 VLA 作业验证覆盖生效；`newjob_wizard.mjs` 140/140。
+
+用户这轮点名要求补的三项——仅量化不评测、量化/评估设备拆分、配方高级参数面板——全部从 schema 占位 → Python/C++ 实现 → 4090 真机验证 → 前端控件，完整走完，不是摆设。P13（8 个任务）也全部完成。
