@@ -190,6 +190,14 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 
 **还没做**：`NewJob.tsx` 还没有对应的开关——今天前端拼不出冲突组合，但也享受不到这个新能力，纯后端能力，下一步接进前端。设备拆分和高级参数面板留给下一条记录。
 
+### 2026-10-12（再再续） · Claude · "仅量化不评测"接入 NewJob.tsx 前端
+
+`NewJob.tsx` 在"不量化"旁加了 `opt-quantize-only` 开关；提交的 JobSpec 构造逻辑在 `quantizeOnly=true` 时无条件剔除 export/deploy.vllm/deploy.llamacpp/analysis（LLM）或把 attribution 强制为 false（VLA）并加 `evaluation.skip: true`——不管这些控件之前被设成什么，不是只在 UI 上藏起来但提交时还是会带着冲突字段。对应控件（deploy-backend 选择器、导出格式/GGUF chips、vLLM 勾选块、敏感度分析、logits 探针、VLA 归因勾选）同步禁用/置灰。
+
+**验证**：`newjob_wizard.mjs` 新增 9 个用例（先把 deployBackend 设成 vllm 产生 `deploy.vllm`，再勾选 quantize-only，确认预览里 `deploy.vllm`/`export`/`deploy.llamacpp` 全部消失、`evaluation.skip` 出现、对应控件变 disabled；VLA 侧做了一次真实提交，确认服务端 `validate_jobspec` 真的接受了这个组合，不是只看前端预览）。全部 29/29，其余 6 个前端 e2e 文件合计 79/79 不受影响，`npx tsc -b`/`npm run build` 干净。这轮没碰 C++。
+
+**下一步**：量化/评估设备拆分（LLM，VLA 因为 CUDA 专用的 synchronize/reset_peak_memory_stats 调用散落在 baseline/eval_fake 里暂缓）；配方高级参数面板；P13 剩余的 T-1306/T-1307/T-1308。
+
 ### 2026-10-12（续） · Claude · T-1304 前端本体：用户直接问"前端更新了吗"之后动手做的
 
 用户看了一眼当前站点，发现确实什么都没变，直接问了。之前那条记录里我判断前端重排风险太大想单独放一轮会话，但用户显然希望现在就看到真东西，所以这次就动手做了，没有再犟着"按计划分阶段"。
