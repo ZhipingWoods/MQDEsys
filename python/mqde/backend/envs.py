@@ -610,6 +610,48 @@ def cuda_architectures(compute_caps: str) -> str | None:
     return ";".join(caps) or None
 
 
+# What llama.cpp's model loader needs from the host C++ library. Real: Ubuntu 22.04's g++ 11.4 fails on this exact construct
+# ("use of deleted function make_error_condition") while a conda GCC 12 compiles it.
+_CXX_PROBE = "#include <future>\n#include <system_error>\nint f() { return 1; }\nint main() { auto x = std::async(std::launch::async, f); return x.get() - 1; }\n"
+
+
+def _cxx_works(cxx: str) -> bool:
+    with tempfile.TemporaryDirectory() as d:
+        src = Path(d) / "probe.cpp"
+        src.write_text(_CXX_PROBE)
+        try:
+            r = subprocess.run([cxx, "-std=c++17", "-c", str(src), "-o", str(Path(d) / "probe.o")], capture_output=True,
+                               timeout=120, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return r.returncode == 0
+
+
+def find_host_compiler() -> tuple[str | None, str] | None:
+    """(C compiler or None, C++ compiler) to pass to CMake, or None to let CMake use its default. An explicit CXX (and CC) is
+    taken as given. Otherwise the default `c++` is kept if it compiles the probe above; if not, the first working one of the
+    running environment's conda toolchain, then g++-14/13/12, then clang++."""
+    if os.environ.get("CXX"):
+        return (os.environ.get("CC") or None, os.environ["CXX"])
+    default = shutil.which("c++") or shutil.which("g++")
+    if default and _cxx_works(default):
+        return None
+    cands: list[tuple[str, str | None]] = []
+    for prefix in dict.fromkeys([sys.prefix, os.environ.get("CONDA_PREFIX", "")]):
+        if prefix:
+            for cxx in sorted(glob.glob(str(Path(prefix) / "bin" / "*-conda-linux-gnu-c++"))):
+                cands.append((cxx, cxx.removesuffix("c++") + "cc"))
+    for v in ("14", "13", "12"):
+        if shutil.which(f"g++-{v}"):
+            cands.append((str(shutil.which(f"g++-{v}")), shutil.which(f"gcc-{v}")))
+    if shutil.which("clang++"):
+        cands.append((str(shutil.which("clang++")), shutil.which("clang")))
+    for cxx, cc in cands:
+        if Path(cxx).is_file() and _cxx_works(cxx):
+            return (cc if cc and Path(cc).is_file() else None, cxx)
+    return None
+
+
 def build_llamacpp(r: Runner) -> str:
     """Build 3rdpart/llama.cpp (CUDA when a toolkit is found, else CPU) and install it as the managed `current` release. The
     official CUDA release is built for glibc >= 2.38, so on an older host this is the way to get a CUDA llama-server at all."""
@@ -621,6 +663,11 @@ def build_llamacpp(r: Runner) -> str:
         raise RuntimeError("cmake not found (set MQDE_CMAKE)")
     nvcc = find_nvcc()
     args = ["-DCMAKE_BUILD_TYPE=Release", "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_BUILD_EXAMPLES=OFF", "-DLLAMA_OPENSSL=OFF"]
+    host = find_host_compiler()
+    if host:
+        cc, cxx = host
+        args += ([f"-DCMAKE_C_COMPILER={cc}"] if cc else []) + [f"-DCMAKE_CXX_COMPILER={cxx}", f"-DCMAKE_CUDA_HOST_COMPILER={cxx}"]
+        r.log(f"host C++ compiler: {cxx}")
     if nvcc:
         arch = cuda_architectures(_run_out(["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"], 20) or "")
         args += ["-DGGML_CUDA=ON", f"-DCMAKE_CUDA_COMPILER={nvcc}"] + ([f"-DCMAKE_CUDA_ARCHITECTURES={arch}"] if arch else [])
@@ -631,6 +678,12 @@ def build_llamacpp(r: Runner) -> str:
     root = envs_dir() / "llamacpp"
     work = root / "build-src"  # kept between runs: an incremental rebuild is minutes, a clean CUDA build is much longer
     jobs = str(os.cpu_count() or 4)
+    cache = work / "CMakeCache.txt"
+    if host and cache.is_file() and not r.dry_run:
+        m = re.search(r"^CMAKE_CXX_COMPILER:\w+=(.*)$", cache.read_text(errors="replace"), re.M)
+        if m and m.group(1).strip() != host[1]:
+            r.log(f"the build directory was configured with {m.group(1).strip()}: starting it over")
+            shutil.rmtree(work, ignore_errors=True)
     if r.dry_run:
         r.run([cmake, "-S", str(src), "-B", str(work), *args])
         r.run([cmake, "--build", str(work), "--config", "Release", "-j", jobs])

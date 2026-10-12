@@ -866,3 +866,83 @@ def test_build_is_a_cli_command_and_refuses_other_backends(clean: Path, capsys: 
     assert "git submodule update --init" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         envs.main(["build", "vllm"])
+
+
+# ---------------------------------------------------------------- a host C++ compiler that can actually build llama.cpp
+def fake_cxx(path: Path, works: bool) -> Path:
+    return sh(path, "exit 0" if works else "echo 'system_error: use of deleted function make_error_condition' >&2; exit 1")
+
+
+def test_an_explicit_cxx_is_used_without_being_second_guessed(clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bad = fake_cxx(clean / "mine/c++", works=False)
+    monkeypatch.setenv("CXX", str(bad))
+    monkeypatch.delenv("CC", raising=False)
+    assert envs.find_host_compiler() == (None, str(bad)), "taken as given, even though it would fail the probe"
+    monkeypatch.setenv("CC", "/opt/mine/cc")
+    assert envs.find_host_compiler() == ("/opt/mine/cc", str(bad))
+
+
+def test_the_default_compiler_is_kept_when_it_can_build_the_probe(clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CXX", raising=False)
+    fake_cxx(clean / "emptybin/c++", works=True)
+    assert envs.find_host_compiler() is None, "nothing to override: cmake will pick the default itself"
+
+
+def test_a_broken_default_falls_back_to_a_conda_toolchain_that_works(clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real: Ubuntu 22.04's g++ 11.4 cannot compile std::async here, the conda GCC 12 can."""
+    monkeypatch.delenv("CXX", raising=False)
+    monkeypatch.delenv("CC", raising=False)
+    fake_cxx(clean / "emptybin/c++", works=False)
+    cxx = fake_cxx(clean / "conda/bin/x86_64-conda-linux-gnu-c++", works=True)
+    cc = sh(clean / "conda/bin/x86_64-conda-linux-gnu-cc", "exit 0")
+    monkeypatch.setattr(envs.sys, "prefix", str(clean / "conda"))
+    assert envs.find_host_compiler() == (str(cc), str(cxx))
+
+
+def test_a_candidate_that_fails_the_probe_is_skipped_for_the_next_one(clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CXX", raising=False)
+    monkeypatch.delenv("CC", raising=False)
+    fake_cxx(clean / "emptybin/c++", works=False)
+    fake_cxx(clean / "conda/bin/x86_64-conda-linux-gnu-c++", works=False)  # present but broken too
+    good = fake_cxx(clean / "emptybin/g++-12", works=True)
+    monkeypatch.setattr(envs.sys, "prefix", str(clean / "conda"))
+    assert envs.find_host_compiler() == (None, str(good)), "no matching gcc-12 next to it: C compiler left to CMake"
+
+
+def test_when_no_compiler_passes_the_probe_the_default_is_left_alone(clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CXX", raising=False)
+    fake_cxx(clean / "emptybin/c++", works=False)
+    monkeypatch.setattr(envs.sys, "prefix", str(clean / "nowhere"))
+    assert envs.find_host_compiler() is None
+
+
+def test_build_passes_the_chosen_compiler_to_cmake_for_c_cxx_and_cuda_host(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(envs, "CUDA_ROOTS", [])
+    monkeypatch.setattr(envs, "find_host_compiler", lambda: ("/opt/gcc12/cc", "/opt/gcc12/c++"))
+    envs.build_llamacpp(envs.Runner(lambda _l: None))
+    configure = [c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c][0]
+    for want in ("-DCMAKE_C_COMPILER=/opt/gcc12/cc", "-DCMAKE_CXX_COMPILER=/opt/gcc12/c++", "-DCMAKE_CUDA_HOST_COMPILER=/opt/gcc12/c++"):
+        assert want in configure, configure
+
+
+def test_changing_compiler_discards_the_stale_build_directory(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CMake refuses (or silently ignores) a different compiler in an already-configured directory."""
+    monkeypatch.setattr(envs, "CUDA_ROOTS", [])
+    work = clean / "envs/llamacpp/build-src"
+    work.mkdir(parents=True)
+    (work / "CMakeCache.txt").write_text("CMAKE_CXX_COMPILER:FILEPATH=/usr/bin/c++\n")
+    (work / "stale.o").write_text("object built by the old compiler")
+    monkeypatch.setattr(envs, "find_host_compiler", lambda: ("/opt/gcc12/cc", "/opt/gcc12/c++"))
+    envs.build_llamacpp(envs.Runner(lambda _l: None))
+    assert not (work / "stale.o").exists()
+
+
+def test_the_same_compiler_keeps_the_build_directory_for_an_incremental_rebuild(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(envs, "CUDA_ROOTS", [])
+    work = clean / "envs/llamacpp/build-src"
+    work.mkdir(parents=True)
+    (work / "CMakeCache.txt").write_text("CMAKE_CXX_COMPILER:FILEPATH=/opt/gcc12/c++\n")
+    (work / "kept.o").write_text("object")
+    monkeypatch.setattr(envs, "find_host_compiler", lambda: ("/opt/gcc12/cc", "/opt/gcc12/c++"))
+    envs.build_llamacpp(envs.Runner(lambda _l: None))
+    assert (work / "kept.o").exists()
