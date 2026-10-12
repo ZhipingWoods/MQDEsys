@@ -22,3 +22,6 @@
 [submodule "3rdpart/sglang"]
 	path = 3rdpart/sglang
 	url = https://github.com/sgl-project/sglang.git
+[submodule "3rdpart/llama.cpp"]
+	path = 3rdpart/llama.cpp
+	url = https://github.com/ggml-org/llama.cpp.git
