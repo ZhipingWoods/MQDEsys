@@ -728,6 +728,16 @@ def test_cli_up_to_date_is_not_an_update(clean: Path, pypi: Fake, capsys: pytest
     assert rows["vllm"]["update_available"] is False and rows["sglang"]["update_available"] is False
 
 
+def test_cli_status_prints_versions_the_way_the_ui_does(clean: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    sh(clean / "envs/llamacpp/b11569/llama-server", 'echo "version: 0.6.0-dev (build 11569, commit abc)"')
+    (clean / "envs/llamacpp/current").symlink_to("b11569")
+    sh(clean / "envs/vllm/bin/vllm", "true")
+    sh(clean / "envs/vllm/bin/python", "echo 0.31.0")
+    assert envs.main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert "v0.31.0" in out and " b11569 " in out and "vb11569" not in out
+
+
 def test_cli_rejects_bad_input_with_exit_code_1(clean: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert envs.main(["install", "vllm", "--version", "1; rm -rf /", "--dry-run"]) == 1
     assert "invalid version" in capsys.readouterr().err

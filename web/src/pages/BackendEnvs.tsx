@@ -9,7 +9,10 @@ const SOURCE: Record<string, string> = { env: "环境变量指定", managed: "�
 /** `0.31.0` -> `v0.31.0`; llama.cpp build tags (`b11565`) are shown as they are. */
 export const fmtVersion = (v: string) => (/^b\d+$/.test(v) ? v : `v${v}`);
 
-export function actionFor(e: BackendEnv): { label: string; disabled: boolean; version?: string } {
+export function actionFor(e: BackendEnv): { label: string; disabled: boolean; version?: string; hint?: string } {
+  // An MQDE_*_BIN variable outranks the managed environment: an install would succeed and then never be used.
+  if (e.source === "env")
+    return { label: "由环境变量指定", disabled: true, hint: "该后端由 MQDE_VLLM_BIN / MQDE_SGLANG_PYTHON / MQDE_LLAMA_SERVER_BIN 指定，优先级高于托管环境，在这里更新不会生效。取消该环境变量后重启服务即可使用本页的安装与更新。" };
   if (e.check_error) return { label: "无法检查更新", disabled: true };
   if (!e.latest) return { label: e.installed ? "检查更新中…" : "安装", disabled: !e.installed ? false : true };
   if (!e.installed) return { label: `安装 ${fmtVersion(e.latest)}`, disabled: false, version: e.latest };
@@ -110,7 +113,7 @@ export default function BackendEnvsCard() {
                   {e.latest ? fmtVersion(e.latest) : e.check_error ? <span className="muted">无法获取</span> : "…"}
                 </td>
                 <td>
-                  <button disabled={a.disabled || busy} onClick={() => start(e, a.version)} data-testid={`backend-env-action-${e.id}`}>
+                  <button disabled={a.disabled || busy} title={a.hint} onClick={() => start(e, a.version)} data-testid={`backend-env-action-${e.id}`}>
                     {a.label}
                   </button>
                 </td>

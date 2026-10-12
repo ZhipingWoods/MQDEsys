@@ -79,6 +79,11 @@ def version_key(v: str) -> tuple[tuple[int, ...], int, int]:
     return (tuple(rel), rank, n)
 
 
+def display_version(v: str) -> str:
+    """`0.31.0` -> `v0.31.0`; llama.cpp build tags (`b11567`) and anything starting with a letter are shown as they are."""
+    return v if not v or not v[0].isdigit() else f"v{v}"
+
+
 def is_prerelease(v: str) -> bool:
     return version_key(v)[1] < 0
 
@@ -648,7 +653,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(rows))
             else:
                 for row in rows:
-                    print(f"{row['id']:9} {'v' + str(row['version']) if row['installed'] else 'not installed':18} "
+                    print(f"{row['id']:9} {display_version(str(row['version'])) if row['installed'] else 'not installed':18} "
                           f"{row.get('source') or '-':8} {row.get('path') or ''}"
                           + (f"  latest {row['latest']}" if row.get("latest") else ""))
             return 0

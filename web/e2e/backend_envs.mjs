@@ -130,6 +130,15 @@ try {
   await page.waitForFunction(() => document.querySelector('[data-testid="backend-env-action-vllm"]')?.textContent === '更新到 v9.9.9', null, { timeout: 15000 });
   check('the installed version is unchanged after the failure', (await txt('backend-env-version-vllm')) === 'v0.31.0');
 
+  // ---- 4b. a backend pinned by an environment variable cannot be updated from here (the variable would win) ----
+  const pinned = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  pinned.rows.find((r) => r.id === 'sglang').source = 'env';
+  writeState(pinned);
+  await page.getByTestId('backend-env-check').click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="backend-env-action-sglang"]')?.textContent === '由环境变量指定', null, { timeout: 15000 });
+  check('an env-var-pinned backend says so and cannot be "updated"', await page.getByTestId('backend-env-action-sglang').isDisabled());
+  check('with an explanation on hover', ((await page.getByTestId('backend-env-action-sglang').getAttribute('title')) ?? '').includes('优先级高于托管环境'));
+
   // ---- 5. the API refuses anything but a known backend and a plain version ----
   for (const [p, b, why] of [['/backend-envs/pip/install', {}, 'unknown backend'], ['/backend-envs/vllm/install', { version: '1.0; rm -rf /' }, 'shell metacharacters'],
     ['/backend-envs/vllm/install', { version: '$(id)' }, 'command substitution'], ['/backend-envs/vllm/install', { version: 5 }, 'non-string version']]) {
