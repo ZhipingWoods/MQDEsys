@@ -132,6 +132,34 @@ def test_latest_is_the_newest_stable_release(pypi: Fake) -> None:
     assert envs.latest("sglang") == "0.5.21"
 
 
+@pytest.fixture
+def no_index_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    for k in ("MQDE_PIP_INDEX", "PIP_INDEX_URL", "UV_INDEX_URL", "PIP_CONFIG_FILE"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    def no_subprocess(*a: object, **k: object) -> None:
+        raise AssertionError("the index must be read from the config file, not by running pip")
+
+    monkeypatch.setattr(envs, "_run_out", no_subprocess)
+    return tmp_path / "home"
+
+
+def test_index_comes_from_pip_conf_without_needing_pip_installed(no_index_env: Path) -> None:
+    """The system python on the dev machine has no pip module, but the user's pip.conf still names the mirror."""
+    assert envs.pip_index_url() == "https://pypi.org/simple"
+    (no_index_env / ".config/pip").mkdir(parents=True)
+    (no_index_env / ".config/pip/pip.conf").write_text("[global]\nindex-url = https://mirror.example/pypi/simple/\ntrusted-host = mirror.example\n")
+    assert envs.pip_index_url() == "https://mirror.example/pypi/simple"
+
+
+def test_explicit_index_variable_beats_pip_conf(no_index_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (no_index_env / ".pip").mkdir(parents=True)
+    (no_index_env / ".pip/pip.conf").write_text("[global]\nindex-url = https://mirror.example/simple\n")
+    monkeypatch.setenv("MQDE_PIP_INDEX", "https://mine.example/simple/")
+    assert envs.pip_index_url() == "https://mine.example/simple"
+
+
 def test_latest_reports_an_unreachable_index_as_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MQDE_PIP_INDEX", "http://127.0.0.1:9/simple")
     with pytest.raises(OSError):

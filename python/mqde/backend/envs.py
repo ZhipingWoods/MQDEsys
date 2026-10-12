@@ -20,6 +20,7 @@ always a version someone can name, and the "update" button can say which one.
 from __future__ import annotations
 
 import argparse
+import configparser
 import contextlib
 import json
 import os
@@ -189,14 +190,30 @@ def _urlopen(url: str, timeout: float) -> bytes:
     return data
 
 
+def _pip_conf_index() -> str | None:
+    """`index-url` from the first pip config file that sets one -- read directly, because the system python that runs
+    this script often has no pip module at all while the user's pip.conf still names the mirror to use."""
+    home = Path.home()
+    files = [os.environ.get("PIP_CONFIG_FILE", ""), str(home / ".config/pip/pip.conf"), str(home / ".pip/pip.conf"), "/etc/pip.conf"]
+    for f in files:
+        if not f or not Path(f).is_file():
+            continue
+        cp = configparser.ConfigParser(interpolation=None)
+        try:
+            cp.read(f)
+        except configparser.Error:
+            continue
+        for sect in ("global", "install"):
+            if cp.has_option(sect, "index-url"):
+                return cp.get(sect, "index-url").strip().rstrip("/")
+    return None
+
+
 def pip_index_url() -> str:
     for k in ("MQDE_PIP_INDEX", "PIP_INDEX_URL", "UV_INDEX_URL"):
         if os.environ.get(k):
             return os.environ[k].rstrip("/")
-    out = _run_out([sys.executable, "-m", "pip", "config", "get", "global.index-url"], 15)
-    if out and out.strip().startswith("http"):
-        return out.strip().rstrip("/")
-    return "https://pypi.org/simple"
+    return _pip_conf_index() or "https://pypi.org/simple"
 
 
 def simple_index_versions(html: str, package: str) -> list[str]:
