@@ -803,3 +803,9 @@ P13（领域泛化与前端重构）全部 8 个任务（T-1301～T-1308）完�
 踩到并修掉的：①pip 在这台机器上下载慢到 136 KB/s，换 uv 才 33 MB/s；②我凭源码猜的 SGLang 日志格式有两处是错的（CUDA graph 行格式、KV 只读了 K），第一次真机运行暴露，已按真实日志改并把真实行写进测试；③示例 YAML 带混合精度，导致 AWQ 被判 unsupported、SGLang 合并加载断言失败——这是我选的测试配置问题，换统一 W4A16 后正常；④向导里取消勾选"不量化"会把配方留在 bf16-only，顺带让既有"预选真实导出格式"的 e2e 断言空转，已修并收紧到 `awq`；⑤`pgrep -f` 两次匹配到 ssh 外层 shell，临时服务一度没杀掉、生产服务没真正重启，已改按进程名 + PID 精确处理并确认现场干净。
 
 生产服务（18080）已用 `MQDE_SGLANG_PYTHON`/`MQDE_VLLM_BIN` 重启。**待决（L2）**：估算器的 sglang 后端画像需要给 `BackendProfile` 加字段，等批准；`data/compat/matrix.yaml`（L2）这次改动基于实测，请评审。
+
+### 2026-10-12（后端环境） · Claude · vLLM / SGLang / llama.cpp 的 uv 环境脚本 + 更新按钮
+
+`scripts/setup_backend.py` + `mqde.backend.envs` + `/api/v1/backend-envs` + 硬件页卡片，真机（4090）验证：全新目录装出 vLLM 0.31.0（61 s）、SGLang 0.5.21（151 s），不导出任何 `MQDE_*_BIN` 两者都能启动并压测；llama.cpp 识别 CUDA 包与 glibc 不兼容并回退 CPU 包 `b11569`。细节与踩坑见 TASKS.md T-0704。测试：C++ 13 + Python 81 + 前端 e2e 27，每个新逻辑都做了变异测试。
+
+**待你定**：①生产服务（18080）目前用 `MQDE_VLLM_BIN`/`MQDE_SGLANG_PYTHON` 指向现有环境，这样按钮是禁用的（见上）。要启用按钮，需取消这两个变量并让按钮装一份托管环境（约 11 GB 下载）——我没替你切，因为 `/cache/wuzhiping/envs/vllm` 是你已有的环境，原地更新会改它的版本。②MiniCPM-V-4.6 等你下载完再继续 VLM 流水线。
