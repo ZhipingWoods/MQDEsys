@@ -16,6 +16,7 @@ Eval positions follow the design doc: pretrain / fake_quant_wo_kv / fake_quant.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import time
 import uuid
@@ -456,7 +457,7 @@ class LLMJob:
             for r in recipes:
                 if r.weight.granularity == "per_group":
                     self.ev.log(f"group_size override: {r.name} {r.weight.group_size} -> {s.group_size_override}")
-                    r.weight.group_size = s.group_size_override
+                    r.weight = dataclasses.replace(r.weight, group_size=s.group_size_override)  # QuantSpec is frozen
                 else:
                     self.ev.log(f"group_size override ignored for {r.name}: granularity is {r.weight.granularity}, not per_group")
         ad = self._stage("inspect", lambda: HFCausalLM(s.model_path, device=s.quant_device))

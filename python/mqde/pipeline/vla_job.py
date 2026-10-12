@@ -23,6 +23,7 @@ Metrics
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import platform
@@ -208,7 +209,7 @@ class VLAJob:
             for r in recipes:
                 if r.weight.granularity == "per_group":
                     self.ev.log(f"group_size override: {r.name} {r.weight.group_size} -> {spec.group_size_override}")
-                    r.weight.group_size = spec.group_size_override
+                    r.weight = dataclasses.replace(r.weight, group_size=spec.group_size_override)  # QuantSpec is frozen
                 else:
                     self.ev.log(f"group_size override ignored for {r.name}: granularity is {r.weight.granularity}, not per_group")
 
