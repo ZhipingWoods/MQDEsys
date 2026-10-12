@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from mqde.backend.llamacpp_server import LlamaServer
+from mqde.backend.sglang_server import SglangServer
 from mqde.backend.vllm_server import VllmServer
 
 FAKE = Path(__file__).parent / "backend" / "fake_llama_server.py"
@@ -33,3 +34,10 @@ def vllm(tmp_path: Path, *, model_name: str = "tiny", ttft: float = 0.10, tpot: 
     model.mkdir(exist_ok=True)
     return VllmServer(model, tmp_path / "vllm.log", binary=wrapper(tmp_path, "vllm"),
                       extra=["--ttft", str(ttft), "--tpot", str(tpot)], **kw)  # type: ignore[arg-type]
+
+
+def sglang(tmp_path: Path, *, model_name: str = "tiny", ttft: float = 0.10, tpot: float = 0.02, **kw: object) -> SglangServer:
+    model = tmp_path / model_name
+    model.mkdir(exist_ok=True)
+    return SglangServer(model, tmp_path / "sglang.log", python=wrapper(tmp_path, "python"),
+                        extra=["--ttft", str(ttft), "--tpot", str(tpot)], **kw)  # type: ignore[arg-type]

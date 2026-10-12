@@ -81,6 +81,10 @@ class LLMJobSpec:
     # and lm_eval: {tasks: [gsm8k], limit: 50, num_fewshot, concurrency, seed, max_gen_toks, timeout} runs the official lm-eval CLI
     # against the served model (ADR-0002; skipped when MQDE_LM_EVAL_BIN / lm-eval is not found)
     vllm: dict[str, Any] | None = None
+    # T-0704: the same S11/S12 on SGLang per exported checkpoint (own environment, MQDE_SGLANG_PYTHON; skipped when it
+    # is missing or there is no CUDA device): {} for defaults, or max_model_len, mem_fraction_static,
+    # disable_cuda_graph, concurrency, requests, prompt_len, n_predict, ppl_windows. None = off.
+    sglang: dict[str, Any] | None = None
     # Output-distribution check next to PPL (eval/logits_probe.py): KL and Top-1 agreement against the unquantized model.
     # {} turns it on with defaults, or {windows: 8, k: 256, exact: false}; None = off. top-k KL is a lower bound of the exact KL
     # (about 11% low on Qwen2.5-0.5B at k=256), exact: true keeps every logit (about 1.2 GiB per 8 windows of 512).
@@ -134,6 +138,7 @@ class LLMJobSpec:
             llamacpp_serve=(dep.get("llamacpp") or {}).get("serve", {"concurrency": 4, "requests": 16,
                                                                     "prompt_len": 256, "n_predict": 64}),
             vllm=(dep.get("vllm") if isinstance(dep.get("vllm"), dict) else ({} if dep.get("vllm") else None)),
+            sglang=(dep.get("sglang") if isinstance(dep.get("sglang"), dict) else ({} if dep.get("sglang") else None)),
             logits_probe=_opt_dict((d.get("analysis") or {}).get("logits_probe")),
             sensitivity=(d.get("analysis") or {}).get("sensitivity"),
             sensitivity_windows=int((d.get("analysis") or {}).get("sensitivity_windows", 8)),
@@ -343,6 +348,8 @@ class LLMJob:
                         "real_vs_fake_ppl_pct": 100.0 * (rp["ppl"] / fake_ppl - 1.0)}
             if self.spec.vllm is not None:
                 out[fmt]["vllm"] = self._stage("deploy_vllm", lambda: self._vllm_serve(d, ids, rp["ppl"]), f"{recipe}/{fmt}")
+            if self.spec.sglang is not None:
+                out[fmt]["sglang"] = self._stage("deploy_sglang", lambda: self._sglang_serve(d, ids, rp["ppl"]), f"{recipe}/{fmt}")
         return out
 
     def _vllm_serve(self, ckpt: Path, ids: torch.Tensor, real_ppl: float) -> dict[str, Any]:
@@ -388,6 +395,48 @@ class LLMJob:
         return {"status": "succeeded" if good else "degraded", "startup_s": srv.startup_s, "args": srv.args, "props": props,
                 "engine": engine, "smoke": sm, "load": load, "served_ppl": sp["ppl"], "served_windows": sp["windows"],
                 "served_vs_real_ppl_pct": 100.0 * (sp["ppl"] / real_ppl - 1.0), **({"lm_eval": lm} if lm is not None else {})}
+
+    def _sglang_serve(self, ckpt: Path, ids: torch.Tensor, real_ppl: float) -> dict[str, Any]:
+        """S11 + S12 on SGLang: serve the exported checkpoint, smoke it, load it, score it with its own logprobs."""
+        from mqde.backend.base import openai_smoke
+        from mqde.backend.sglang_server import SglangServer, sglang_python
+        from mqde.eval.loadtest import LoadSpec, run_load
+        from mqde.eval.served_ppl import served_perplexity
+
+        s, cfg = self.spec, dict(self.spec.sglang or {})
+        try:
+            sglang_python()
+        except FileNotFoundError as e:
+            self.ev.log(f"SGLang {ckpt.name}: skipped ({e})")
+            return {"status": "skipped", "reason": str(e)}
+        if not torch.cuda.is_available():
+            self.ev.log(f"SGLang {ckpt.name}: skipped (no CUDA device)")
+            return {"status": "skipped", "reason": "no CUDA device"}
+        conc, n_predict, prompt_len = int(cfg.get("concurrency", 4)), int(cfg.get("n_predict", 64)), int(cfg.get("prompt_len", 256))
+        max_len = served_max_len(cfg, s.eval_seq_len, prompt_len, n_predict)
+        srv = SglangServer(ckpt, ckpt.parent / f"sglang-{ckpt.name}.log", max_model_len=max_len, dtype="float16",
+                           mem_fraction_static=float(cfg.get("mem_fraction_static", 0.3)),
+                           disable_cuda_graph=bool(cfg.get("disable_cuda_graph", False)), max_running_requests=max(conc, 8))
+        self.ev.log(f"SGLang {ckpt.name}: starting on {srv.port} (context_length {max_len})")
+        try:
+            with srv:
+                sm = openai_smoke(srv.port)
+                self.ev.log(f"SGLang {ckpt.name}: smoke -> {sm['text']!r}")
+                load = run_load(srv.port, LoadSpec(concurrency=conc, requests=int(cfg.get("requests", 16)),
+                                                   prompt_len=prompt_len, n_predict=n_predict))
+                sp = served_perplexity(srv.port, ids.tolist(), s.eval_seq_len, int(cfg.get("ppl_windows", s.eval_windows)),
+                                       concurrency=conc, api="sglang")
+                props, engine = srv.props(), srv.engine_info()
+        except Exception as e:
+            self.ev.log(f"SGLang {ckpt.name}: failed: {e}", level="warning")
+            return {"status": "failed", "error": str(e)[:1500], "diagnosis": srv.diagnose()}
+        if load.get("ok"):
+            self.ev.emit("metric", name=f"sglang.{ckpt.name}.serve_tps", value=load["output_tokens_per_s"], msg=f"SGLang {ckpt.name}")
+        self.ev.emit("metric", name=f"sglang.{ckpt.name}.served_ppl", value=sp["ppl"], msg=f"SGLang {ckpt.name}")
+        good = bool(sm["ok"]) and load.get("ok") == load["spec"]["requests"]
+        return {"status": "succeeded" if good else "degraded", "startup_s": srv.startup_s, "args": srv.args, "props": props,
+                "engine": engine, "smoke": sm, "load": load, "served_ppl": sp["ppl"], "served_windows": sp["windows"],
+                "served_vs_real_ppl_pct": 100.0 * (sp["ppl"] / real_ppl - 1.0)}
 
     def _lm_eval_baseline(self) -> dict[str, Any]:
         """The same lm-eval run against the unquantized model, served by vLLM with the same dtype as the exported checkpoints."""
@@ -597,6 +646,8 @@ def main() -> None:
     ap.add_argument("--llamacpp", help="GGUF types to deploy on llama.cpp, e.g. q8_0,q4_k")
     ap.add_argument("--vllm", nargs="?", const="{}", help="serve each exported checkpoint with vLLM (S11) and score it (S12); "
                     "optional JSON, e.g. '{\"gpu_memory_utilization\": 0.4}'")
+    ap.add_argument("--sglang", nargs="?", const="{}", help="serve each exported checkpoint with SGLang and score it; "
+                    "optional JSON, e.g. '{\"mem_fraction_static\": 0.4}'")
     ap.add_argument("--llamacpp-gpu-layers", type=int, help="llama.cpp -ngl (0 = CPU, 99 = offload all on Metal/CUDA)")
     ap.add_argument("--llamacpp-serve", help="llama-server load test as JSON, e.g. '{\"concurrency\": 8}'; 'off' disables")
     ap.add_argument("--sensitivity-windows", type=int)
@@ -626,6 +677,8 @@ def main() -> None:
         spec.llamacpp = a.llamacpp.split(",")
     if a.vllm is not None:
         spec.vllm = json.loads(a.vllm)
+    if a.sglang is not None:
+        spec.sglang = json.loads(a.sglang)
     if a.logits_probe is not None:
         spec.logits_probe = json.loads(a.logits_probe)
     if a.llamacpp_gpu_layers is not None:

@@ -128,6 +128,50 @@ def test_hardware_and_real_device_names_are_recorded_for_cross_hardware_comparis
     assert rep["env"]["quant_device_name"] == rep["env"]["eval_device_name"] == "cpu"
 
 
+def test_from_yaml_parses_deploy_sglang_like_deploy_vllm(tmp_path: Path) -> None:
+    base = {"metadata": {"name": "t"}, "model": {"path": "<tiny>"}, "quant": {"recipe": ["w4a16"]}}
+    p = tmp_path / "a.yaml"
+    for dep, want in [({}, None), ({"sglang": True}, {}), ({"sglang": {"mem_fraction_static": 0.4}}, {"mem_fraction_static": 0.4}),
+                      ({"sglang": False}, None)]:
+        p.write_text(yaml.safe_dump({**base, "deploy": dep}))
+        got = LLMJobSpec.from_yaml(p)
+        assert got.sglang == want and got.vllm is None, dep
+
+
+def test_sglang_stage_is_skipped_with_a_reason_when_the_environment_is_missing(job_env: None, tmp_path: Path,
+                                                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    from mqde.backend import sglang_server
+
+    monkeypatch.delenv("MQDE_SGLANG_PYTHON", raising=False)
+    monkeypatch.setattr(sglang_server, "REPO", tmp_path)
+    job = LLMJob(spec(tmp_path, sglang={}), job_dir=tmp_path / "j")
+    r = job._sglang_serve(tmp_path, torch.zeros(8, dtype=torch.long), 10.0)
+    assert r["status"] == "skipped" and "MQDE_SGLANG_PYTHON" in r["reason"]
+
+
+def test_sglang_stage_serves_smokes_loads_and_scores_through_the_mock(job_env: None, tmp_path: Path,
+                                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole stage against the mock SGLang server: served PPL is exp(-FAKE_LOGPROB) and is compared with the real PPL."""
+    import math
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    import mock_backend
+
+    monkeypatch.setenv("MQDE_SGLANG_PYTHON", str(mock_backend.wrapper(tmp_path, "python")))
+    monkeypatch.setenv("FAKE_LOGPROB", "-1.5")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)  # the stage only gates on it; the mock needs no GPU
+    ckpt = tmp_path / "ckpt-awq"
+    ckpt.mkdir()
+    job = LLMJob(spec(tmp_path, sglang={"requests": 4, "concurrency": 2, "prompt_len": 32, "n_predict": 4, "ppl_windows": 2}),
+                 job_dir=tmp_path / "j")
+    r = job._sglang_serve(ckpt, torch.arange(1000, 1000 + 4 * 64), 4.0)
+    assert r["status"] == "succeeded", r
+    assert r["served_ppl"] == pytest.approx(math.exp(1.5)) and r["served_windows"] == 2
+    assert r["served_vs_real_ppl_pct"] == pytest.approx(100 * (math.exp(1.5) / 4.0 - 1))
+    assert r["engine"]["kv_cache_tokens"] == 12345 and r["load"]["ok"] == 4
+    assert "--model-path" in r["args"] and str(ckpt) in r["args"]
+
+
 def test_group_size_override_applies_to_per_group_recipes_and_is_a_logged_noop_for_others(job_env: None, tmp_path: Path) -> None:
     job = LLMJob(spec(tmp_path, recipes=["w4a16", "w8a16"], group_size_override=64), job_dir=tmp_path / "j")
     rep = job.run()

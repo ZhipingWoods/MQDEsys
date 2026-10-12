@@ -1,10 +1,12 @@
 """Mock serving backend for the deployment / load-test tests (T-0703, T-0705, T-0803).
 
-Two launch styles, both on 127.0.0.1:
+Three launch styles, all on 127.0.0.1:
 
 * llama-server style: ``-m MODEL --port P -c N -np K ...`` (serves ``/health`` as JSON, ``/props``);
 * vLLM style: ``serve MODEL --port P --max-model-len N --max-num-seqs K ...`` (``/health`` is an empty 200,
-  ``/v1/models`` lists the model).
+  ``/v1/models`` lists the model);
+* SGLang style: ``-m sglang.launch_server --model-path MODEL --port P --context-length N ...`` (``/health`` is an
+  empty 200, ``/model_info``, ``/v1/models``, and the native ``/generate`` that returns ``input_token_logprobs``).
 
 Both serve ``/v1/chat/completions``, a streaming ``/v1/completions`` (SSE with a usage chunk and ``[DONE]``)
 and, llama-style, a streaming ``/completion``. Token i of a stream is sent at ``t0 + ttft + i * tpot``
@@ -38,6 +40,9 @@ def _sleep_until(deadline: float) -> None:
 
 def main() -> None:
     argv = sys.argv[1:]
+    sglang_style = argv[:2] == ["-m", "sglang.launch_server"]
+    if sglang_style:
+        argv = argv[2:]
     vllm_style = bool(argv) and argv[0] == "serve"
     if vllm_style:
         argv = argv[1:]
@@ -50,15 +55,37 @@ def main() -> None:
     ap.add_argument("-np", type=int, default=1)
     ap.add_argument("--max-model-len", type=int, default=0)
     ap.add_argument("--max-num-seqs", type=int, default=0)
+    ap.add_argument("--model-path")
+    ap.add_argument("--context-length", type=int, default=0)
+    ap.add_argument("--max-running-requests", type=int, default=0)
     ap.add_argument("--served-model-name")
     ap.add_argument("--ttft", type=float, default=0.10)
     ap.add_argument("--tpot", type=float, default=0.02)
     a, _ = ap.parse_known_args(argv)
-    model = a.model_pos if vllm_style else a.m
-    max_len = a.max_model_len or a.c // max(1, a.np)
+    model = a.model_path if sglang_style else a.model_pos if vllm_style else a.m
+    max_len = a.context_length or a.max_model_len or a.c // max(1, a.np)
     name = a.served_model_name or model
+    openai_style = vllm_style or sglang_style  # empty-body /health, /v1/models; no llama-only endpoints
 
-    if vllm_style:
+    if sglang_style:
+        if not Path(model).exists():
+            print(f"OSError: Can't load the configuration of '{model}'. If you were trying to load it from "
+                  "'https://huggingface.co/models', make sure you don't have a local directory with the same name.", flush=True)
+            sys.exit(1)
+        if "oom" in Path(model).name:
+            print("torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB", flush=True)
+            sys.exit(1)
+        if "badquant" in Path(model).name:
+            print("ValueError: Unknown quantization method: foo. Must be one of ['awq', 'gptq']", flush=True)
+            sys.exit(1)
+        if "lowmem" in Path(model).name:
+            print("RuntimeError: Not enough memory. Please try to increase --mem-fraction-static.", flush=True)
+            sys.exit(1)
+        print("Load weight end. elapsed=1.20 s, type=Qwen2ForCausalLM, avail mem=20.10 GB, mem usage=0.93 GB.", flush=True)
+        print("KV Cache is allocated. dtype: torch.float16, #tokens: 12345, K size: 0.07 GB, V size: 0.07 GB", flush=True)
+        print("Memory pool end. avail mem=19.50 GB", flush=True)
+        print("Capture cuda graph end. Time elapsed: 3.40 s. mem usage=0.20 GB. avail mem=19.30 GB.", flush=True)
+    elif vllm_style:
         if not Path(model).exists():
             print(f"OSError: Invalid repository ID or local directory specified: '{model}'", flush=True)
             sys.exit(1)
@@ -103,11 +130,13 @@ def main() -> None:
 
         def do_GET(self) -> None:
             if self.path == "/health":
-                if vllm_style:
+                if openai_style:
                     self._send(200, b"")
                 else:
                     self._json({"status": "ok"})
-            elif self.path == "/props" and not vllm_style:
+            elif self.path == "/model_info" and sglang_style:
+                self._json({"model_path": str(model), "max_model_len": max_len, "is_generation": True})
+            elif self.path == "/props" and not openai_style:
                 self._json({"total_slots": a.np, "build_info": "fake", "default_generation_settings": {"n_ctx": a.c // a.np}})
             elif self.path == "/v1/models":
                 self._json({"data": [{"id": name, "max_model_len": max_len}]})
@@ -150,7 +179,17 @@ def main() -> None:
                 chunk = b"data: " + json.dumps({"choices": [{"text": "x", "finish_reason": None}]}).encode() + b"\n\n"
                 usage = {"choices": [], "usage": {"prompt_tokens": plen, "completion_tokens": n, "total_tokens": plen + n}}
                 self._stream(n, chunk, [b"data: " + json.dumps(usage).encode() + b"\n\n", b"data: [DONE]\n\n"])
-            elif self.path == "/completion" and not vllm_style:
+            elif self.path == "/generate" and sglang_style:
+                # native scoring request: input_token_logprobs is [[logprob|None, token_id, text|None], ...], the
+                # first entry's logprob is None (nothing precedes the first token); every other token gets FAKE_LOGPROB
+                ids = body["input_ids"]
+                lp = float(os.environ.get("FAKE_LOGPROB", "-2.0"))
+                itl = [[None if i == 0 else lp, t, None] for i, t in enumerate(ids)] if body.get("return_logprob") else None
+                meta: dict[str, object] = {"completion_tokens": 1}
+                if itl is not None:
+                    meta["input_token_logprobs"] = itl
+                self._json({"text": "x", "meta_info": meta})
+            elif self.path == "/completion" and not openai_style:
                 n = int(body["n_predict"])
                 chunk = b"data: " + json.dumps({"content": "x", "tokens": [7], "stop": False}).encode() + b"\n\n"
                 self._stream(n, chunk, [b"data: " + json.dumps({"content": "", "tokens": [], "stop": True}).encode() + b"\n\n"])
