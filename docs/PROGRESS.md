@@ -795,3 +795,11 @@ P13（领域泛化与前端重构）全部 8 个任务（T-1301～T-1308）完�
 `quant.group_size` 覆盖所选配方自身的 per-group 分组大小，非 per_group 配方是有日志的 no-op。`NewJob.tsx` 加了默认收起的"高级参数"面板（group_size 输入 + 禁用的 QuaRot 占位）。踩了一个真 bug：`QuantSpec` 是 frozen dataclass，直接赋值在 Mac `py_compile` 查不出来，4090 pytest 才炸出 `FrozenInstanceError`，改 `dataclasses.replace()` 修好。2 个新 pytest + 4090 真实 GPU 跑了一次 VLA 作业验证覆盖生效；`newjob_wizard.mjs` 140/140。
 
 用户这轮点名要求补的三项——仅量化不评测、量化/评估设备拆分、配方高级参数面板——全部从 schema 占位 → Python/C++ 实现 → 4090 真机验证 → 前端控件，完整走完，不是摆设。P13（8 个任务）也全部完成。
+
+### 2026-10-12（SGLang） · Claude · T-0704 部署适配完成并真机验证
+
+`3rdpart/sglang` 适配完成：独立环境 + 子进程适配器 + `/generate` 打分 + `deploy_sglang` 阶段 + 报告/向导/矩阵，真机（4090）三条路径（CLI、`llm_job`、真实 `mqde serve` 提交）都跑通，awq / compressed-tensors（W4A16、FP8）/ 对称 gptq 的服务端 PPL 与真实权重差 ≤0.05%。细节、环境搭建步骤和限制见 TASKS.md T-0704。
+
+踩到并修掉的：①pip 在这台机器上下载慢到 136 KB/s，换 uv 才 33 MB/s；②我凭源码猜的 SGLang 日志格式有两处是错的（CUDA graph 行格式、KV 只读了 K），第一次真机运行暴露，已按真实日志改并把真实行写进测试；③示例 YAML 带混合精度，导致 AWQ 被判 unsupported、SGLang 合并加载断言失败——这是我选的测试配置问题，换统一 W4A16 后正常；④向导里取消勾选"不量化"会把配方留在 bf16-only，顺带让既有"预选真实导出格式"的 e2e 断言空转，已修并收紧到 `awq`；⑤`pgrep -f` 两次匹配到 ssh 外层 shell，临时服务一度没杀掉、生产服务没真正重启，已改按进程名 + PID 精确处理并确认现场干净。
+
+生产服务（18080）已用 `MQDE_SGLANG_PYTHON`/`MQDE_VLLM_BIN` 重启。**待决（L2）**：估算器的 sglang 后端画像需要给 `BackendProfile` 加字段，等批准；`data/compat/matrix.yaml`（L2）这次改动基于实测，请评审。

@@ -2,7 +2,9 @@
 
 A deployment backend serves a quantized checkpoint over an OpenAI-compatible HTTP API as a child process
 (T-0703, S11). Two already exist: `python/mqde/backend/vllm_server.py` (`VllmServer`) and
-`python/mqde/backend/llamacpp_server.py` (`LlamaServer`).
+`python/mqde/backend/llamacpp_server.py` (`LlamaServer`); SGLang (`sglang_server.py`, `SglangServer`) is a third, and shows what a
+new backend with its own protocol needs beyond the process wrapper: a scoring path in `eval/served_ppl.py`, log parsing for
+`engine_info`, a mock mode in `tests/backend/fake_llama_server.py`, and a measured `backends:` entry in `data/compat/matrix.yaml`.
 
 **This is not pluggable the way algorithms are (see `add-algorithm.md`) or exporters are
 (`python/mqde/export/base.py`'s `EXPORTER_REGISTRY`).** There is no `@register()` decorator and no registry

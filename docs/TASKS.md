@@ -128,7 +128,7 @@
 | T-0701 | Exporter 接口 + vLLM 导出 | P7 | T-0405,T-0602 | L2 | PARTIAL (2026-10-08: the exporter's own AWQ / compressed-tensors W4A16 / compressed-tensors FP8 checkpoints of Qwen2.5-0.5B load in vLLM 0.30.0 and serve (served PPL within +0.01% / +0.01% / +0.27% of the real-weight PPL); asymmetric GPTQ is rejected by vLLM 0.30.0's validator (not an export bug); Marlin byte-exact vs vLLM ref; 7B W4A16 / FP8 acceptance run pending a 7B checkpoint) |
 | T-0702 | Fake/Real 一致性检查（S10） | P7 | T-0701 | L1 | DONE (2026-09-29, 0 code mismatches; real PPL +0.0005% vs fake) |
 | T-0703 | 部署后端接口 + vLLM 适配器（S11） | P7 | T-0701,T-0504 | L2 | PARTIAL (2026-10-08, Python only: backend/base.py ServerBackend + vllm_server.py (launch, health, log diagnosis, engine_info) + llm_job `deploy_vllm` stage + data/backends/vllm.yaml; verified on real vLLM 0.30.0; C++ `deploy_backend.h` (L2, needs approval) and `ctest -R backend_` not done) |
-| T-0704 | SGLang 导出与适配 | P7 | T-0703 | L1 | TODO |
+| T-0704 | SGLang 导出与适配 | P7 | T-0703 | L1 | PARTIAL (2026-10-12，部署适配完成并在 4090 真机跑通：awq / compressed-tensors W4A16 / FP8 W8A8 / 对称 gptq 在 SGLang 0.5.22.dev 上服务，服务端 PPL 与真实权重差 ≤0.05%；经真实 `mqde serve` 提交路径验证；未做：估算器的 sglang 后端画像（需改 L2 的 BackendProfile，待批准）、lm-eval 接 SGLang、`tests/integration/gpu/deploy_sglang.sh`) |
 | T-0705 | llama.cpp（GGUF）导出与适配 | P7 | T-0703,T-0405 | L1 | DONE (2026-10-05, Q4_K deploy via llama-server on Linux CPU + Apple M5 CPU/Metal; tests/integration/deploy_llamacpp_cpu.sh; UI serve columns; CUDA build not exercised) |
 | T-0706 | TensorRT-LLM 导出与适配（扩展） | P7 | T-0703 | L1 | TODO |
 | T-0801 | 精度评测：lm-eval-harness / evalscope / 自定义 | P8 | T-0510 | L3 | PARTIAL (2026-10-08, custom JSONL checks done: eval/custom.py + data/datasets/smoke_qa.jsonl; 2026-10-09 ADR-0002 approved (subprocess, no new dependency): eval/lm_eval_adapter.py runs the official `lm-eval` CLI against the served model; run directly with identical arguments the CLI gave bit-identical gsm8k scores (20 samples); deploy_vllm option `lm_eval` plus an unquantized baseline run, shown first in the report. Measured: Qwen2.5-0.5B W4A16 gsm8k 5-shot, 50 samples, 0.02 / 0.06 against 0.20 / 0.28 unquantized (PPL 18.10 to 20.66). Not done: MMLU run (only gsm8k tried), evalscope adapter (later, per ADR), the spec's acceptance on a full-size run, VLA) |
@@ -626,10 +626,14 @@
 - **验收**：部署 7B W4A16 与 FP8 成功，smoke 请求返回合理文本；启动参数写入报告。
 - **校验**：`ctest -R backend_`（桩）；`tests/integration/gpu/deploy_vllm.sh`。
 
-#### T-0704 SGLang
-- **依赖**：T-0703 **级别**：L1
-- **产出**：`export/sglang.py`（多数情况复用 vLLM 格式）、`backend/sglang/`。
-- **校验**：`tests/integration/gpu/deploy_sglang.sh`。
+#### T-0704 SGLang —— PARTIAL 2026-10-12
+- **依赖**：T-0703 **级别**：L1（`data/compat/matrix.yaml` 是 L2，改动待评审）
+- **产出**：没有新写 `export/sglang.py`——SGLang 直接加载现有导出器的 awq / compressed-tensors / gptq checkpoint。`python/mqde/backend/sglang_server.py`（`SglangServer`，子进程 + HTTP，不 import sglang）；`eval/served_ppl.py` 新增 `api="sglang"`（原生 `/generate` + `return_logprob`，按 token id 打分并校验对齐）；`llm_job` 新增 `deploy.sglang` → 每个导出 checkpoint 一个 `deploy_sglang` 阶段；HTML 报告与作业页新增 SGLang 段；向导里选 SGLang 真实生效；`3rdpart/sglang` 登记为子模块（`86624f14eb`）；`planner::validate_jobspec` 拒绝 `deploy.sglang` + `evaluation.skip`。
+- **环境（SGLang 要 torch 2.14.1 + cu13，与 `mqde` 环境冲突，必须独立）**：`python -m venv /cache/wuzhiping/envs/sglang`；`pip install uv`（**不要直接用 pip 装**：同一镜像下 pip 只有约 136 KB/s，uv 约 33 MB/s）；`cd 3rdpart/sglang && SGLANG_BUILD_RUST_EXTS=none uv pip install --python <env>/bin/python --index-url https://mirrors.aliyun.com/pypi/simple/ --index-strategy unsafe-best-match -e python`（没有 Rust 工具链时必须设 `SGLANG_BUILD_RUST_EXTS=none`，只影响 Rust 网关，`launch_server` 不受影响）。启动 `mqde serve` 前导出 `MQDE_SGLANG_PYTHON=<env>/bin/python`，否则 SGLang 阶段按"缺环境"被跳过（vLLM 的 `MQDE_VLLM_BIN` 同理）。
+- **实测（Qwen2.5-0.5B，RTX 4090，同一批导出 checkpoint，服务端 PPL 相对真实权重）**：awq −0.02%（vLLM 0.00%）；compressed-tensors W4A16 −0.02%（vLLM 0.00%）；compressed-tensors FP8 W8A8 −0.04%；对称 gptq +0.02%（SGLang 自动转 `gptq_marlin`）；**非对称 gptq 失败**——SGLang 在 CUDA 上只注册了 `gptq_marlin`，非对称不可转，落到未注册的 `gptq`（`Unknown quantization method: gptq`），已写入矩阵 `known_issues`。
+- **解读数字时的两个坑**：①**不能把两个后端的吞吐直接比**：vLLM 阶段默认 `enforce_eager=True`，SGLang 默认开 CUDA graph（实测约 1800 vs 235 tok/s，差异主要来自这个配置而不是引擎本身）。②**冷启动很慢**：首次在新环境启动时 JIT 编译会让启动到 95–298 s（AWQ 的 prefill CUDA graph 捕获曾用 263 s），TTFT 也会被拖到数秒；JIT 缓存热了以后启动 32 s、TTFT p50 26–40 ms。`startup_timeout` 默认 900 s 够用，但第一次的延迟数字不能当引擎性能。
+- **没做 / 待决**：①估算器的 `data/backends/sglang.yaml`：SGLang 的 KV 池是 `mem_fraction_static × 总显存 − 权重`，激活放在剩余的 (1−frac) 里，而 `batched` 激活模型会把激活算进 KV 预算，语义不同，硬套会失真；需要给 `BackendProfile`（L2 公共头文件）加字段，**等批准**。②lm-eval 对接 SGLang。③`tests/integration/gpu/deploy_sglang.sh`。
+- **校验**：新增 pytest（适配器 18 + served-PPL 协议 + llm_job 阶段 + 报告段，共约 25 例，4 + 2 处 mutation 均被抓）；`ctest` planner +3（Mac 295/295，4090 291/291）；`web/e2e/newjob_wizard.mjs` 45/45，其余 e2e 全过；真机：直接 CLI、`llm_job`、以及经临时 `mqde serve`（`POST /api/v1/jobs`，GPU 池 5）三条路径均跑通。
 
 #### T-0705 llama.cpp（GGUF）
 - **依赖**：T-0703, T-0405 **级别**：L1
