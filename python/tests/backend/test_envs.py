@@ -779,6 +779,8 @@ def test_compute_capability_becomes_cmake_architectures() -> None:
 
 
 def test_nvcc_is_found_from_the_variable_then_path_then_the_usual_install_dirs(clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(envs, "CUDA_ROOTS", [])  # the host's own /usr/local/cuda-* must not leak in
+    monkeypatch.delenv("CUDACXX", raising=False)
     assert envs.find_nvcc() is None
     old, new = sh(clean / "cuda/cuda-12.4/bin/nvcc", "true"), sh(clean / "cuda/cuda-13.0/bin/nvcc", "true")
     monkeypatch.setattr(envs, "CUDA_ROOTS", [str(clean / "cuda/cuda-*")])
@@ -825,6 +827,61 @@ def test_build_from_the_submodule_configures_cuda_for_this_gpu_and_installs_it_a
     r = envs.resolve("llamacpp")
     assert r is not None and r.source == "managed" and envs.installed_version("llamacpp", r) == "b11574"
     assert (clean / "envs/llamacpp/current").readlink() == Path("b11574")
+
+
+def test_build_makes_the_installed_binary_find_its_libraries_relative_to_itself(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`cmake --install` strips the build tree's rpath: without this llama-server died with `libllama-server-impl.so: cannot open`."""
+    monkeypatch.setattr(envs, "CUDA_ROOTS", [])
+    monkeypatch.setattr(envs, "find_host_compiler", lambda: None)
+    envs.build_llamacpp(envs.Runner(lambda _m: None))
+    configure = [c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c][0]
+    assert "-DCMAKE_INSTALL_RPATH=$ORIGIN/../lib" in configure.split(), configure
+
+
+def test_build_lets_the_linker_find_the_cuda_runtime_next_to_the_toolkit(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A conda `ld` does not search the toolkit's lib64, so `libggml-cuda.so` -> `libcudart.so.13` was `undefined reference` when
+    linking the tools; the toolkit lives beside its nvcc (`<root>/bin/nvcc`, `<root>/lib64`)."""
+    sh(clean / "toolbin/nvidia-smi", "true")
+    sh(clean / "toolbin/nvcc", "true")
+    (clean / "lib64").mkdir()
+    monkeypatch.setattr(envs, "CUDA_ROOTS", [])
+    monkeypatch.setattr(envs, "find_host_compiler", lambda: None)
+    envs.build_llamacpp(envs.Runner(lambda _m: None))
+    configure = [c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c][0]
+    assert f"-DCMAKE_EXE_LINKER_FLAGS=-Wl,-rpath-link,{clean / 'lib64'}" in configure, configure
+    assert f"-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-rpath-link,{clean / 'lib64'}" in configure, configure
+
+
+def test_build_lets_the_linker_find_the_host_compilers_own_runtime_libraries(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The conda GCC's libgomp lives in its prefix's lib/, which its own `ld` does not search for a shared library's needs."""
+    sh(clean / "toolbin/nvidia-smi", "true")
+    sh(clean / "toolbin/nvcc", "true")
+    (clean / "lib64").mkdir()
+    (clean / "conda/lib").mkdir(parents=True)
+    monkeypatch.setattr(envs, "CUDA_ROOTS", [])
+    monkeypatch.setattr(envs, "find_host_compiler", lambda: (None, str(clean / "conda/bin/c++")))
+    envs.build_llamacpp(envs.Runner(lambda _m: None))
+    configure = [c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c][0]
+    assert f"-DCMAKE_EXE_LINKER_FLAGS=-Wl,-rpath-link,{clean / 'lib64'}:{clean / 'conda/lib'} " in configure + " ", configure
+    assert f"-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-rpath-link,{clean / 'lib64'}:{clean / 'conda/lib'} " in configure + " ", configure
+
+
+def test_a_cpu_only_build_still_gets_the_host_compilers_library_directory(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (clean / "conda/lib").mkdir(parents=True)
+    monkeypatch.setattr(envs, "CUDA_ROOTS", [])
+    monkeypatch.setattr(envs, "find_host_compiler", lambda: (None, str(clean / "conda/bin/c++")))
+    envs.build_llamacpp(envs.Runner(lambda _m: None))
+    configure = [c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA=OFF" in c][0]
+    assert f"-DCMAKE_EXE_LINKER_FLAGS=-Wl,-rpath-link,{clean / 'conda/lib'} " in configure + " ", configure
+
+
+def test_build_without_a_toolkit_lib_directory_adds_no_linker_flags(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sh(clean / "toolbin/nvidia-smi", "true")
+    sh(clean / "toolbin/nvcc", "true")
+    monkeypatch.setattr(envs, "CUDA_ROOTS", [])
+    monkeypatch.setattr(envs, "find_host_compiler", lambda: None)
+    envs.build_llamacpp(envs.Runner(lambda _m: None))
+    assert "LINKER_FLAGS" not in [c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c][0]
 
 
 def test_build_without_cuda_makes_a_cpu_build_and_says_so(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -892,6 +949,7 @@ def test_a_broken_default_falls_back_to_a_conda_toolchain_that_works(clean: Path
     """Real: Ubuntu 22.04's g++ 11.4 cannot compile std::async here, the conda GCC 12 can."""
     monkeypatch.delenv("CXX", raising=False)
     monkeypatch.delenv("CC", raising=False)
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)  # the host's own conda env must not leak in
     fake_cxx(clean / "emptybin/c++", works=False)
     cxx = fake_cxx(clean / "conda/bin/x86_64-conda-linux-gnu-c++", works=True)
     cc = sh(clean / "conda/bin/x86_64-conda-linux-gnu-cc", "exit 0")
@@ -901,6 +959,7 @@ def test_a_broken_default_falls_back_to_a_conda_toolchain_that_works(clean: Path
 
 def test_a_candidate_that_fails_the_probe_is_skipped_for_the_next_one(clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CXX", raising=False)
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
     monkeypatch.delenv("CC", raising=False)
     fake_cxx(clean / "emptybin/c++", works=False)
     fake_cxx(clean / "conda/bin/x86_64-conda-linux-gnu-c++", works=False)  # present but broken too
@@ -910,6 +969,7 @@ def test_a_candidate_that_fails_the_probe_is_skipped_for_the_next_one(clean: Pat
 
 
 def test_when_no_compiler_passes_the_probe_the_default_is_left_alone(clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
     monkeypatch.delenv("CXX", raising=False)
     fake_cxx(clean / "emptybin/c++", works=False)
     monkeypatch.setattr(envs.sys, "prefix", str(clean / "nowhere"))

@@ -662,7 +662,8 @@ def build_llamacpp(r: Runner) -> str:
     if not cmake:
         raise RuntimeError("cmake not found (set MQDE_CMAKE)")
     nvcc = find_nvcc()
-    args = ["-DCMAKE_BUILD_TYPE=Release", "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_BUILD_EXAMPLES=OFF", "-DLLAMA_OPENSSL=OFF"]
+    args = ["-DCMAKE_BUILD_TYPE=Release", "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_BUILD_EXAMPLES=OFF", "-DLLAMA_OPENSSL=OFF",
+            "-DCMAKE_INSTALL_RPATH=$ORIGIN/../lib"]  # the installed llama-server finds its libllama*.so / libggml*.so next to bin/
     host = find_host_compiler()
     if host:
         cc, cxx = host
@@ -675,6 +676,12 @@ def build_llamacpp(r: Runner) -> str:
     else:
         args += ["-DGGML_CUDA=OFF"]
         r.log("no CUDA compiler found (set CUDACXX): building llama.cpp for the CPU only")
+    # A conda `ld` searches neither the CUDA toolkit nor its own prefix for the libraries a *shared* library needs in turn
+    # (libggml-cuda.so -> libcudart.so.13, libggml-cpu.so -> libgomp.so.1): the tools would not link without these.
+    libdirs = [d for d in ([nvcc.parent.parent / "lib64"] if nvcc else []) + ([Path(host[1]).parent.parent / "lib"] if host else []) if d.is_dir()]
+    if libdirs:
+        flag = "-Wl,-rpath-link," + ":".join(str(d) for d in libdirs)
+        args += [f"-DCMAKE_EXE_LINKER_FLAGS={flag}", f"-DCMAKE_SHARED_LINKER_FLAGS={flag}"]
     root = envs_dir() / "llamacpp"
     work = root / "build-src"  # kept between runs: an incremental rebuild is minutes, a clean CUDA build is much longer
     jobs = str(os.cpu_count() or 4)
