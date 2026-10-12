@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import configparser
+import glob
 import contextlib
 import http.client
 import json
@@ -579,6 +580,84 @@ def install_llamacpp(version: str | None, r: Runner) -> str:
             shutil.rmtree(tmp, ignore_errors=True)
     else:
         raise RuntimeError("no llama.cpp build could be installed: " + "; ".join(failures))
+    _switch_current_and_prune(root, tag)
+    return tag
+
+
+# ------------------------------------------------------------------------------------------------ llama.cpp from source
+CUDA_ROOTS = ["/usr/local/cuda", "/usr/local/cuda-*", "/opt/cuda", "/opt/cuda-*"]
+
+
+def find_nvcc() -> Path | None:
+    """CUDACXX, then `nvcc` on PATH, then the usual toolkit directories (newest first): the dev machines have the toolkit
+    installed but not on PATH."""
+    explicit = os.environ.get("CUDACXX")
+    if explicit and Path(explicit).is_file():
+        return Path(explicit)
+    onpath = shutil.which("nvcc")
+    if onpath:
+        return Path(onpath)
+    found: list[Path] = []
+    for pat in CUDA_ROOTS:
+        found += [Path(p) / "bin" / "nvcc" for p in glob.glob(pat)]
+    found = [p for p in found if p.is_file()]
+    return max(found, key=lambda p: version_key(p.parent.parent.name.removeprefix("cuda-") or "0")) if found else None
+
+
+def cuda_architectures(compute_caps: str) -> str | None:
+    """`nvidia-smi --query-gpu=compute_cap` output (`8.9` per GPU) -> CMake's `89` / `75;86;89`; None when it says nothing usable."""
+    caps = sorted({c.replace(".", "") for c in compute_caps.split() if re.fullmatch(r"\d+\.\d+", c)}, key=int)
+    return ";".join(caps) or None
+
+
+def build_llamacpp(r: Runner) -> str:
+    """Build 3rdpart/llama.cpp (CUDA when a toolkit is found, else CPU) and install it as the managed `current` release. The
+    official CUDA release is built for glibc >= 2.38, so on an older host this is the way to get a CUDA llama-server at all."""
+    src = repo_root() / "3rdpart" / "llama.cpp"
+    if not (src / "CMakeLists.txt").is_file():
+        raise RuntimeError(f"{src} is not checked out: run `git submodule update --init 3rdpart/llama.cpp`")
+    cmake = os.environ.get("MQDE_CMAKE") or shutil.which("cmake")
+    if not cmake:
+        raise RuntimeError("cmake not found (set MQDE_CMAKE)")
+    nvcc = find_nvcc()
+    args = ["-DCMAKE_BUILD_TYPE=Release", "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_BUILD_EXAMPLES=OFF", "-DLLAMA_OPENSSL=OFF"]
+    if nvcc:
+        arch = cuda_architectures(_run_out(["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"], 20) or "")
+        args += ["-DGGML_CUDA=ON", f"-DCMAKE_CUDA_COMPILER={nvcc}"] + ([f"-DCMAKE_CUDA_ARCHITECTURES={arch}"] if arch else [])
+        r.log(f"building llama.cpp with CUDA ({nvcc}, architectures {arch or 'default'})")
+    else:
+        args += ["-DGGML_CUDA=OFF"]
+        r.log("no CUDA compiler found (set CUDACXX): building llama.cpp for the CPU only")
+    root = envs_dir() / "llamacpp"
+    work = root / "build-src"  # kept between runs: an incremental rebuild is minutes, a clean CUDA build is much longer
+    jobs = str(os.cpu_count() or 4)
+    if r.dry_run:
+        r.run([cmake, "-S", str(src), "-B", str(work), *args])
+        r.run([cmake, "--build", str(work), "--config", "Release", "-j", jobs])
+        r.log("+ install into the managed llama.cpp directory (dry run)")
+        return "<build>"
+    root.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=".b0.", dir=root))
+    try:
+        r.run([cmake, "-S", str(src), "-B", str(work), *args])
+        r.run([cmake, "--build", str(work), "--config", "Release", "-j", jobs])
+        r.run([cmake, "--install", str(work), "--prefix", str(stage / "x")])
+        srv = next((p for p in sorted((stage / "x").rglob("llama-server")) if p.is_file()), None)
+        if srv is None:
+            raise RuntimeError("the build produced no llama-server")
+        tag = parse_llama_version(_run_out([str(srv), "--version"], 30) or "")
+        if tag is None:
+            raise StartFailure(f"the built llama-server does not start ({why_not_starting(srv)})")
+        dest = root / tag
+        shutil.rmtree(dest, ignore_errors=True)
+        (stage / "x").rename(dest)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+    _switch_current_and_prune(root, tag)
+    return tag
+
+
+def _switch_current_and_prune(root: Path, tag: str) -> None:
     link, new = root / "current", root / ".current.new"
     with contextlib.suppress(FileNotFoundError):
         new.unlink()
@@ -589,7 +668,6 @@ def install_llamacpp(version: str | None, r: Runner) -> str:
                    key=lambda p: version_key(p.name), reverse=True)
     for old in older[1:]:
         shutil.rmtree(old, ignore_errors=True)
-    return tag
 
 
 @contextlib.contextmanager
@@ -631,6 +709,9 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("backend", choices=BACKENDS)
     i.add_argument("--version")
     i.add_argument("--dry-run", action="store_true", help="print what would run, change nothing")
+    b = sub.add_parser("build", help="build llama.cpp from 3rdpart/llama.cpp (CUDA when a toolkit is found) and install it")
+    b.add_argument("backend", choices=["llamacpp"])
+    b.add_argument("--dry-run", action="store_true", help="print the cmake commands, run nothing")
     e = sub.add_parser("ensure", help="install every backend that is not installed yet")
     e.add_argument("backends", nargs="*", choices=BACKENDS, default=list(BACKENDS))
     e.add_argument("--dry-run", action="store_true")
@@ -659,6 +740,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if a.cmd == "install":
             install(a.backend, a.version, log, a.dry_run)
+            return 0
+        if a.cmd == "build":
+            with contextlib.nullcontext() if a.dry_run else install_lock():
+                got = build_llamacpp(Runner(log, a.dry_run))
+            log(f"llamacpp {got} ready" + (" (dry run)" if a.dry_run else ""))
             return 0
         wanted = list(dict.fromkeys(a.backends or BACKENDS))
         todo = [b for b in wanted if resolve(b) is None]

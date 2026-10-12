@@ -769,3 +769,100 @@ def test_the_installer_still_parses_as_python_3_10() -> None:
         for i, line in enumerate(src.splitlines(), 1):
             if re.search(r"""f"[^"\n]*\{[^}"\n]*"[^"\n]*"[^}"\n]*\}""", line) or re.search(r"""f'[^'\n]*\{[^}'\n]*'[^'\n]*'[^}'\n]*\}""", line):
                 pytest.fail(f"{rel}:{i} reuses the f-string's own quote inside a replacement field (3.12+ only): {line.strip()[:100]}")
+
+
+# ---------------------------------------------------------------- llama.cpp built from the 3rdpart submodule
+def test_compute_capability_becomes_cmake_architectures() -> None:
+    assert envs.cuda_architectures("8.9\n8.9\n") == "89"
+    assert envs.cuda_architectures("7.5\n8.9\n8.6\n") == "75;86;89"
+    assert envs.cuda_architectures("") is None and envs.cuda_architectures("garbage\n") is None
+
+
+def test_nvcc_is_found_from_the_variable_then_path_then_the_usual_install_dirs(clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert envs.find_nvcc() is None
+    old, new = sh(clean / "cuda/cuda-12.4/bin/nvcc", "true"), sh(clean / "cuda/cuda-13.0/bin/nvcc", "true")
+    monkeypatch.setattr(envs, "CUDA_ROOTS", [str(clean / "cuda/cuda-*")])
+    assert envs.find_nvcc() == new, "the newest toolkit of the usual install dirs"
+    onpath = sh(clean / "emptybin/nvcc", "true")
+    assert envs.find_nvcc() == onpath, "PATH beats the install dirs"
+    monkeypatch.setenv("CUDACXX", str(old))
+    assert envs.find_nvcc() == old, "an explicit CUDACXX beats everything"
+
+
+@pytest.fixture
+def llama_src(clean: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A fake llama.cpp checkout plus a fake `cmake` that records its arguments and produces a working llama-server."""
+    src = clean / "repo/3rdpart/llama.cpp"
+    src.mkdir(parents=True)
+    (src / "CMakeLists.txt").write_text("project(fake)")
+    calls = clean / "cmake.calls"
+    cmake = sh(clean / "toolbin/cmake", f'''echo "$@" >> {calls}
+case "$1" in
+  --build) mkdir -p "$2/bin"; printf '#!/bin/sh\\n[ -n "$FAKE_BUILD_BROKEN" ] && exit 9\\necho "version: 0.6.0-dev (build 11574, commit 8bb3cf0d2)"\\n' > "$2/bin/llama-server"; chmod +x "$2/bin/llama-server" ;;
+  --install) mkdir -p "$4/bin"; cp "$2/bin/llama-server" "$4/bin/llama-server" ;;
+  *) [ -n "$FAKE_CONFIGURE_FAIL" ] && {{ echo "CMake Error: could not find CUDA" >&2; exit 1; }}; mkdir -p "$4" 2>/dev/null; true ;;
+esac''')
+    monkeypatch.setenv("PATH", f"{cmake.parent}:{clean / 'emptybin'}:/bin:/usr/bin")
+    monkeypatch.setattr(envs, "driver_cuda_version", lambda: None)
+    monkeypatch.setattr(envs, "_run_out", lambda cmd, timeout=90: ("8.9\n" if cmd and "nvidia-smi" in str(cmd[0]) else real_run_out(cmd, timeout)))
+    return calls
+
+
+real_run_out = envs._run_out
+
+
+def test_build_from_the_submodule_configures_cuda_for_this_gpu_and_installs_it_as_the_current_release(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sh(clean / "toolbin/nvidia-smi", "true")
+    nvcc = sh(clean / "toolbin/nvcc", "true")
+    monkeypatch.setattr(envs, "CUDA_ROOTS", [])
+    logs: list[str] = []
+    tag = envs.build_llamacpp(envs.Runner(logs.append))
+    assert tag == "b11574", "named by the build number the binary itself reports"
+    configure = [c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c][0]
+    for want in ("-DGGML_CUDA=ON", "-DCMAKE_CUDA_ARCHITECTURES=89", f"-DCMAKE_CUDA_COMPILER={nvcc}", "-DCMAKE_BUILD_TYPE=Release",
+                 "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_OPENSSL=OFF"):
+        assert want in configure, (want, configure)
+    r = envs.resolve("llamacpp")
+    assert r is not None and r.source == "managed" and envs.installed_version("llamacpp", r) == "b11574"
+    assert (clean / "envs/llamacpp/current").readlink() == Path("b11574")
+
+
+def test_build_without_cuda_makes_a_cpu_build_and_says_so(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(envs, "CUDA_ROOTS", [])
+    logs: list[str] = []
+    envs.build_llamacpp(envs.Runner(logs.append))
+    configure = [c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c][0]
+    assert "-DGGML_CUDA=OFF" in configure and "CUDA_ARCHITECTURES" not in configure
+    assert any("no CUDA compiler" in line for line in logs)
+
+
+def test_a_failed_build_leaves_the_working_install_alone(llama_src: Path, clean: Path, github: dict[str, object], monkeypatch: pytest.MonkeyPatch) -> None:
+    sh(clean / "envs/llamacpp/b11500/llama-server", 'echo "version: 0.6.0-dev (build 11500, commit x)"')
+    (clean / "envs/llamacpp/current").symlink_to("b11500")
+    monkeypatch.setattr(envs, "CUDA_ROOTS", [])
+    monkeypatch.setenv("FAKE_CONFIGURE_FAIL", "1")
+    logs: list[str] = []
+    with pytest.raises(RuntimeError, match="command failed"):
+        envs.build_llamacpp(envs.Runner(logs.append))
+    assert any("could not find CUDA" in line for line in logs), "cmake's own error reaches the log"
+    assert (clean / "envs/llamacpp/current").readlink() == Path("b11500")
+
+
+def test_a_build_whose_server_does_not_start_is_not_installed(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(envs, "CUDA_ROOTS", [])
+    monkeypatch.setenv("FAKE_BUILD_BROKEN", "1")
+    with pytest.raises(RuntimeError, match="does not start"):
+        envs.build_llamacpp(envs.Runner(lambda _l: None))
+    assert not (clean / "envs/llamacpp/current").exists()
+
+
+def test_building_without_the_submodule_checked_out_explains_how_to_get_it(clean: Path) -> None:
+    with pytest.raises(RuntimeError, match="git submodule update --init 3rdpart/llama.cpp"):
+        envs.build_llamacpp(envs.Runner(lambda _l: None))
+
+
+def test_build_is_a_cli_command_and_refuses_other_backends(clean: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert envs.main(["build", "llamacpp", "--dry-run"]) == 1  # no checkout in the temp repo
+    assert "git submodule update --init" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        envs.main(["build", "vllm"])
