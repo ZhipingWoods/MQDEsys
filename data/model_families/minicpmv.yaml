@@ -14,15 +14,16 @@ config_paths:
 # 448x448 slice -> 1024 patches -> 16x compression -> 64 tokens (same as the VLA's MiniCPM-V 4.6 stack).
 tokens_per_image: 64
 
-# First matching prefix wins: the vit_merger (inside the vision tower) is listed before the tower.
+# First matching prefix wins: the vit_merger (inside the vision tower) is listed before the tower, which also takes the
+# patch/position embeddings and the post-norm (no block index for those).
 components:
-  - name: vision
-    modality: vision
-    prefix: model.vision_tower.encoder.layers.
-    block_regex: '^(\d+)\.'
   - name: vision_merger
     modality: vision
     prefix: model.vision_tower.vit_merger.
+  - name: vision
+    modality: vision
+    prefix: model.vision_tower.
+    block_regex: 'encoder\.layers\.(\d+)\.'
   - name: merger
     modality: vision
     prefix: model.merger.
