@@ -465,6 +465,17 @@ def test_uv_is_bootstrapped_into_a_private_venv_when_missing(clean: Path, monkey
     assert any("pip install" in line and line.rstrip().endswith("uv") for line in logs)
 
 
+def test_a_second_install_while_one_is_running_is_refused_not_interleaved(clean: Path) -> None:
+    import fcntl
+
+    (clean / "envs").mkdir()
+    with (clean / "envs/.lock").open("w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        with pytest.raises(RuntimeError, match="another install is already running"):
+            envs.install("llamacpp", "b11565", lambda _l: None)
+    envs.install("vllm", "0.31.0", lambda _l: None, dry_run=True)  # a dry run never needs the lock
+
+
 # ---------------------------------------------------------------- CLI
 def test_cli_status_json_and_check(clean: Path, pypi: Fake, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     sh(clean / "envs/vllm/bin/vllm", "true")

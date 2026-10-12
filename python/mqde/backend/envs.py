@@ -32,7 +32,7 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -449,6 +449,20 @@ def install_llamacpp(version: str | None, r: Runner) -> str:
     return tag
 
 
+@contextlib.contextmanager
+def install_lock() -> Iterator[None]:
+    """One install at a time per envs dir (a manual run and the UI button must not interleave two uv runs on one venv)."""
+    import fcntl
+
+    envs_dir().mkdir(parents=True, exist_ok=True)
+    with (envs_dir() / ".lock").open("w") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("another install is already running in this environments directory") from None
+        yield
+
+
 def install(backend: str, version: str | None, log: Log, dry_run: bool = False) -> str:
     if backend not in BACKENDS:
         raise ValueError(f"unknown backend {backend!r}")
@@ -457,7 +471,8 @@ def install(backend: str, version: str | None, log: Log, dry_run: bool = False) 
     if platform.system() == "Windows":
         raise RuntimeError("managed installs support Linux and macOS")
     r = Runner(log, dry_run)
-    got = install_llamacpp(version, r) if backend == "llamacpp" else install_pypi(backend, version, r)
+    with contextlib.nullcontext() if dry_run else install_lock():
+        got = install_llamacpp(version, r) if backend == "llamacpp" else install_pypi(backend, version, r)
     log(f"{backend} {got} ready" + (" (dry run)" if dry_run else ""))
     return got
 
