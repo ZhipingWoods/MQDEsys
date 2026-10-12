@@ -198,6 +198,16 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 
 **下一步**：量化/评估设备拆分（LLM，VLA 因为 CUDA 专用的 synchronize/reset_peak_memory_stats 调用散落在 baseline/eval_fake 里暂缓）；配方高级参数面板；P13 剩余的 T-1306/T-1307/T-1308。
 
+### 2026-10-12（再再再再续） · Claude · LLM 量化/评估设备拆分（quant_device/eval_device）
+
+`schemas/job_spec.schema.json` 里 T-1305 早就占好位的 `quant_device`（顶层）/`evaluation.device` 两个字段，当时写的是"尚未被任何 pipeline 阶段消费"——这次让它们真的生效，而不是继续放着当文档。`HFCausalLM` 加了 `.to(device)`；`llm_job.py` 的 `LLMJobSpec` 加 `quant_device`/`eval_device`（各自 fallback 到 `deploy.device`，不改 YAML 的作业行为不变）；`_run()` 只在两者不同时才移动模型：quantize 在 quant_device 上跑，eval_baseline/eval_fake_*/export 在 eval_device 上跑，每次 `q.restore()` 前先把模型移回 quant_device——因为 restore() 换回的原始 `nn.Linear` 从被摘下模块树那一刻起就没再随 `.to()` 移动过，一直钉在 quant_device，模型不挪回去 restore 后就是两个设备拼出来的半成品。
+
+**mutation 测试过程里抓到自己写的测试不够格**：第一版"两设备能跑完整作业"的用例只给了 1 个配方，手工把"restore 前移回 quant_device"那行注释掉（改成 `if False`）后，这个用例竟然还是绿的——因为只有 1 个配方，restore() 之后再没有第二次前向传播去暴露设备不一致。改成 2 个配方后重新 mutation，第二个配方的 quantize 阶段真的炸了（`RuntimeError: Expected all tensors to be on the same device, but got mat2 is on cpu, different from other tensors on cuda:0`），测试才正确变红——这才证明这个 mutation 真的被测试覆盖住了，不是自我感觉良好。
+
+**验证**：`test_blockwise_llm.py`/`test_llm_job_e2e.py` 新增 5 个用例，在 4090 真实 CUDA 环境里全部真跑（不是 `skipif` 走空），4090 全量 `ctest` 288/288、`pytest python/tests` 337 passed/3 skipped。另外用真实 Qwen2.5-0.5B 跑了一次 CLI 真实作业（`--quant-device cpu --eval-device cuda:0`，非 pytest），PPL delta 5.07%，和这个配方历史上的真实结果同一量级，`report.json` 的 `env` 确认两个设备字段确实分开生效。
+
+**还没做**：`NewJob.tsx` 前端还没有对应的两个设备选择器（现在仍是一个"执行设备"下拉）；VLA 没做（原因同上，CUDA 专用调用散落）；配方高级参数面板仍未做。
+
 ### 2026-10-12（续） · Claude · T-1304 前端本体：用户直接问"前端更新了吗"之后动手做的
 
 用户看了一眼当前站点，发现确实什么都没变，直接问了。之前那条记录里我判断前端重排风险太大想单独放一轮会话，但用户显然希望现在就看到真东西，所以这次就动手做了，没有再犟着"按计划分阶段"。
