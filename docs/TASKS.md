@@ -67,7 +67,7 @@
 | T-0005 | 代码规范与 pre-commit | P0 | T-0002,T-0003,T-0004 | L2 | DONE (2026-09-30, check_all.sh + check_deps.py + clang-format/tidy + ruff/mypy clean + pre-commit) |
 | T-0006 | CI 流水线（PR 门禁） | P0 | T-0005 | L2 | TODO |
 | T-0007 | 契约与 Schema 初版 | P0 | T-0001 | L2 | TODO |
-| T-0008 | 开发指南与 ADR 初始化 | P0 | T-0001 | L2 | TODO |
+| T-0008 | 开发指南与 ADR 初始化 | P0 | T-0001 | L2 | PARTIAL (2026-10-13, `scripts/dev_setup.sh` + `docs/guides/dev-setup.md`；`--check` 在干净环境验证过，从零建环境未在干净容器里跑（conda-forge 从 4090 不可达）。ADR 0001–0005 的编号已被别的决策占用，任务书里的那份清单作废，未做) |
 | T-0101 | common：错误、Result、日志 | P1 | T-0002 | L2 | DONE (2026-09-24) |
 | T-0102 | common：配置加载与 Schema 校验 | P1 | T-0101,T-0007 | L2 | DONE (2026-09-24) |
 | T-0103 | common：注册表、哈希、线程池 | P1 | T-0101 | L2 | PARTIAL (2026-10-09, Registry<Base> + MQDE_REGISTER / MQDE_REGISTER_NAMED + MQDE_FORCE_LINK (verified against a real static-library drop case: tests/registry_probe), content_hash (streaming SHA-256, checked against sha256sum/shasum and standard vectors), ThreadPool + CancelToken. ctest -R common_registry / common_hash / common_thread_pool / common_cancel, 4 mutations caught. hub/hf.cpp now uses the shared SHA-256 instead of its own copy. 2026-10-10: ThreadPool + CancelToken are now actually used by `hub::download_file_chunked` (see T-0505). Not done: content_hash has no CLI exposure) |
