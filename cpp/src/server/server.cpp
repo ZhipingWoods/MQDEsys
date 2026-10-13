@@ -1230,6 +1230,12 @@ Result<void> serve(const ServerOptions& o) {
           jy.value("/deploy/device"_json_pointer,
                    rep.is_object() ? rep.value("/spec/device"_json_pointer, std::string()) : std::string());
       if (rep.is_object()) {
+        // the measured device (report env), so the list can say "RTX 4090" after a restart lost the pool slot
+        for (const char* k : {"/env/device_name", "/env/eval_device_name", "/env/quant_device_name"})
+          if (const auto v = rep.value(Json::json_pointer(k), std::string()); !v.empty() && v != "cpu") {
+            j["device_name"] = v;
+            break;
+          }
         j["name"] = rep.value("/spec/name"_json_pointer, id);
         j["recipes"] = rep.value("/spec/recipes"_json_pointer, Json::array());
         j["model"] = rep.value("/spec/model_path"_json_pointer, "");

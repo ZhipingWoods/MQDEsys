@@ -71,9 +71,9 @@ try {
   await page.goto(`${base}/compare`, { waitUntil: 'load' });
   await page.getByTestId('hardware-compare').waitFor({ timeout: 10000 });
   check('appears once the same recipe has 2 distinct hardwares', true);
-  const rowCpu = await page.getByTestId('hw-compare-row-W4A16-cpu').innerText();
+  const rowCpu = await page.getByTestId('hw-compare-row-W4A16-CPU').innerText();
   const rowGpu = await page.getByTestId(`hw-compare-row-W4A16-NVIDIA GeForce RTX 4090`).innerText();
-  check('cpu row is labelled cpu', rowCpu.includes('cpu'), rowCpu.replace(/\s+/g, ' '));
+  check('cpu row is labelled CPU (the torch device string is not a hardware name)', rowCpu.includes('CPU'), rowCpu.replace(/\s+/g, ' '));
   check('gpu row is labelled with the real device name', rowGpu.includes('NVIDIA GeForce RTX 4090'), rowGpu.replace(/\s+/g, ' '));
   check('PPL is the same (error is hardware-independent for the same fake-quant run)', rowCpu.match(/[\d.]+$/)?.[0] === rowGpu.match(/[\d.]+$/)?.[0], `${rowCpu} vs ${rowGpu}`);
   check('quantize seconds differ (throughput IS hardware-dependent)', !rowCpu.includes(onGpu.stages.find((s) => s.stage === 'quantize').seconds.toFixed(2)));

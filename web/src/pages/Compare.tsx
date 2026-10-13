@@ -41,6 +41,13 @@ export default function ComparePage() {
   );
 }
 
+/** The measured device name; older reports only have the torch device string, which is not a hardware name. */
+function hwLabel(r: LLMJobReport): string {
+  if (r.env?.eval_device_name) return r.env.eval_device_name;
+  const d = r.env?.eval_device || r.spec?.device || "";
+  return d === "cpu" ? "CPU" : /^cuda/.test(d) ? "GPU（型号未记录）" : d || "unknown";
+}
+
 function VLMCompare({ reps }: { reps: VLMJobReport[] }) {
   const rows = reps.flatMap((r) => Object.values(r.recipes ?? {}).filter((x) => x.summary.kl != null).map((x) => ({ job: r.job_id, name: r.spec?.name, x })));
   if (rows.length === 0) return <p className="muted">暂无带评测结果的 VLM 作业</p>;
@@ -125,7 +132,7 @@ function LLMCompare({ reps }: { reps: LLMJobReport[] }) {
         Object.values(r.recipes ?? {}).map((rr) => ({
           job: r.job_id,
           recipe: rr.recipe,
-          hw: r.env?.eval_device_name || r.env?.eval_device || r.spec?.device || "unknown",
+          hw: hwLabel(r),
           quantizeSeconds: stageSeconds(r, "quantize"),
           evalSeconds: stageSeconds(r, "eval_fake_wo_kv"),
           ppl: rr.eval.fake_quant_wo_kv.ppl,

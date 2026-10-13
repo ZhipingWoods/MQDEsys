@@ -1006,3 +1006,20 @@ def test_the_same_compiler_keeps_the_build_directory_for_an_incremental_rebuild(
     monkeypatch.setattr(envs, "find_host_compiler", lambda: ("/opt/gcc12/cc", "/opt/gcc12/c++"))
     envs.build_llamacpp(envs.Runner(lambda _l: None))
     assert (work / "kept.o").exists()
+
+
+def test_a_source_build_is_reported_as_such_and_updating_it_rebuilds_instead_of_downloading(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The UI's update button must never replace a CUDA source build with the CPU release (the only official build
+    this host can run)."""
+    monkeypatch.setattr(envs, "CUDA_ROOTS", [])
+    monkeypatch.setattr(envs, "find_host_compiler", lambda: None)
+    tag = envs.build_llamacpp(envs.Runner(lambda _m: None))
+    st = {s["id"]: s for s in envs.status()}
+    assert st["llamacpp"]["source_build"] is True and st["vllm"]["source_build"] is False
+    monkeypatch.setattr(envs, "llamacpp_releases", lambda: pytest.fail("a source build must not be replaced by a release download"))
+    logs: list[str] = []
+    assert envs.install_llamacpp(None, envs.Runner(logs.append)) == tag
+    assert any("rebuilding from source" in m for m in logs)
+    assert sum("-DGGML_CUDA" in c for c in llama_src.read_text().splitlines()) == 2, "configured twice: the rebuild really ran"
+    (clean / "envs/llamacpp" / tag / envs.SOURCE_BUILD_MARKER).unlink()
+    assert {s["id"]: s for s in envs.status()}["llamacpp"]["source_build"] is False, "the marker file is what says so"

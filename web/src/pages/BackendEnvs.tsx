@@ -13,6 +13,9 @@ export function actionFor(e: BackendEnv): { label: string; disabled: boolean; ve
   // An MQDE_*_BIN variable outranks the managed environment: an install would succeed and then never be used.
   if (e.source === "env")
     return { label: "由环境变量指定", disabled: true, hint: "该后端由 MQDE_VLLM_BIN / MQDE_SGLANG_PYTHON / MQDE_LLAMA_SERVER_BIN 指定，优先级高于托管环境，在这里更新不会生效。取消该环境变量后重启服务即可使用本页的安装与更新。" };
+  if (e.source_build)
+    return { label: `重新构建（源码 ${fmtVersion(e.version ?? "")}）`, disabled: false,
+      hint: "当前 llama.cpp 是从 3rdpart/llama.cpp 源码构建的（官方 CUDA 发行包在本机的 glibc 上不能运行）。这里不会用发行包覆盖它；点击按子模块当前版本重新构建。" };
   if (e.check_error) return { label: "无法检查更新", disabled: true };
   if (!e.latest) return { label: e.installed ? "检查更新中…" : "安装", disabled: !e.installed ? false : true };
   if (!e.installed) return { label: `安装 ${fmtVersion(e.latest)}`, disabled: false, version: e.latest };
@@ -108,9 +111,9 @@ export default function BackendEnvsCard() {
                 <td className="mono" data-testid={`backend-env-version-${e.id}`} title={e.path ?? ""}>
                   {e.installed ? (e.version ? fmtVersion(e.version) : "未知") : <span className="muted">未安装</span>}
                 </td>
-                <td className="small muted">{e.source ? SOURCE[e.source] : "—"}</td>
-                <td className="mono" data-testid={`backend-env-latest-${e.id}`} title={e.check_error ?? ""}>
-                  {e.latest ? fmtVersion(e.latest) : e.check_error ? <span className="muted">无法获取</span> : "…"}
+                <td className="small muted">{e.source_build ? "源码构建（3rdpart/llama.cpp）" : e.source ? SOURCE[e.source] : "—"}</td>
+                <td className="mono" data-testid={`backend-env-latest-${e.id}`} title={e.source_build ? "源码构建的版本随子模块走，不跟官方发行包比较" : e.check_error ?? ""}>
+                  {e.source_build ? <span className="muted">随子模块</span> : e.latest ? fmtVersion(e.latest) : e.check_error ? <span className="muted">无法获取</span> : "…"}
                 </td>
                 <td>
                   <button disabled={a.disabled || busy} title={a.hint} onClick={() => start(e, a.version)} data-testid={`backend-env-action-${e.id}`}>

@@ -35,7 +35,8 @@ export function ordered(rep: LLMJobReport): LLMRecipeReport[] {
 export function LLMReportView({ rep, job, jobId }: { rep: LLMJobReport; job?: Record<string, unknown>; jobId?: string }) {
   const rs = ordered(rep);
   const [params, setParams] = useSearchParams();
-  const tab = params.get("tab") ?? "overview";
+  const want = params.get("tab") ?? "overview";
+  const tab = rs.some((r) => r.recipe === want) ? want : "overview"; // a stale ?tab= must not leave the page blank
   const setTab = (t: string) => setParams(t === "overview" ? {} : { tab: t }, { replace: true });
   const b = rep.baseline;
   const cur = rs.find((r) => r.recipe === tab);

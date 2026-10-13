@@ -289,3 +289,7 @@ table.matrix td.cell.light { color: #0b0b0b; }
 
 /* 作业派生：向导里被定位到的那一步 */
 .derive-focus { outline: 2px solid var(--accent, #4f7cff); outline-offset: 2px; }
+
+/* 模型目录：类别 / 系列分组行 */
+.group-head td { background: var(--accent-dim); padding-top: 10px; padding-bottom: 10px; }
+.group-sub td { background: rgba(255, 255, 255, 0.025); padding-top: 6px; padding-bottom: 6px; }

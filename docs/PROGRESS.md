@@ -180,6 +180,13 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-13（再续） · Claude · 部署建议 / 作业派生（B1+B2）/ 前端巡检
+
+- **状态**：三项均 DONE 并推送；详见 TASKS "部署建议"、"作业派生 B1/B2"、"前端巡检"条目。
+- **真机**：4090 ctest 333/333、pytest 549 通过（含 deploy_job 14 例）；`/recommend` 对 Qwen2.5-0.5B 用实测 PPL 排序（FP8 +1.3% 排前，W4A8 +21% 标高风险垫底），对 MiniCPM-V-4.6 用实测 Top-1。
+- **用户待办**：生产服务（18080）仍是旧二进制，提交 VLM 作业会报 `'vlm' is not 'vla' or 'llm'`，重启脚本 `/tmp/restart_mqde.sh` 已备好（我重启被权限拒绝）；重启后 llama.cpp 行会显示"重新构建（源码 b11574）"而不是"更新到 b11580"。
+- **L2 待评审**：`schemas/job_spec.schema.json`（vlm、max_new_tokens）；`data/compat/matrix.yaml` sglang 条目；估算器 sglang `BackendProfile`。
+
 ### 2026-10-13（续） · Claude · T-R10 动态量化（VLM）+ 前端检查规则
 
 - **规则（用户 2026-10-13 强制）**：每个任务完成后检查前端是否更新、能否正常控制；已写入记忆。按此规则检查 VLM 工作时发现 4090 生产服务（18080）跑的是旧前端和旧二进制：已重建 `web/dist`（生产立即生效），**重启二进制被权限拒绝，待用户决定**（无运行中作业）；并修了"优化建议"页把 VLM 当 VLA 的 bug。

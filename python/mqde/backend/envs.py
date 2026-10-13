@@ -202,6 +202,20 @@ def installed_version(backend: str, r: Resolved) -> str | None:
     return None
 
 
+SOURCE_BUILD_MARKER = ".source-build"  # written by build_llamacpp into the release dir it installs
+
+
+def is_source_build(r: Resolved | None) -> bool:
+    """A managed llama.cpp release that build_llamacpp produced (vs. a downloaded official build)."""
+    if r is None or r.source != "managed":
+        return False
+    root = envs_dir() / "llamacpp"
+    p = Path(r.path)
+    while p.parent != root and p != p.parent:
+        p = p.parent
+    return p.parent == root and (p / SOURCE_BUILD_MARKER).is_file()
+
+
 def status() -> list[dict[str, Any]]:
     out = []
     for b in BACKENDS:
@@ -209,7 +223,7 @@ def status() -> list[dict[str, Any]]:
         managed = bool(r and r.source == "managed")
         out.append({"id": b, "installed": r is not None, "version": installed_version(b, r) if r else None,
                     "path": str(r.path) if r else None, "source": r.source if r else None, "managed": managed,
-                    "envs_dir": str(envs_dir())})
+                    "envs_dir": str(envs_dir()), "source_build": is_source_build(r)})
     return out
 
 
@@ -538,6 +552,11 @@ def _start_output(binary: Path) -> str:
 
 
 def install_llamacpp(version: str | None, r: Runner) -> str:
+    if is_source_build(resolve("llamacpp")):
+        # the official CUDA release does not run on this host (that is why it was built from source): an "update" that
+        # replaced it with the CPU release would be a downgrade -- rebuild the submodule instead
+        r.log("the installed llama.cpp was built from 3rdpart/llama.cpp: rebuilding from source rather than replacing it with a release build")
+        return build_llamacpp(r)
     rels = llamacpp_releases()
     if version:
         rel = next((x for x in rels if x["tag_name"] == version), None)
@@ -711,6 +730,7 @@ def build_llamacpp(r: Runner) -> str:
         dest = root / tag
         shutil.rmtree(dest, ignore_errors=True)
         (stage / "x").rename(dest)
+        (dest / SOURCE_BUILD_MARKER).write_text((_run_out(["git", "-C", str(src), "rev-parse", "HEAD"], 10) or "") + "\n")
     finally:
         shutil.rmtree(stage, ignore_errors=True)
     _switch_current_and_prune(root, tag)

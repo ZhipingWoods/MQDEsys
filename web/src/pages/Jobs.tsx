@@ -59,7 +59,7 @@ export default function JobsPage() {
                 </td>
                 <td>{j.stage ?? "–"}</td>
                 <td className="small">{(j.recipes ?? []).join(", ")}</td>
-                <td className="num">{j.device === "cpu" ? "CPU" : j.gpu != null && j.gpu >= 0 ? `GPU ${j.gpu}` : "–"}</td>
+                <td className="num" title={j.device_name}>{j.device === "cpu" ? "CPU" : j.gpu != null && j.gpu >= 0 ? `GPU ${j.gpu}` : j.device_name ? shortDevice(j.device_name) : "GPU"}</td>
                 <td className="num">{j.started_ts && j.last_ts ? `${Math.round(j.last_ts - j.started_ts)} s` : "–"}</td>
               </tr>
             ))}
@@ -76,3 +76,6 @@ export default function JobsPage() {
     </>
   );
 }
+
+/** "NVIDIA GeForce RTX 4090" -> "RTX 4090": the column is narrow and every GPU here is NVIDIA. */
+const shortDevice = (n: string) => n.replace(/^NVIDIA\s+/, "").replace(/^GeForce\s+/, "");

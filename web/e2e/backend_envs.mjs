@@ -148,6 +148,22 @@ try {
   check('rejected requests ran nothing', calls().filter((c) => c.startsWith('install')).length === 2, JSON.stringify(calls().filter((c) => c.startsWith('install'))));
   check('an unknown install id is 404', (await fetch(`${base}/api/v1/backend-envs/install/deadbeef`)).status === 404);
 
+  // ---- 6. a llama.cpp built from 3rdpart/llama.cpp (the official CUDA build does not run on the dev host) ----
+  const srcState = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  Object.assign(srcState.rows.find((r) => r.id === 'llamacpp'), { installed: true, version: 'b11574', source: 'managed', managed: true, source_build: true });
+  writeState(srcState);
+  await page.getByTestId('backend-env-check').click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="backend-env-action-llamacpp"]')?.textContent?.startsWith('重新构建'), null, { timeout: 15000 });
+  check('a source build offers a rebuild, not "更新到 bNNNN" (which would install the CPU release over it)', (await txt('backend-env-action-llamacpp')) === '重新构建（源码 b11574）', await txt('backend-env-action-llamacpp'));
+  check('its "latest" is the submodule, not the newest release', (await txt('backend-env-latest-llamacpp')) === '随子模块');
+  check('the source column says so', (await page.getByTestId('backend-env-llamacpp').innerText()).includes('源码构建'));
+  const before = calls().length;
+  await page.getByTestId('backend-env-action-llamacpp').click();
+  await page.waitForFunction((n) => true, before, { timeout: 1000 });
+  await page.waitForTimeout(800);
+  const last = calls().slice(before).find((c) => c.startsWith('install'));
+  check('clicking it runs install without pinning a release version (the script then rebuilds from source)', last === 'install llamacpp', JSON.stringify(calls().slice(before)));
+
   check('no page errors the whole run', errors.length === 0, errors.slice(0, 2).join(' | '));
 } catch (e) {
   failed = true;

@@ -92,7 +92,7 @@ export default function JobPage() {
         作业 <span className="mono">{id}</span> <StateBadge state={state} />
       </h1>
       <p className="subtitle">
-        {rep?.spec?.name ?? ""} · {rep?.spec?.model_path ?? ""} · {job?.deploy?.device === "cpu" ? "CPU" : `GPU ${detail?.gpu ?? "–"}`} {live && <span className="status running">实时</span>}
+        {rep?.spec?.name ?? ""} · {rep?.spec?.model_path ?? ""} · {job?.deploy?.device === "cpu" ? "CPU" : detail?.gpu != null && detail.gpu >= 0 ? `GPU ${detail.gpu}` : deviceName(rep) ?? "GPU"} {live && <span className="status running">实时</span>}
         {state === "RUNNING" && (
           <button className="secondary" style={{ marginLeft: 12 }} onClick={() => api.cancel(id)}>
             取消
@@ -194,7 +194,8 @@ function ReportView({ rep, jobId }: { rep: JobReport; jobId?: string }) {
   // the server re-serializes JSON with sorted keys; restore the job's recipe order
   const names = orderedRecipes(rep);
   const [params, setParams] = useSearchParams();
-  const tab = params.get("tab") ?? "overview";
+  const want = params.get("tab") ?? "overview";
+  const tab = names.includes(want) ? want : "overview"; // a stale ?tab= (other job's recipe) must not leave the page blank
   const setTab = (t: string) => setParams(t === "overview" ? {} : { tab: t }, { replace: true });
   const b = rep.baseline;
   return (
@@ -385,3 +386,13 @@ export function VLARecipeErrorAnalysis({ r, rep }: { r: RecipeReport; rep: JobRe
 }
 
 export { barItem };
+
+/** The device the report says it ran on (env.device_name for vlm/deploy jobs, the eval/quant device names for llm). */
+function deviceName(rep: unknown): string | undefined {
+  const env = (rep as { env?: Record<string, unknown> } | null)?.env;
+  for (const k of ["device_name", "eval_device_name", "quant_device_name"]) {
+    const v = env?.[k];
+    if (typeof v === "string" && v && v !== "cpu") return v;
+  }
+  return undefined;
+}

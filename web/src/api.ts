@@ -148,6 +148,7 @@ export interface JobListItem {
   gpu?: number;
   kind?: "vla" | "llm" | "vlm" | "llm_deploy";
   device?: string;
+  device_name?: string; // measured device from the report (GPU index is unknown after a server restart)
   started_ts?: number;
   last_ts?: number;
   n_events: number;
@@ -542,6 +543,7 @@ export interface BackendEnv {
   latest?: string | null; // present once the newest version has been looked up
   update_available?: boolean;
   check_error?: string;
+  source_build?: boolean; // llama.cpp built from 3rdpart/llama.cpp (never to be replaced by a release download)
 }
 export interface BackendInstall {
   id: string;
