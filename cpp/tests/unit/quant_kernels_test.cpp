@@ -165,6 +165,58 @@ TEST(quant_kernels, qdq_matches_scalar_bit_for_bit_and_in_place) {
       }
 }
 
+std::vector<float> finite_awkward(size_t n, unsigned seed) {
+  auto v = awkward(n, seed);
+  for (auto& x : v)
+    if (!std::isfinite(x))
+      x = (x > 0 ? 1.0f : -1.0f) * 1.0e6f;  // far outside every range: clamps, stays finite
+  return v;
+}
+
+TEST(quant_kernels, quantize_matches_scalar_codes_and_stays_in_range) {
+  for (const k::Set* s : simd_sets())
+    for (const auto& p : params())
+      for (size_t n : kLengths) {
+        const auto x = finite_awkward(n, 21);
+        std::vector<int16_t> a(n), b(n);
+        k::scalar().quantize(x.data(), static_cast<int64_t>(n), p, a.data());
+        s->quantize(x.data(), static_cast<int64_t>(n), p, b.data());
+        for (size_t i = 0; i < n; ++i) {
+          ASSERT_EQ(a[i], b[i]) << s->name << " i=" << i << " x=" << x[i] << " scale=" << p.scale;
+          ASSERT_GE(b[i], static_cast<int16_t>(p.qmin));
+          ASSERT_LE(b[i], static_cast<int16_t>(p.qmax));
+        }
+      }
+}
+
+TEST(quant_kernels, dequantize_matches_scalar_bit_for_bit_over_the_whole_code_range) {
+  for (const k::Set* s : simd_sets())
+    for (const auto& p : params())
+      for (size_t n : kLengths) {
+        std::vector<int16_t> codes(n);
+        for (size_t i = 0; i < n; ++i)
+          codes[i] = static_cast<int16_t>(static_cast<int>(p.qmin) + static_cast<int>(i * 7 % 300));
+        std::vector<float> a(n), b(n);
+        k::scalar().dequantize(codes.data(), static_cast<int64_t>(n), p, a.data());
+        s->dequantize(codes.data(), static_cast<int64_t>(n), p, b.data());
+        for (size_t i = 0; i < n; ++i)
+          ASSERT_TRUE(same(a[i], b[i])) << s->name << " i=" << i << " code=" << codes[i];
+      }
+}
+
+TEST(quant_kernels, quantize_then_dequantize_equals_qdq_under_every_set) {
+  for (const k::Set* s : k::available())
+    for (const auto& p : params()) {
+      const auto x = finite_awkward(129, 4);
+      std::vector<int16_t> codes(x.size());
+      std::vector<float> a(x.size()), b(x.size());
+      s->quantize(x.data(), 129, p, codes.data());
+      s->dequantize(codes.data(), 129, p, a.data());
+      s->qdq(x.data(), 129, p, b.data());
+      for (size_t i = 0; i < x.size(); ++i) ASSERT_TRUE(same(a[i], b[i])) << s->name << " i=" << i;
+    }
+}
+
 TEST(quant_kernels, ties_round_to_even_like_the_scalar) {
   for (const k::Set* s : simd_sets()) {
     const std::vector<float> x{0.5f, 1.5f,        2.5f, 3.5f,  -0.5f, -1.5f, -2.5f, 6.5f,
@@ -228,6 +280,36 @@ TEST(quant_kernels, compute_qparams_and_fake_quant_are_identical_under_every_set
       for (size_t i = 0; i < w.size(); ++i)
         ASSERT_TRUE(same(o0[i], o1[i])) << s->name << " " << describe(sp) << " out " << i;
     }
+}
+
+TEST(quant_kernels, quantize_int_and_dequantize_int_are_identical_under_every_set) {
+  const int64_t rows = 19, cols = 192;
+  std::mt19937 rng(8);
+  std::normal_distribution<float> d(0.0f, 0.03f);
+  std::vector<float> w(static_cast<size_t>(rows * cols));
+  for (auto& v : w) v = d(rng);
+  for (const auto& sp : {spec(4, false, Granularity::kPerGroup, 64, CalibAlgo::kMse),
+                         spec(8, true, Granularity::kPerChannel, 0, CalibAlgo::kMinMax),
+                         spec(2, false, Granularity::kPerTensor, 0, CalibAlgo::kMinMax)}) {
+    k::force(&k::scalar());
+    auto qp = compute_qparams(w.data(), rows, cols, sp);
+    ASSERT_TRUE(qp);
+    std::vector<int16_t> c0(w.size());
+    std::vector<float> d0(w.size());
+    ASSERT_TRUE(quantize_int(w.data(), rows, cols, sp, *qp, c0.data()));
+    ASSERT_TRUE(dequantize_int(c0.data(), rows, cols, sp, *qp, d0.data()));
+    for (const k::Set* s : simd_sets()) {
+      k::force(s);
+      std::vector<int16_t> c1(w.size());
+      std::vector<float> d1(w.size());
+      ASSERT_TRUE(quantize_int(w.data(), rows, cols, sp, *qp, c1.data()));
+      ASSERT_TRUE(dequantize_int(c1.data(), rows, cols, sp, *qp, d1.data()));
+      EXPECT_EQ(c0, c1) << s->name << " " << describe(sp);
+      for (size_t i = 0; i < w.size(); ++i)
+        ASSERT_TRUE(same(d0[i], d1[i])) << s->name << " " << describe(sp) << " i=" << i;
+    }
+    k::force(nullptr);
+  }
 }
 
 TEST(quant_kernels, fp8_is_untouched_by_the_choice_of_set) {

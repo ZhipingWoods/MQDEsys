@@ -199,15 +199,15 @@ Result<void> quantize_int(const float* x, int64_t rows, int64_t cols, const Quan
   if (s.fmt != NumFormat::kInt)
     return make_error(Errc::kUnsupported, "quantize_int requires an integer format");
   if (auto ok = check_shape(rows, cols, s); !ok) return std::unexpected(ok.error());
-  const float qmin = static_cast<float>(s.qmin()), qmax = static_cast<float>(s.qmax());
+  const kernels::Set& k = kernels::active();
   for_each_group(x, rows, cols, s, qp, [&](int64_t gi, const GroupView& g, int64_t r0, int64_t c0) {
-    const float scale = qp.scale[static_cast<size_t>(gi)];
-    const float zero = qp.zero.empty() ? 0.0f : qp.zero[static_cast<size_t>(gi)];
-    for (int64_t r = 0; r < g.n_rows; ++r)
-      for (int64_t c = 0; c < g.n_cols; ++c) {
-        const int64_t idx = (r0 + r) * cols + c0 + c;
-        codes[idx] = static_cast<int16_t>(std::clamp(rne(x[idx] / scale) + zero, qmin, qmax));
-      }
+    const GroupParams p{qp.scale[static_cast<size_t>(gi)],
+                        qp.zero.empty() ? 0.0f : qp.zero[static_cast<size_t>(gi)]};
+    const kernels::IntQdq q = int_qdq(p, s);
+    for (int64_t r = 0; r < g.n_rows; ++r) {
+      const int64_t idx = (r0 + r) * cols + c0;
+      k.quantize(x + idx, g.n_cols, q, codes + idx);
+    }
   });
   return {};
 }
@@ -218,14 +218,15 @@ Result<void> dequantize_int(const int16_t* codes, int64_t rows, int64_t cols, co
     return make_error(Errc::kUnsupported, "dequantize_int requires an integer format");
   if (auto ok = check_shape(rows, cols, s); !ok) return std::unexpected(ok.error());
   // Group iteration only needs geometry; pass `out` as a dummy source pointer.
+  const kernels::Set& k = kernels::active();
   for_each_group(out, rows, cols, s, qp, [&](int64_t gi, const GroupView& g, int64_t r0, int64_t c0) {
-    const float scale = qp.scale[static_cast<size_t>(gi)];
-    const float zero = qp.zero.empty() ? 0.0f : qp.zero[static_cast<size_t>(gi)];
-    for (int64_t r = 0; r < g.n_rows; ++r)
-      for (int64_t c = 0; c < g.n_cols; ++c) {
-        const int64_t idx = (r0 + r) * cols + c0 + c;
-        out[idx] = (static_cast<float>(codes[idx]) - zero) * scale;
-      }
+    const GroupParams p{qp.scale[static_cast<size_t>(gi)],
+                        qp.zero.empty() ? 0.0f : qp.zero[static_cast<size_t>(gi)]};
+    const kernels::IntQdq q = int_qdq(p, s);
+    for (int64_t r = 0; r < g.n_rows; ++r) {
+      const int64_t idx = (r0 + r) * cols + c0;
+      k.dequantize(codes + idx, g.n_cols, q, out + idx);
+    }
   });
   return {};
 }

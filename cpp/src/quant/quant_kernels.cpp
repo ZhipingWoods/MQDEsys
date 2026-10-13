@@ -45,7 +45,16 @@ void qdq_scalar(const float* x, int64_t n, const IntQdq& p, float* out) {
   for (int64_t i = 0; i < n; ++i) out[i] = qdq1(x[i], p);
 }
 
-const Set kScalar{"scalar", minmax_scalar, sq_err_scalar, qdq_scalar};
+void quantize_scalar(const float* x, int64_t n, const IntQdq& p, int16_t* codes) {
+  for (int64_t i = 0; i < n; ++i)
+    codes[i] = static_cast<int16_t>(std::clamp(std::nearbyint(x[i] / p.scale) + p.zero, p.qmin, p.qmax));
+}
+
+void dequantize_scalar(const int16_t* codes, int64_t n, const IntQdq& p, float* out) {
+  for (int64_t i = 0; i < n; ++i) out[i] = (static_cast<float>(codes[i]) - p.zero) * p.scale;
+}
+
+const Set kScalar{"scalar", minmax_scalar, sq_err_scalar, qdq_scalar, quantize_scalar, dequantize_scalar};
 
 #ifdef MQDE_KERNELS_AVX2
 // ---------------------------------------------------------------- AVX2 (8 floats)
@@ -119,7 +128,38 @@ AVX2 void qdq_avx2(const float* x, int64_t n, const IntQdq& p, float* out) {
   for (; i < n; ++i) out[i] = qdq1(x[i], p);
 }
 
-const Set kAvx2{"avx2", minmax_avx2, sq_err_avx2, qdq_avx2};
+// the clamped value is integral and within [qmin, qmax] (at most 8 bits), so the truncating conversion is
+// exact
+AVX2 void quantize_avx2(const float* x, int64_t n, const IntQdq& p, int16_t* codes) {
+  const __m256 sc = _mm256_set1_ps(p.scale), ze = _mm256_set1_ps(p.zero), qn = _mm256_set1_ps(p.qmin),
+               qx = _mm256_set1_ps(p.qmax);
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    __m256 q = _mm256_div_ps(_mm256_loadu_ps(x + i), sc);
+    q = _mm256_round_ps(q, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+    q = _mm256_add_ps(q, ze);
+    q = _mm256_blendv_ps(q, qn, _mm256_cmp_ps(q, qn, _CMP_LT_OQ));
+    q = _mm256_blendv_ps(q, qx, _mm256_cmp_ps(qx, q, _CMP_LT_OQ));
+    const __m256i i32 = _mm256_cvttps_epi32(q);
+    // packs works within 128-bit lanes: lanes 0,1 | 2,3 of the 64-bit view hold the eight values in order
+    // after a permute
+    const __m256i packed = _mm256_permute4x64_epi64(_mm256_packs_epi32(i32, i32), 0xD8);
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(codes + i), _mm256_castsi256_si128(packed));
+  }
+  quantize_scalar(x + i, n - i, p, codes + i);
+}
+
+AVX2 void dequantize_avx2(const int16_t* codes, int64_t n, const IntQdq& p, float* out) {
+  const __m256 sc = _mm256_set1_ps(p.scale), ze = _mm256_set1_ps(p.zero);
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    const __m256i c16 = _mm256_cvtepi16_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(codes + i)));
+    _mm256_storeu_ps(out + i, _mm256_mul_ps(_mm256_sub_ps(_mm256_cvtepi32_ps(c16), ze), sc));
+  }
+  dequantize_scalar(codes + i, n - i, p, out + i);
+}
+
+const Set kAvx2{"avx2", minmax_avx2, sq_err_avx2, qdq_avx2, quantize_avx2, dequantize_avx2};
 bool avx2_runnable() { return __builtin_cpu_supports("avx2"); }
 #endif
 
@@ -189,7 +229,29 @@ void qdq_neon(const float* x, int64_t n, const IntQdq& p, float* out) {
   for (; i < n; ++i) out[i] = qdq1(x[i], p);
 }
 
-const Set kNeon{"neon", minmax_neon, sq_err_neon, qdq_neon};
+void quantize_neon(const float* x, int64_t n, const IntQdq& p, int16_t* codes) {
+  const float32x4_t sc = vdupq_n_f32(p.scale), ze = vdupq_n_f32(p.zero), qn = vdupq_n_f32(p.qmin),
+                    qx = vdupq_n_f32(p.qmax);
+  int64_t i = 0;
+  for (; i + 4 <= n; i += 4) {
+    float32x4_t q = vrndnq_f32(vdivq_f32(vld1q_f32(x + i), sc));
+    q = vaddq_f32(q, ze);
+    q = vbslq_f32(vcltq_f32(q, qn), qn, q);
+    q = vbslq_f32(vcltq_f32(qx, q), qx, q);
+    vst1_s16(codes + i, vmovn_s32(vcvtq_s32_f32(q)));
+  }
+  quantize_scalar(x + i, n - i, p, codes + i);
+}
+
+void dequantize_neon(const int16_t* codes, int64_t n, const IntQdq& p, float* out) {
+  const float32x4_t sc = vdupq_n_f32(p.scale), ze = vdupq_n_f32(p.zero);
+  int64_t i = 0;
+  for (; i + 4 <= n; i += 4)
+    vst1q_f32(out + i, vmulq_f32(vsubq_f32(vcvtq_f32_s32(vmovl_s16(vld1_s16(codes + i))), ze), sc));
+  dequantize_scalar(codes + i, n - i, p, out + i);
+}
+
+const Set kNeon{"neon", minmax_neon, sq_err_neon, qdq_neon, quantize_neon, dequantize_neon};
 #endif
 
 std::atomic<const Set*> g_forced{nullptr};

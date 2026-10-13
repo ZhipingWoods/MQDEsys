@@ -27,6 +27,10 @@ struct Set {
   // acc + sum over i of (double(qdq(x[i])) - x[i])^2, added in index order.
   double (*sq_err)(const float* x, int64_t n, const IntQdq& p, double acc);
   void (*qdq)(const float* x, int64_t n, const IntQdq& p, float* out);  // `out` may alias `x`
+  // codes[i] = clamp(rne(x[i] / scale) + zero, qmin, qmax). Finite input only: converting a NaN to int16 has
+  // no defined value.
+  void (*quantize)(const float* x, int64_t n, const IntQdq& p, int16_t* codes);
+  void (*dequantize)(const int16_t* codes, int64_t n, const IntQdq& p, float* out);  // (code - zero) * scale
 };
 
 const Set& scalar();
