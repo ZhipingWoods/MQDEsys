@@ -112,6 +112,15 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 ---
 
 
+### 2026-10-13 · T-0406 量化内核 SIMD（AVX2 / NEON）+ T-R13 Compare 页性能对比
+- **状态**：T-0406 PARTIAL；T-R13 Compare 页卡片已提交 `5f056c2`
+- **本次完成**：整数量化的 min/max、MSE 误差、qdq 三个内层循环做成运行时分派（scalar / AVX2 / NEON），与 scalar 逐位一致；4090 上 4096×4096 MSE 标定 1.34 s → 0.42 s。Compare 页新增“服务吞吐 vs 并发”卡片，真机 vLLM + SGLang 数据验证，并因此修了“未饱和”被显示成 16 的错误。
+- **校验**：ctest 358（Mac）/ 354（4090）全过；pytest golden/quant 96 过（经 `_core`，AVX2 生效）；变异 AVX2 13/13、NEON 10/12（2 个等价）；`web/e2e/perf_compare.mjs` 8/8，9 个变异全部抓到。
+- **踩坑**：变异脚本恢复源码后，文件 mtime 比被改过的目标文件旧，ninja 不重编，之后的 ctest 跑的是变异二进制（看起来像回归）；恢复后必须 `touch` 再编。
+- **未完成**：T-0406 的 CUDA / AVX-512 / pack 的 SIMD（见任务书）。
+- **需要人工决策**：`cpp/CMakeLists.txt` 的改动（L2）。
+- **前端**：T-0406 是数值内核，无界面；T-R13 的卡片已在预览（localhost:18090）用真机数据确认。
+
 ### 2026-10-13 · T-0006 CI 方案的干净环境试跑
 - **状态**：方案 REVIEW（`docs/proposals/T-0006-ci/`，未启用）；修复已提交 `23ae095`
 - **本次完成**：按 `environment.ci.yml` 新建 `mqde-ci` 环境跑 `check_all.sh`，第一次失败（clang-format 555 处、GCC `-O3` format-truncation、ruff 146、mypy 13、pytest 19），全部修复；干净环境与开发环境都全绿（ctest 344，pytest 583 / 610）。工具版本已固定。

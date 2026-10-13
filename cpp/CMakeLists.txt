@@ -55,10 +55,17 @@ target_link_libraries(mqde_modelspec PUBLIC mqde_common)
 target_include_directories(mqde_modelspec PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/modelspec)  # gguf.h is internal (src/), used by the server and the tests
 
 # ---- quant (numerical core, single source of truth for quantization semantics) ----
-add_library(mqde_quant STATIC src/quant/quant_spec.cpp src/quant/ops.cpp src/quant/metrics.cpp src/quant/pack.cpp)
+add_library(mqde_quant STATIC src/quant/quant_spec.cpp src/quant/ops.cpp src/quant/metrics.cpp src/quant/pack.cpp
+    src/quant/quant_kernels.cpp)
 target_link_libraries(mqde_quant PUBLIC mqde_common)
+target_include_directories(mqde_quant PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/quant)  # quant_kernels.h is internal (src/), used by the tests and the benchmark
 # Bit-exactness contract: no FMA contraction / fast-math in the numerical core.
 target_compile_options(mqde_quant PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-ffp-contract=off -fno-fast-math>)
+
+# 4096 x 4096 MSE calibration, once per kernel set (T-0406); not part of ctest
+add_executable(quant_bench bench/quant_bench.cpp)
+target_link_libraries(quant_bench PRIVATE mqde_quant)
+set_target_properties(quant_bench PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bench)
 
 # ---- estimator (memory / KV / state / concurrency) ----
 add_library(mqde_estimator STATIC src/estimator/recipe.cpp src/estimator/hardware.cpp
@@ -139,6 +146,7 @@ if(MQDE_BUILD_TESTS)
     tests/unit/modelspec_test.cpp
     tests/unit/gguf_test.cpp
     tests/unit/quant_test.cpp
+    tests/unit/quant_kernels_test.cpp
     tests/unit/pack_test.cpp
     tests/unit/estimator_test.cpp
     tests/unit/probe_test.cpp

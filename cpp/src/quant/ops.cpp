@@ -5,6 +5,8 @@
 #include <cmath>
 #include <limits>
 
+#include "quant_kernels.h"
+
 namespace mqde::quant {
 namespace {
 
@@ -68,13 +70,15 @@ inline void for_each_in_group(const GroupView& g, F&& f) {
   }
 }
 
+inline kernels::IntQdq int_qdq(const GroupParams& p, const QuantSpec& s) {
+  return {p.scale, p.zero, static_cast<float>(s.qmin()), static_cast<float>(s.qmax())};
+}
+
 GroupParams calibrate_group(const GroupView& g, const QuantSpec& s) {
+  const kernels::Set& k = kernels::active();
   float mn = std::numeric_limits<float>::infinity();
   float mx = -std::numeric_limits<float>::infinity();
-  for_each_in_group(g, [&](float v) {
-    mn = std::min(mn, v);
-    mx = std::max(mx, v);
-  });
+  for (int64_t r = 0; r < g.n_rows; ++r) k.minmax(g.x + r * g.stride, g.n_cols, &mn, &mx);
   if (!std::isfinite(mn) || !std::isfinite(mx)) return {1.0f, 0.0f};
   GroupParams best = params_from_range(mn, mx, s);
   if (s.calib != CalibAlgo::kMse) return best;
@@ -85,10 +89,15 @@ GroupParams calibrate_group(const GroupView& g, const QuantSpec& s) {
     const float shrink = 1.0f - static_cast<float>(i) * (1.0f - s.maxshrink) / static_cast<float>(s.grid);
     const GroupParams p = params_from_range(mn * shrink, mx * shrink, s);
     double err = 0.0;
-    for_each_in_group(g, [&](float v) {
-      const double d = static_cast<double>(qdq_one(v, p, s)) - v;
-      err += d * d;
-    });
+    if (s.fmt == NumFormat::kInt) {
+      const kernels::IntQdq q = int_qdq(p, s);
+      for (int64_t r = 0; r < g.n_rows; ++r) err = k.sq_err(g.x + r * g.stride, g.n_cols, q, err);
+    } else {
+      for_each_in_group(g, [&](float v) {
+        const double d = static_cast<double>(qdq_one(v, p, s)) - v;
+        err += d * d;
+      });
+    }
     if (err < best_err) {
       best_err = err;
       best = p;
@@ -163,9 +172,18 @@ Result<void> fake_quant(const float* x, int64_t rows, int64_t cols, const QuantS
                         QParams* qparams_out) {
   auto qp = compute_qparams(x, rows, cols, s);
   if (!qp) return std::unexpected(qp.error());
+  const kernels::Set& k = kernels::active();
   for_each_group(x, rows, cols, s, *qp, [&](int64_t gi, const GroupView& g, int64_t r0, int64_t c0) {
     const GroupParams p{qp->scale[static_cast<size_t>(gi)],
                         qp->zero.empty() ? 0.0f : qp->zero[static_cast<size_t>(gi)]};
+    if (s.fmt == NumFormat::kInt) {
+      const kernels::IntQdq q = int_qdq(p, s);
+      for (int64_t r = 0; r < g.n_rows; ++r) {
+        const int64_t idx = (r0 + r) * cols + c0;
+        k.qdq(x + idx, g.n_cols, q, out + idx);
+      }
+      return;
+    }
     for (int64_t r = 0; r < g.n_rows; ++r)
       for (int64_t c = 0; c < g.n_cols; ++c) {
         const int64_t idx = (r0 + r) * cols + c0 + c;

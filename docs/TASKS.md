@@ -97,7 +97,7 @@
 | T-0403 | quant 核心：INT/FP8 量化、反量化、假量化 + golden | P4 | T-0402 | L2 | DONE (2026-09-24, INT2-8/FP8 bit-exact) |
 | T-0404 | quant 核心：误差度量 | P4 | T-0401 | L1 | DONE (2026-09-24) |
 | T-0405 | quant 核心：位打包（GPTQ/AWQ/Marlin/GGUF） | P4 | T-0403 | L1 | PARTIAL (2026-09-30, GPTQ v1/v2 2/3/4/8, AWQ GEMM, GGUF Q8_0/Q5_0/Q4_0/IQ4_NL/Q4_K/Q2_K byte-exact vs ggml; Marlin 4/8-bit pack/unpack 2026-10-05, round-trip + port of vLLM v0.30.0 layout tested, byte-exact check vs installed vLLM pending) |
-| T-0406 | quant 核心：SIMD/CUDA 加速 | P4 | T-0403 | L1 | TODO |
+| T-0406 | quant 核心：SIMD/CUDA 加速 | P4 | T-0403 | L1 | PARTIAL (2026-10-13，`cpp/src/quant/quant_kernels.{h,cpp}`：整数量化的 min/max 扫描、MSE 误差、qdq 三个内层循环做成运行时分派表，scalar 为参考，AVX2（4090 EPYC 7402 上跑过）与 NEON（Apple M5 上跑过）与 scalar **逐位一致**（误差仍按元素顺序用 double 累加，向量归约会改变舍入、进而改变 MSE 的赢家）；`MQDE_QUANT_KERNELS=scalar|avx2|neon` 可强制。4096×4096 per-group W4 g128 MSE(grid 20) 单线程：4090 scalar 1.34 s → AVX2 0.42 s（3.2×）；M5 上编译器已自动向量化 scalar（0.18 s），NEON 无加速。`ctest -R quant_kernels` 10 项；变异：AVX2 13/13、NEON 10/12（余下 2 个是等价变异：NEON 的 vmaxq/vminq 与 std::clamp 一样放过 NaN）；`build/<preset>/bench/quant_bench`。未做：AVX-512（没有可验证的硬件）、CUDA 实现（qdq / MSE 标定 / 打包，需要 nvcc 构建链路，Python 侧 torch 路径已在 GPU 上）、quantize_int/dequantize_int/pack 的 SIMD、FP8 路径；`cpp/CMakeLists.txt` 的改动（源文件、include 目录、quant_bench 目标）属 L2，需评审) |
 | T-0407 | pybind11 绑定 `mqde._core`（DLPack） | P4 | T-0403,T-0404,T-0003 | L2 | DONE (2026-09-24, buffer protocol (DLPack later)) |
 | T-0408 | Python Torch 快速路径与双端 golden 对拍 | P4 | T-0407 | L1 | DONE (2026-09-24) |
 | T-0501 | Worker RPC 协议与 C++ WorkerClient | P5 | T-0103,T-0007 | L2 | TODO |
