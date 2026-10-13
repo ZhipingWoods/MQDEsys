@@ -2,6 +2,8 @@
 // nodes (center), property panel with tensor dtype/shape, value histogram and a quantization
 // preview for a chosen recipe (right). Data comes from safetensors headers; values are read on demand.
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import GgufView from "./GgufView";
 import { api, fmt, fmtBytes, GraphNode, GraphTensor } from "../api";
 import { baseOption, Chart, token } from "../charts";
 import { useAsync } from "../hooks";
@@ -12,7 +14,26 @@ const OP_VAR: Record<string, string> = {
 };
 const fmtParams = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n));
 
+/** 模型结构 = 两种来源：HF 目录（safetensors，按组件/块/模块的 netron 式图）和 GGUF 文件（逐块的量化类型与张量表）。 */
 export default function GraphPage() {
+  const [params, setParams] = useSearchParams();
+  const view = params.get("view") === "gguf" ? "gguf" : "hf";
+  return (
+    <>
+      <div className="tabs" style={{ marginBottom: 12 }}>
+        <div className={`tab ${view === "hf" ? "on" : ""}`} onClick={() => setParams({}, { replace: true })} data-testid="graph-tab-hf">
+          HF 模型（safetensors）
+        </div>
+        <div className={`tab ${view === "gguf" ? "on" : ""}`} onClick={() => setParams({ view: "gguf" }, { replace: true })} data-testid="graph-tab-gguf">
+          GGUF 文件
+        </div>
+      </div>
+      {view === "gguf" ? <GgufView /> : <HfGraph />}
+    </>
+  );
+}
+
+function HfGraph() {
   const lib = useAsync(api.models, []);
   const [model, setModel] = useState("");
   const [hfInput, setHfInput] = useState("");

@@ -50,8 +50,9 @@ target_compile_definitions(mqde_common PUBLIC MQDE_DEFAULT_DATA_DIR="${MQDE_DATA
 
 # ---- modelspec (config.json + safetensors header -> ModelSpec) ----
 add_library(mqde_modelspec STATIC src/modelspec/safetensors.cpp src/modelspec/model_spec.cpp
-                                  src/modelspec/model_family.cpp src/modelspec/graph.cpp)
+                                  src/modelspec/model_family.cpp src/modelspec/graph.cpp src/modelspec/gguf.cpp)
 target_link_libraries(mqde_modelspec PUBLIC mqde_common)
+target_include_directories(mqde_modelspec PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/modelspec)  # gguf.h is internal (src/), used by the server and the tests
 
 # ---- quant (numerical core, single source of truth for quantization semantics) ----
 add_library(mqde_quant STATIC src/quant/quant_spec.cpp src/quant/ops.cpp src/quant/metrics.cpp src/quant/pack.cpp)
@@ -136,6 +137,7 @@ if(MQDE_BUILD_TESTS)
     tests/unit/estimator_domain_test.cpp
     tests/unit/hub_catalog_refresh_test.cpp
     tests/unit/modelspec_test.cpp
+    tests/unit/gguf_test.cpp
     tests/unit/quant_test.cpp
     tests/unit/pack_test.cpp
     tests/unit/estimator_test.cpp

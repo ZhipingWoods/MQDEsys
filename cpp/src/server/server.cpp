@@ -12,6 +12,7 @@
 #include <httplib.h>
 
 #include "advice.h"
+#include "gguf.h"
 #include "backend_envs.h"
 #include "job_runner.h"
 #include "mqde/common/log.h"
@@ -582,6 +583,47 @@ Result<void> serve(const ServerOptions& o) {
       arr.push_back(j);
     }
     send_json(res, arr);
+  });
+  // GGUF files (T-R05): listed from the allowed roots (two levels deep: a root, or a model directory inside it), and
+  // read header-only. The tensor payload is never touched.
+  auto is_gguf = [](const fs::path& p) {
+    auto ext = p.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+    return ext == ".gguf";
+  };
+  svr.Get("/api/v1/gguf", [&](const httplib::Request&, httplib::Response& res) {
+    std::vector<fs::path> found;
+    for (const auto& r : o.allowed_roots) {
+      std::error_code ec;
+      for (const auto& e : fs::directory_iterator(r, ec)) {
+        if (e.is_regular_file(ec) && is_gguf(e.path())) found.push_back(e.path());
+        else if (e.is_directory(ec))
+          for (const auto& f : fs::directory_iterator(e.path(), ec))
+            if (f.is_regular_file(ec) && is_gguf(f.path())) found.push_back(f.path());
+      }
+    }
+    std::sort(found.begin(), found.end());
+    found.erase(std::unique(found.begin(), found.end()), found.end());
+    Json arr = Json::array();
+    for (const auto& p : found) {
+      if (arr.size() >= 500) break;
+      std::error_code ec;
+      arr.push_back({{"path", p.string()}, {"name", p.filename().string()}, {"dir", p.parent_path().filename().string()},
+                     {"bytes", fs::file_size(p, ec)}});
+    }
+    send_json(res, arr);
+  });
+  svr.Post("/api/v1/models:gguf", [&](const httplib::Request& req, httplib::Response& res) {
+    auto body = parse_body(req, res);
+    if (!body) return;
+    const auto path = body->value("path", "");
+    if (!path_allowed(o.allowed_roots, path)) return send_error(res, 403, "forbidden", "path is outside allowed roots");
+    if (!is_gguf(path) || !fs::is_regular_file(path)) return send_error(res, 400, "invalid_argument", "path must be an existing .gguf file");
+    auto g = modelspec::read_gguf(path);
+    if (!g) return send_error(res, g.error());
+    Json out = modelspec::gguf_summary(*g, body->value("tensors", true));
+    out["path"] = path;
+    send_json(res, out);
   });
   svr.Post("/api/v1/models:graph", [&](const httplib::Request& req, httplib::Response& res) {
     auto body = parse_body(req, res);

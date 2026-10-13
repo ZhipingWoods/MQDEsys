@@ -770,6 +770,9 @@
 - **并发扫描（T-R12/R13，2026-10-13）**：`loadtest.sweep(port, levels)`——同一服务按并发档位从低到高各跑一遍闭环压测（每档至少 2×并发个请求，免得 ramp-up 占满样本），每档给吞吐和 TTFT/TPOT/ITL 的 p50/p90/p99，外加峰值；`saturation()`——下一档吞吐涨幅 <10%（`throughput`）或 TTFT p99 超预算（`ttft`）时，前一档就是建议并发，`not-reached` 表示测到的最高档仍在增长，有失败请求的档位不参与判断。接入 `LLMJob._vllm_serve/_sglang_serve`（部署评测作业与普通 LLM 作业共用）：`deploy.vllm|sglang.sweep: {levels, requests_per_level, max_ttft_p99_ms}`，默认关；扫描失败只记 `{error}`，不丢已测的 PPL 与压测结果。前端：向导⑤的"并发扫描"（档位格式校验，非法时不写入、不能提交；派生时沿用），`SweepCard`。**诚实边界**：只在 mock 后端上测过（延迟与负载无关，吞吐线性增长，所以"饱和"靠合成数据测）；还没在真机 vLLM/SGLang 上跑过扫描，不知道 0.5B 模型在 4090 上哪一档饱和。校验：pytest `test_loadtest` +7（13 处 mutation 全被抓，首轮 2 处存活——峰值按吞吐而不是并发选、全失败档位——补脚本化测试后被抓）、`test_deploy_job` +3（8 处 mutation 全被抓，首轮 3 处存活）；`web/e2e/sweep_ui.mjs` 24/24（11 处前端 mutation 被抓，首轮 1 处存活：复用产物模式下 SGLang 的扫描配置）。
 
 - **并发扫描的真机发现与修复（2026-10-13）**：第一次在真实 vLLM 0.31（Qwen2.5-0.5B AWQ，4090）上跑扫描就暴露两个 mock 测不出的问题：①**"饱和点"是自己设的上限**——吞吐在并发 8 处封顶（452 tok/s）、16 档起 TTFT p99 从 60 ms 涨到 1.2 s，因为服务端 `max_num_seqs=max(并发,8)`=8，多出的请求只是排队；现在引擎的并发上限取 `max(并发, 8, 扫描最高档)`（`LLMJob._max_seqs`，vLLM 的 `--max-num-seqs` 与 SGLang 的 `--max-running-requests` 都改）。②**部署后 PPL 与父作业对比不公平**——我用 256×4 窗口评测、父作业是 512×40，页面显示"相对真实权重 +26.45%"，其实只是上下文变短；`deploy_job` 现在记录父作业的评测协议（`parent_eval`），只有 `windows` 与 `seq_len` 都相同才给"相对父作业"的百分比（HF 格式与 GGUF 同规则），否则该值为 null 并写明原因，父作业没记录协议时也不假定可比；页面与向导（改了窗口/序列长度时就地警告）都有提示。教训：mock 的延迟与负载无关、所有协议默认相同，正好把这两类问题藏起来；以后接新的评测阶段都要拿真机跑一遍再算完成。校验：pytest `test_deploy_job` 共 24 例，14 处 mutation（引擎并发 6 + 可比性 8）全被抓；`sweep_ui.mjs` 31/31。
+  **修复后的真机复测（同一 checkpoint：Qwen2.5-0.5B W4A16 AWQ，vLLM 0.31，RTX 4090，评测协议与父作业相同 512×40）**：部署后 PPL 20.659，相对父作业真实权重 **+0.013%**；引擎 `--max-num-seqs 64`；并发 1/2/4/8/16/32/64 的吞吐 59/115/229/460/896/1733/**2929** tok/s，TTFT p99 38/55/58/58/79/86/165 ms，TPOT p50 16.5→19.7 ms，全部成功。**到并发 64 吞吐仍近似线性增长，没有找到饱和点（`not-reached`）**——0.5B 模型在 4090 上的瓶颈在更高并发，要测出拐点得把档位继续往上加（128/256）；之前"并发 8 饱和"是旧版把引擎上限卡在 8 的假象。
+
+- **GGUF 结构解析（T-R05，2026-10-13）**：`cpp/src/modelspec/gguf.{h,cpp}`——只读文件头（魔数、版本 2/3、元数据、张量表），不读权重；元数据标量原样、数组摘要成 `{array_of, length, head[8]}`（15 万项的词表只占几十字节，定长元素直接 seek 过去，字符串逐项跳）；张量形状反转成 row-major，字节数按 gguf-py 的 `GGML_QUANT_SIZES`（35 种类型，单测逐个钉死）算，`general.alignment` 决定数据区起点；严格校验：魔数、版本（v1 与未知版本、大端文件各有明确报错）、计数上限、维度数、整行是否是整数个块、**张量是否越过文件末尾（下了一半的文件不会被当成完整的）**、对齐是否是 2 的幂。`gguf_summary`：架构/名称/块数、各量化类型的张量数/参数/字节、**逐块**的大小与类型构成（Q4_K_M 文件里某些块的 down_proj 是 Q6_K，只有逐块才看得出）、块外张量、完整张量表。`GET /api/v1/gguf`（允许目录下两层内的 .gguf）、`POST /api/v1/models:gguf`；前端"模型结构"页加"GGUF 文件"标签：tiles、类型表（含 bit/权重）、逐块柱状图与表、可过滤的张量表和元数据。只认 `blk.N.` 开头的才算文本块（mmproj 里的视觉塔叫 `v.blk.N`，不会被并进去）。校验：`ctest -R gguf` 11 例，29 处 mutation 全被抓（1 个等价变异体：字符串长度越界守卫被 `read()` 的边界检查兜住，保留守卫是为了不先分配几 TB）；`web/e2e/gguf_ui.mjs` 25/25（9 处前端 mutation 被抓，首轮 2 处存活：大小写不敏感过滤）。
 
 #### T-1003 MoE / MLA 支持
 - **依赖**：T-0508, T-0208 **级别**：L1
@@ -969,7 +972,7 @@
 | **T-R25** | **HF 模型库 + 搜索/下载** | llmfit A.12–A.13 | L2 | DONE (2026-09-29, b45a46c; 200-entry catalog, search, GGUF/safetensors download verified) |
 | **T-R26** | **ModelFit 字段补全** + 运行时选择 | llmfit A.15–A.16 | L2 | DONE (2026-09-29, 9715e98; license field still empty for local models) |
 | **T-R27** | **前端补全**：硬件模拟、对比模式、完整筛选、导出 | llmfit-web | L1 | TODO |
-| T-R05 | GGUF 结构解析 | netron gguf.js | L1 | TODO |
+| T-R05 | GGUF 结构解析 | netron gguf.js | L1 | DONE (2026-10-13，C++ 只读文件头解析 + 模型结构页"GGUF 文件"标签；4090 上与 gguf-py 逐项对拍) |
 | T-R06 | QuantizeConfig + module_tree | GPTQModel | L2 | TODO |
 | T-R07 | Looper/Processor + 每模块日志表 | GPTQModel | L2 | TODO |
 | T-R08 | GPTQ 算法 + AWQ Processor | GPTQModel | L1 | TODO |

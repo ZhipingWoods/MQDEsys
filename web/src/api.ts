@@ -388,6 +388,17 @@ export interface VLMJobReport {
   recipes?: Record<string, VLMRecipeReport>;
 }
 
+/** POST /models:gguf: a GGUF file's header (metadata + tensor table), read without its payload (T-R05). */
+export interface GgufSummary {
+  path: string; version: number; alignment: number; file_bytes: number; data_offset: number; architecture: string; name: string;
+  block_count?: number; n_tensors: number; n_params: number; tensor_bytes: number;
+  metadata: Record<string, unknown>;
+  quant_types: Record<string, { tensors: number; params: number; bytes: number }>;
+  blocks: { index: number; tensors: number; params: number; bytes: number; types: Record<string, number> }[];
+  global: string[];
+  tensors?: { name: string; type: string; shape: number[]; numel: number; nbytes: number; offset: number }[];
+}
+
 /** POST /recommend: one ranked deployment option (planner::recommend + the accuracy risk from advice.cpp). */
 export interface Advice {
   recipe: string; algorithm: string; backend: string; hardware: string; maturity: string; feasible: boolean;
@@ -701,6 +712,8 @@ export const api = {
   submit: (job: unknown) => req<{ job_id: string }>("POST", "/jobs", job),
   cancel: (id: string) => req<{ state: string }>("POST", `/jobs/${id}:cancel`),
   models: () => req<LibraryModel[]>("GET", "/models"),
+  ggufFiles: () => req<{ path: string; name: string; dir: string; bytes: number }[]>("GET", "/gguf"),
+  gguf: (path: string, tensors = true) => req<GgufSummary>("POST", "/models:gguf", { path, tensors }),
   graph: (path: string, focus = "", depth = 2) => req<GraphNode>("POST", "/models:graph", { path, focus, depth }),
   tensor: (path: string, tensor: string, recipe = "") => req<TensorView>("POST", "/models:tensor", { path, tensor, recipe }),
   fit: (q: FitQuery) => req<{ system: FitSystem; models: ModelFit[]; errors: { model: string; error: string }[]; use_cases: string[] }>("POST", "/fit", q),
