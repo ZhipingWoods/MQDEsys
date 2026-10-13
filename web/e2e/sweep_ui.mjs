@@ -37,7 +37,7 @@ const MODEL = fs.mkdtempSync(path.join(os.tmpdir(), 'mqde-e2e-model-'));
 const pt = (c, tps, t50, t99) => ({ concurrency: c, ok: Math.max(16, 2 * c), failed: 0, output_tokens_per_s: tps, ttft_ms: { p50: t50, p99: t99 }, tpot_ms: { p50: 5, p99: 9 }, itl_ms: { p50: 5.5, p99: 12 } });
 const sweep = { points: [pt(1, 180, 30, 40), pt(2, 340, 33, 50), pt(4, 610, 40, 80), pt(8, 650, 120, 900), pt(16, 655, 400, 2500)], max_ttft_p99_ms: 1000,
   peak: pt(16, 655, 400, 2500), saturation: { concurrency: 4, reason: 'throughput', next_gain_pct: 100 * (650 / 610 - 1) } };
-const DEP = '20261013-000000-sweepd', LLM = '20261013-000000-sweepl', DEP2 = '20261013-000000-sweeper';
+const DEP = '20261013-000000-sweepd', LLM = '20261013-000000-sweepl', DEP2 = '20261013-000000-sweeper', DEP3 = '20261013-000000-sweepnc';
 const mkjob = (id, report, yaml) => { const d = path.join(runs, id); fs.mkdirSync(d);
   fs.writeFileSync(path.join(d, 'report.json'), JSON.stringify(report));
   fs.writeFileSync(path.join(d, 'events.jsonl'), JSON.stringify({ type: 'job_state', state: 'SUCCEEDED', seq: 1, ts: 1 }) + '\n');
@@ -48,7 +48,11 @@ const dep = (sw) => ({ job_id: DEP, kind: 'llm_deploy', verdict: 'succeeded', sp
 const ymlDeploy = (n) => [`metadata: {name: ${n}}`, `model: {type: llm, path: ${MODEL}}`, `artifact: {job: ${LLM}, recipe: W4A16, format: awq}`, 'deploy: {device: gpu, vllm: {}}', `output_dir: ${runs}`];
 mkjob(DEP, dep(sweep), ymlDeploy('sweep-deploy'));
 mkjob(DEP2, { ...dep({ error: 'RuntimeError: server died at concurrency 8' }), job_id: DEP2 }, ymlDeploy('sweep-error'));
+{ const nc = dep(sweep); nc.job_id = DEP3; nc.artifact = { ...nc.artifact, ppl_comparable: false, parent_eval: { windows: 40, seq_len: 512 } };
+  nc.deploy.vllm.served_vs_real_ppl_pct = null; mkjob(DEP3, nc, ymlDeploy('sweep-nc')); }
+{ const ok = dep(sweep); ok.job_id = DEP; ok.artifact = { ...ok.artifact, ppl_comparable: true, parent_eval: { windows: 4, seq_len: 256 } }; mkjob(DEP + '-ok', ok, ymlDeploy('sweep-ok')); }
 const lrep = JSON.parse(fs.readFileSync(path.join(repo, 'python/tests/fixtures/reports/llm_full.json'), 'utf8'));
+lrep.data = { ...(lrep.data ?? {}), eval: { dataset: 'wikitext-2 test', windows: 40, seq_len: 512 } };
 lrep.recipes.W4A16.export.awq.vllm = { status: 'succeeded', startup_s: 30, served_ppl: 20.5, served_vs_real_ppl_pct: 0.1, sweep, load: { ok: 16, failed: 0, spec: { concurrency: 4, requests: 16, prompt_len: 256, n_predict: 64 }, output_tokens_per_s: 600 } };
 mkjob(LLM, lrep, ['metadata: {name: sweep-llm}', `model: {type: llm, path: ${MODEL}}`, 'quant: {recipe: [w4a16]}', `output_dir: ${runs}`]);
 
@@ -141,6 +145,30 @@ try {
   await page.goto(`${base}/jobs/${LLM}`, { waitUntil: 'load' });
   await page.getByTestId('sweep-card').waitFor({ timeout: 15000 });
   check('an LLM job that swept its own export shows the card too, named by recipe / format / backend', (await page.getByTestId('sweep-card').locator('h2').innerText()).includes('W4A16 · awq · vLLM'));
+  // ---- like-for-like PPL ----
+  await page.goto(`${base}/jobs/${DEP3}`, { waitUntil: 'load' });
+  await page.getByTestId('ppl-not-comparable').waitFor({ timeout: 15000 });
+  const nct = await page.getByTestId('ppl-not-comparable').innerText();
+    check('it names this job\'s and the parent\'s windows x seq_len and does not call the numbers wrong', nct.includes('40 × 512') && nct.includes('不能直接比') && nct.includes('仍是准的'), nct);
+  check('and the "vs parent" column shows a dash, not a made-up percentage', (await page.getByTestId('deploy-table').locator('tbody tr').first().innerText()).includes('–'));
+  await page.goto(`${base}/jobs/${DEP}-ok`, { waitUntil: 'load' });
+  await page.getByTestId('deploy-table').waitFor({ timeout: 15000 });
+  check('a comparable one has no warning and shows the percentage', (await page.getByTestId('ppl-not-comparable').count()) === 0 && (await page.getByTestId('deploy-table').innerText()).includes('+0.20%'));
+  await page.goto(`${base}/new?mode=all&from=${LLM}&step=deploy`, { waitUntil: 'load' });
+  await page.getByTestId('artifact-eval').waitFor({ timeout: 15000 });
+  check('in the wizard, reusing an artifact with the parent\'s protocol shows no warning', (await page.getByTestId('artifact-eval-differs').count()) === 0);
+  await page.getByTestId('artifact-windows').fill('4');
+  await page.getByTestId('artifact-eval-differs').waitFor({ timeout: 5000 });
+  const warn = await page.getByTestId('artifact-eval-differs').innerText();
+  check('changing the windows warns right there, naming 4 x 512 against the parent\'s 40 x 512', warn.includes('4 窗口 × 512') && warn.includes('40 × 512') && warn.includes('不可比'), warn);
+  await page.getByTestId('artifact-windows').fill('40');
+  await page.waitForFunction(() => !document.querySelector('[data-testid="artifact-eval-differs"]'), null, { timeout: 5000 });
+  await page.getByTestId('artifact-eval').locator('input[type=number]').first().fill('256');  // 序列长度
+  await page.getByTestId('artifact-eval-differs').waitFor({ timeout: 5000 });
+  check('a different sequence length alone warns as well', (await page.getByTestId('artifact-eval-differs').innerText()).includes('40 窗口 × 256'));
+  await page.getByTestId('artifact-eval').locator('input[type=number]').first().fill('512');
+  await page.waitForFunction(() => !document.querySelector('[data-testid="artifact-eval-differs"]'), null, { timeout: 5000 });
+  check('and the warning goes away when it matches again', true);
   check('no page errors', errors.length === 0, errors.slice(0, 2).join(' | '));
 } catch (e) {
   failed = true;

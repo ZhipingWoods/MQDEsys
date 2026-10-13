@@ -769,6 +769,8 @@
 
 - **并发扫描（T-R12/R13，2026-10-13）**：`loadtest.sweep(port, levels)`——同一服务按并发档位从低到高各跑一遍闭环压测（每档至少 2×并发个请求，免得 ramp-up 占满样本），每档给吞吐和 TTFT/TPOT/ITL 的 p50/p90/p99，外加峰值；`saturation()`——下一档吞吐涨幅 <10%（`throughput`）或 TTFT p99 超预算（`ttft`）时，前一档就是建议并发，`not-reached` 表示测到的最高档仍在增长，有失败请求的档位不参与判断。接入 `LLMJob._vllm_serve/_sglang_serve`（部署评测作业与普通 LLM 作业共用）：`deploy.vllm|sglang.sweep: {levels, requests_per_level, max_ttft_p99_ms}`，默认关；扫描失败只记 `{error}`，不丢已测的 PPL 与压测结果。前端：向导⑤的"并发扫描"（档位格式校验，非法时不写入、不能提交；派生时沿用），`SweepCard`。**诚实边界**：只在 mock 后端上测过（延迟与负载无关，吞吐线性增长，所以"饱和"靠合成数据测）；还没在真机 vLLM/SGLang 上跑过扫描，不知道 0.5B 模型在 4090 上哪一档饱和。校验：pytest `test_loadtest` +7（13 处 mutation 全被抓，首轮 2 处存活——峰值按吞吐而不是并发选、全失败档位——补脚本化测试后被抓）、`test_deploy_job` +3（8 处 mutation 全被抓，首轮 3 处存活）；`web/e2e/sweep_ui.mjs` 24/24（11 处前端 mutation 被抓，首轮 1 处存活：复用产物模式下 SGLang 的扫描配置）。
 
+- **并发扫描的真机发现与修复（2026-10-13）**：第一次在真实 vLLM 0.31（Qwen2.5-0.5B AWQ，4090）上跑扫描就暴露两个 mock 测不出的问题：①**"饱和点"是自己设的上限**——吞吐在并发 8 处封顶（452 tok/s）、16 档起 TTFT p99 从 60 ms 涨到 1.2 s，因为服务端 `max_num_seqs=max(并发,8)`=8，多出的请求只是排队；现在引擎的并发上限取 `max(并发, 8, 扫描最高档)`（`LLMJob._max_seqs`，vLLM 的 `--max-num-seqs` 与 SGLang 的 `--max-running-requests` 都改）。②**部署后 PPL 与父作业对比不公平**——我用 256×4 窗口评测、父作业是 512×40，页面显示"相对真实权重 +26.45%"，其实只是上下文变短；`deploy_job` 现在记录父作业的评测协议（`parent_eval`），只有 `windows` 与 `seq_len` 都相同才给"相对父作业"的百分比（HF 格式与 GGUF 同规则），否则该值为 null 并写明原因，父作业没记录协议时也不假定可比；页面与向导（改了窗口/序列长度时就地警告）都有提示。教训：mock 的延迟与负载无关、所有协议默认相同，正好把这两类问题藏起来；以后接新的评测阶段都要拿真机跑一遍再算完成。校验：pytest `test_deploy_job` 共 24 例，14 处 mutation（引擎并发 6 + 可比性 8）全被抓；`sweep_ui.mjs` 31/31。
+
 #### T-1003 MoE / MLA 支持
 - **依赖**：T-0508, T-0208 **级别**：L1
 - **产出**：MoE 专家线性层枚举与校准（按路由统计专家样本不足时的处理策略）；MLA KV 预估与 KV 量化适配；DeepSeek-V2-Lite 端到端。

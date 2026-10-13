@@ -100,6 +100,7 @@ export default function NewJobPage() {
   // B2: serve one of the parent's exported checkpoints instead of quantizing again (mqde.pipeline.deploy_job)
   const [artifactOpts, setArtifactOpts] = useState<ArtifactOpt[]>([]);
   const [artifactKey, setArtifactKey] = useState("");
+  const [parentEval, setParentEval] = useState<{ windows: number; seq_len: number } | null>(null); // how the parent scored PPL
   const artifact = artifactOpts.find((a) => a.key === artifactKey)?.artifact ?? null;
   const isGguf = artifact?.format === "gguf";
   const keepParentDeploy = useRef(false); // the backend effect below must not overwrite the parent's own export/deploy choices
@@ -224,6 +225,8 @@ export default function NewJobPage() {
             if (!alive) return;
             const opts = artifactOptions(source, src.report as unknown as Record<string, any>); // eslint-disable-line @typescript-eslint/no-explicit-any
             setArtifactOpts(opts);
+            const pe = (src.report as unknown as { data?: { eval?: { windows?: number; seq_len?: number } } } | null)?.data?.eval;
+            setParentEval(pe?.windows != null && pe?.seq_len != null ? { windows: pe.windows, seq_len: pe.seq_len } : null);
             const mine = own && opts.find((o) => sameArtifact(o.artifact, own));
             if (mine) setArtifactKey(mine.key);
             // re-quantizing is only needed to change the quantization or the fake-quant evaluation; serving elsewhere is not
@@ -670,6 +673,12 @@ export default function NewJobPage() {
           </p>
         )}
         {kind === "llm" && artifact ? (
+          <>
+          {parentEval && (windows !== parentEval.windows || seqLen !== parentEval.seq_len) && (
+            <p className="note" data-testid="artifact-eval-differs" style={{ borderLeft: "3px solid #e0a84a", paddingLeft: 10 }}>
+              评测设置（{windows} 窗口 × {seqLen}）与父作业（{parentEval.windows} × {parentEval.seq_len}）不同：部署后 PPL 仍会测，但不会给出「相对父作业」的差异，因为不同设置的 PPL 不可比。
+            </p>
+          )}
           <div className="form-row" data-testid="artifact-eval">
             <div className="field">
               <label>序列长度（wikitext-2 test）</label>
@@ -691,6 +700,7 @@ export default function NewJobPage() {
               )}
             </div>
           </div>
+          </>
         ) : kind !== "llm" ? (
           <>
             <div className="form-row">

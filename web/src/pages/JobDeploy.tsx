@@ -31,6 +31,13 @@ export function DeployReportView({ rep }: { rep: DeployJobReport }) {
         <Tile label="评测" value={`${rep.data?.eval.windows ?? rep.spec.eval_windows} 窗口 × ${rep.data?.eval.seq_len ?? rep.spec.eval_seq_len}`} hint={rep.data?.eval.dataset ?? "wikitext-2 test"} />
         <Tile label="设备" value={rep.env?.device_name ?? rep.spec.device} hint="本作业不重新量化" />
       </div>
+      {a && a.ppl_comparable === false && (
+        <p className="note" data-testid="ppl-not-comparable" style={{ borderLeft: "3px solid #e0a84a", paddingLeft: 10 }}>
+          {a.parent_eval
+            ? `本作业评测 ${rep.spec.eval_windows} 个窗口 × ${rep.spec.eval_seq_len}，父作业是 ${a.parent_eval.windows} × ${a.parent_eval.seq_len}：PPL 与上下文长度、所取窗口有关，不同评测设置的 PPL 不能直接比，所以没有给出「相对父作业」的差异（下面的 PPL 本身仍是准的）。要对比，请沿用父作业的序列长度和窗口数。`
+            : "父作业的报告没有记录它的评测设置，无法确认 PPL 是否可比，所以没有给出「相对父作业」的差异。"}
+        </p>
+      )}
       {a && (
         <p className="small" data-testid="deploy-artifact">
           产物 <span className="mono">{a.path}</span>，来自作业 <Link to={`/jobs/${a.job}`}>{a.job}</Link>
@@ -49,7 +56,7 @@ export function DeployReportView({ rep }: { rep: DeployJobReport }) {
                 <th className="num">权重显存</th>
                 <th className="num">KV 容量</th>
                 <th className="num">部署后 PPL</th>
-                <th className="num">相对父作业真实权重</th>
+                <th className="num" title="只在评测设置与父作业相同时给出">相对父作业真实权重</th>
                 <th className="num">服务 tok/s</th>
                 <th className="num">TTFT p50 / p99</th>
                 <th className="num">TPOT p50</th>

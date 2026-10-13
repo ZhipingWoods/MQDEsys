@@ -128,8 +128,10 @@ class DeployJob(LLMJob):
         if not rep_path.is_file():
             raise ValueError(f"artifact.job: job {job} not found (no {rep_path})")
         rep = json.loads(rep_path.read_text())
+        pe = ((rep.get("data") or {}).get("eval")) or {}
+        parent_eval = {"windows": pe["windows"], "seq_len": pe["seq_len"]} if "windows" in pe and "seq_len" in pe else None
         out: dict[str, Any] = {"job": job, "format": fmt, "parent_baseline_ppl": (rep.get("baseline") or {}).get("ppl"),
-                               "parent_model_path": (rep.get("spec") or {}).get("model_path")}
+                               "parent_model_path": (rep.get("spec") or {}).get("model_path"), "parent_eval": parent_eval}
         if fmt == "gguf":
             if not (isinstance(ty, str) and GGUF_TYPE.fullmatch(ty)):
                 raise ValueError(f"artifact.type: bad GGUF type '{ty}'")
@@ -167,16 +169,25 @@ class DeployJob(LLMJob):
         self.report["env"] = {"torch": torch.__version__, "device": s.device, "hardware": s.hardware,
                               "device_name": torch.cuda.get_device_name(0) if s.device.startswith("cuda") and torch.cuda.is_available() else "cpu"}
         art = self.report["artifact"] = self._stage("validate", self._resolve, json.dumps(s.artifact))
+        # PPL depends on the context length and on which windows are scored: only the same protocol as the parent's makes
+        # "served vs the parent's real weights" a like-for-like number (a real run with 256 x 4 against 512 x 40 said +26%)
+        pe = art["parent_eval"]
+        art["ppl_comparable"] = bool(pe and pe["windows"] == s.eval_windows and pe["seq_len"] == s.eval_seq_len)
+        if not art["ppl_comparable"]:
+            art["ppl_note"] = (f"this job scores {s.eval_windows} x {s.eval_seq_len} wikitext-2 windows, the parent {pe['windows']} x {pe['seq_len']}: "
+                               "PPL is not comparable across protocols, so no 'vs parent' difference is given"
+                               if pe else "the parent report did not record its evaluation protocol: PPL against it is not assumed comparable")
+        parent_real = art.get("parent_real_ppl") if art["ppl_comparable"] else None
         tok_dir = s.model_path if art["format"] == "gguf" else art["path"]
         ids = self._stage("eval_prepare", lambda: eval_ids(load_tokenizer(tok_dir)))
         self.report["data"] = {"eval": {"dataset": "wikitext-2 test", "windows": s.eval_windows, "seq_len": s.eval_seq_len}}
         self.report["deploy"] = {}
         ckpt = Path(art["path"])
         if s.vllm is not None:
-            self.report["deploy"]["vllm"] = self._stage("deploy_vllm", lambda: self._vllm_serve(ckpt, ids, art["parent_real_ppl"]), ckpt.name)
+            self.report["deploy"]["vllm"] = self._stage("deploy_vllm", lambda: self._vllm_serve(ckpt, ids, parent_real), ckpt.name)
             self._save()
         if s.sglang is not None:
-            self.report["deploy"]["sglang"] = self._stage("deploy_sglang", lambda: self._sglang_serve(ckpt, ids, art["parent_real_ppl"]), ckpt.name)
+            self.report["deploy"]["sglang"] = self._stage("deploy_sglang", lambda: self._sglang_serve(ckpt, ids, parent_real), ckpt.name)
             self._save()
         if s.llamacpp is not None:
             self.report["deploy"]["llamacpp"] = self._stage("deploy_llamacpp", lambda: self._gguf(ckpt, art), art["type"])
@@ -192,7 +203,7 @@ class DeployJob(LLMJob):
         self.ev.emit("metric", name=f"llamacpp.{art['type']}.ppl", value=p["ppl"], msg=f"llama.cpp {art['type']}")
         out = {**p, **{k: v for k, v in b.items() if k.endswith("per_s")}, "backend": b.get("backend"), "gpu_layers": ngl,
                "threads": threads, "parent_ppl": art.get("parent_ppl"),
-               "ppl_vs_parent_pct": 100.0 * (p["ppl"] / art["parent_ppl"] - 1.0) if art.get("parent_ppl") else None}
+               "ppl_vs_parent_pct": 100.0 * (p["ppl"] / art["parent_ppl"] - 1.0) if art.get("parent_ppl") and art.get("ppl_comparable") else None}
         if s.llamacpp_serve:
             out["serve"] = self._llamacpp_serve(path, art["type"], threads)
         return out

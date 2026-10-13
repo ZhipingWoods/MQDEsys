@@ -359,7 +359,7 @@ class LLMJob:
                 out[fmt]["sglang"] = self._stage("deploy_sglang", lambda: self._sglang_serve(d, ids, rp["ppl"]), f"{recipe}/{fmt}")
         return out
 
-    def _vllm_serve(self, ckpt: Path, ids: torch.Tensor, real_ppl: float) -> dict[str, Any]:
+    def _vllm_serve(self, ckpt: Path, ids: torch.Tensor, real_ppl: float | None) -> dict[str, Any]:
         """S11 + S12: serve the exported checkpoint with vLLM, smoke it, load it, and score it with its own logprobs."""
         from mqde.backend.base import openai_models, openai_smoke
         from mqde.backend.vllm_server import VllmServer, vllm_bin
@@ -379,7 +379,7 @@ class LLMJob:
         max_len = served_max_len(cfg, s.eval_seq_len, prompt_len, n_predict)
         srv = VllmServer(ckpt, self._serve_dir(ckpt) / f"vllm-{ckpt.name}.log", max_model_len=max_len, dtype="float16",
                          gpu_memory_utilization=float(cfg.get("gpu_memory_utilization", 0.3)),
-                         enforce_eager=bool(cfg.get("enforce_eager", True)), max_num_seqs=max(conc, 8))
+                         enforce_eager=bool(cfg.get("enforce_eager", True)), max_num_seqs=self._max_seqs(cfg, conc))
         self.ev.log(f"vLLM {ckpt.name}: starting on {srv.port} (max_model_len {max_len})")
         try:
             with srv:
@@ -402,10 +402,10 @@ class LLMJob:
         good = bool(sm["ok"]) and load.get("ok") == load["spec"]["requests"]
         return {"status": "succeeded" if good else "degraded", "startup_s": srv.startup_s, "args": srv.args, "props": props,
                 "engine": engine, "smoke": sm, "load": load, "served_ppl": sp["ppl"], "served_windows": sp["windows"],
-                "served_vs_real_ppl_pct": 100.0 * (sp["ppl"] / real_ppl - 1.0), **({"lm_eval": lm} if lm is not None else {}),
+                "served_vs_real_ppl_pct": (100.0 * (sp["ppl"] / real_ppl - 1.0)) if real_ppl else None, **({"lm_eval": lm} if lm is not None else {}),
                 **({"sweep": sw} if sw is not None else {})}
 
-    def _sglang_serve(self, ckpt: Path, ids: torch.Tensor, real_ppl: float) -> dict[str, Any]:
+    def _sglang_serve(self, ckpt: Path, ids: torch.Tensor, real_ppl: float | None) -> dict[str, Any]:
         """S11 + S12 on SGLang: serve the exported checkpoint, smoke it, load it, score it with its own logprobs."""
         from mqde.backend.base import openai_smoke
         from mqde.backend.sglang_server import SglangServer, sglang_python
@@ -425,7 +425,7 @@ class LLMJob:
         max_len = served_max_len(cfg, s.eval_seq_len, prompt_len, n_predict)
         srv = SglangServer(ckpt, self._serve_dir(ckpt) / f"sglang-{ckpt.name}.log", max_model_len=max_len, dtype="float16",
                            mem_fraction_static=float(cfg.get("mem_fraction_static", 0.3)),
-                           disable_cuda_graph=bool(cfg.get("disable_cuda_graph", False)), max_running_requests=max(conc, 8))
+                           disable_cuda_graph=bool(cfg.get("disable_cuda_graph", False)), max_running_requests=self._max_seqs(cfg, conc))
         self.ev.log(f"SGLang {ckpt.name}: starting on {srv.port} (context_length {max_len})")
         try:
             with srv:
@@ -446,7 +446,15 @@ class LLMJob:
         good = bool(sm["ok"]) and load.get("ok") == load["spec"]["requests"]
         return {"status": "succeeded" if good else "degraded", "startup_s": srv.startup_s, "args": srv.args, "props": props,
                 "engine": engine, "smoke": sm, "load": load, "served_ppl": sp["ppl"], "served_windows": sp["windows"],
-                "served_vs_real_ppl_pct": 100.0 * (sp["ppl"] / real_ppl - 1.0), **({"sweep": sw} if sw is not None else {})}
+                "served_vs_real_ppl_pct": (100.0 * (sp["ppl"] / real_ppl - 1.0)) if real_ppl else None, **({"sweep": sw} if sw is not None else {})}
+
+    @staticmethod
+    def _max_seqs(cfg: dict[str, Any], conc: int) -> int:
+        """Sequences the engine admits at once: at least 8, the load's concurrency, and -- when a concurrency sweep is
+        asked for -- its highest level. Left at 8, a real vLLM run 'saturated' at concurrency 8 (TTFT p99 60 ms -> 1.2 s
+        at 16): the sweep was measuring the engine's own admission limit, not the hardware."""
+        levels = [int(c) for c in (cfg.get("sweep") or {}).get("levels", [1, 2, 4, 8, 16])] if cfg.get("sweep") else []
+        return max(conc, 8, *levels)
 
     def _sweep(self, port: int, cfg: dict[str, Any], prompt_len: int, n_predict: int) -> dict[str, Any] | None:
         """T-R12: the same server under several concurrency levels (``deploy.<backend>.sweep: {levels, requests_per_level,

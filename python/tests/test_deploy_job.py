@@ -33,6 +33,7 @@ def runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (p / "export" / "gguf" / "model-q4_k.gguf").write_bytes(b"GGUF")
     (p / "report.json").write_text(json.dumps({
         "kind": "llm", "job_id": PARENT, "spec": {"model_path": "/models/qwen", "name": "parent"}, "baseline": {"ppl": 3.5},
+        "data": {"eval": {"dataset": "wikitext-2 test", "windows": 2, "seq_len": 64}},
         "stages": [{"stage": "report", "status": "succeeded"}],
         "recipes": {"W4A16": {"recipe": "W4A16", "algorithm": "gptq", "summary": {"ppl": 3.9, "ppl_delta_pct": 11.4},
                               "export": {"awq": {"status": "exported", "real_ppl": 4.0, "bytes": 449_000_000},
@@ -172,6 +173,7 @@ def test_a_sweep_with_no_levels_given_uses_the_default_ladder(runs: Path, tmp_pa
     monkeypatch.setenv("MQDE_SGLANG_PYTHON", str(mock_backend.wrapper(tmp_path, "python")))
     rep = DeployJob(spec(runs, sglang={**serve_cfg(), "sweep": {"requests_per_level": 2}}), job_id="child").run()
     assert [p["concurrency"] for p in rep["deploy"]["sglang"]["sweep"]["points"]] == [1, 2, 4, 8, 16]
+    assert _flag(rep["deploy"]["sglang"]["args"], "--max-running-requests") == "16", "the engine admits the default ladder's top"
 
 
 def test_a_failing_sweep_does_not_throw_away_the_rest_of_the_serving_result(runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -182,3 +184,62 @@ def test_a_failing_sweep_does_not_throw_away_the_rest_of_the_serving_result(runs
     rep = DeployJob(spec(runs, vllm={**serve_cfg(), "sweep": {"levels": [1, 2]}}), job_id="child").run()
     v = rep["deploy"]["vllm"]
     assert v["status"] == "succeeded" and v["served_ppl"] > 0 and v["sweep"] == {"error": "RuntimeError: sweep exploded"}
+
+
+def _flag(args: list, name: str) -> str:
+    return str(args[args.index(name) + 1])
+
+
+def test_the_engine_admits_as_many_sequences_as_the_highest_sweep_level(runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real vLLM run (2026-10-13): with max_num_seqs left at 8, throughput 'saturated' at concurrency 8 and TTFT p99 jumped
+    from 60 ms to 1.2 s at 16 -- the sweep was measuring the engine's own admission limit, not the hardware."""
+    monkeypatch.setenv("MQDE_SGLANG_PYTHON", str(mock_backend.wrapper(tmp_path, "python")))
+    monkeypatch.setenv("MQDE_VLLM_BIN", str(mock_backend.wrapper(tmp_path, "vllm")))
+    sw = {"levels": [1, 32], "requests_per_level": 2}
+    rep = DeployJob(spec(runs, sglang={**serve_cfg(), "sweep": sw}), job_id="a").run()
+    assert _flag(rep["deploy"]["sglang"]["args"], "--max-running-requests") == "32"
+    rep = DeployJob(spec(runs, vllm={**serve_cfg(), "sweep": sw}), job_id="b").run()
+    assert _flag(rep["deploy"]["vllm"]["args"], "--max-num-seqs") == "32"
+    # without a sweep, or with a low one, it stays at the old floor of 8
+    assert _flag(DeployJob(spec(runs, vllm=serve_cfg()), job_id="c").run()["deploy"]["vllm"]["args"], "--max-num-seqs") == "8"
+    low = {**serve_cfg(), "sweep": {"levels": [1, 2], "requests_per_level": 2}}
+    assert _flag(DeployJob(spec(runs, vllm=low), job_id="d").run()["deploy"]["vllm"]["args"], "--max-num-seqs") == "8"
+    # a plain concurrency above 8 still wins over the floor
+    assert _flag(DeployJob(spec(runs, vllm={**serve_cfg(), "concurrency": 12}), job_id="e").run()["deploy"]["vllm"]["args"], "--max-num-seqs") == "12"
+
+
+def test_served_ppl_is_compared_with_the_parent_only_when_the_evaluation_protocol_is_the_same(runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real vLLM run (2026-10-13): 256 x 4 windows against the parent's 512 x 40 showed '+26.45%', which was only the shorter
+    context. PPL depends on seq_len (and the windows drawn), so a different protocol is not comparable at all."""
+    monkeypatch.setenv("MQDE_SGLANG_PYTHON", str(mock_backend.wrapper(tmp_path, "python")))
+    same = DeployJob(spec(runs, sglang=serve_cfg()), job_id="same").run()
+    assert same["artifact"]["ppl_comparable"] is True and same["deploy"]["sglang"]["served_vs_real_ppl_pct"] is not None
+    assert same["artifact"]["parent_eval"] == {"windows": 2, "seq_len": 64}
+    for kw in ({"eval_windows": 3}, {"eval_seq_len": 128}):
+        diff = DeployJob(spec(runs, sglang=serve_cfg(), **kw), job_id="diff").run()
+        assert diff["artifact"]["ppl_comparable"] is False, kw
+        sg = diff["deploy"]["sglang"]
+        assert sg["status"] == "succeeded" and sg["served_ppl"] > 0 and sg["served_vs_real_ppl_pct"] is None, "still measured, just not compared"
+        assert "not comparable" in diff["artifact"]["ppl_note"] and "2 x 64" in diff["artifact"]["ppl_note"]
+
+
+def test_a_parent_that_does_not_say_how_it_evaluated_is_not_assumed_comparable(runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MQDE_SGLANG_PYTHON", str(mock_backend.wrapper(tmp_path, "python")))
+    rp = runs / PARENT / "report.json"
+    rep = json.loads(rp.read_text())
+    del rep["data"]
+    rp.write_text(json.dumps(rep))
+    out = DeployJob(spec(runs, sglang=serve_cfg()), job_id="x").run()
+    assert out["artifact"]["ppl_comparable"] is False and out["artifact"]["parent_eval"] is None
+    assert out["deploy"]["sglang"]["served_vs_real_ppl_pct"] is None and "did not record" in out["artifact"]["ppl_note"]
+
+
+def test_a_gguf_is_compared_with_the_parents_llama_cpp_ppl_under_the_same_rule(runs: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(deploy_job, "perplexity", lambda *a, **k: {"ppl": 15.0})
+    monkeypatch.setattr(deploy_job, "bench", lambda *a, **k: {})
+    art = {"job": PARENT, "format": "gguf", "type": "q4_k"}
+    same = DeployJob(spec(runs, artifact=art, llamacpp={"serve": None}), job_id="g1").run()
+    assert same["deploy"]["llamacpp"]["ppl_vs_parent_pct"] == pytest.approx(100 * (15.0 / 14.7 - 1))
+    diff = DeployJob(spec(runs, artifact=art, llamacpp={"serve": None}, eval_seq_len=128), job_id="g2").run()
+    assert diff["deploy"]["llamacpp"]["ppl"] == 15.0 and diff["deploy"]["llamacpp"]["ppl_vs_parent_pct"] is None
+    assert diff["artifact"]["ppl_comparable"] is False

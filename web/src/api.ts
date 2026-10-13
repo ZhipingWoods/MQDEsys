@@ -408,6 +408,8 @@ export interface DeployJobReport {
   artifact?: {
     job: string; format: string; path: string; bytes?: number | null; recipe?: string; algorithm?: string; type?: string;
     parent_real_ppl?: number | null; parent_fake_ppl?: number | null; parent_baseline_ppl?: number | null; parent_ppl?: number | null;
+    /** the parent's evaluation protocol; PPL is only comparable when this job's is the same */
+    parent_eval?: { windows: number; seq_len: number } | null; ppl_comparable?: boolean; ppl_note?: string;
   };
   data?: { eval: { dataset: string; windows: number; seq_len: number } };
   deploy?: {
