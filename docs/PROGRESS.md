@@ -180,6 +180,11 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-13（再再续） · Claude · 前端改版：分步向导 / 首页总览 / 作业筛选
+
+- **状态**：DONE，见 TASKS "前端改版"。工作流按用户要求：Mac 提交 → 4090 拉取编译 → 4090 的 `web/dist` 同步回 Mac，本地 `mqde serve`（端口 18090，runs 为 4090 报告的只读副本）供查看。
+- **校验**：Mac 全部 e2e 通过；4090 ctest/pytest 见下一条记录。
+
 ### 2026-10-13（再续） · Claude · 部署建议 / 作业派生（B1+B2）/ 前端巡检
 
 - **状态**：三项均 DONE 并推送；详见 TASKS "部署建议"、"作业派生 B1/B2"、"前端巡检"条目。

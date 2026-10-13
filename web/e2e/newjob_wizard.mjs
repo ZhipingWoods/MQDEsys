@@ -71,7 +71,7 @@ try {
   const preview = async () => JSON.parse(await page.locator('pre.log').innerText());
 
   // ---- 1. domain registry drives the tabs; a domain with no real pipeline is blocked, not silently accepted ----
-  await page.goto(`${base}/new`, { waitUntil: 'load' });
+  await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
   const realDomains = await (await fetch(`${base}/api/v1/domains`)).json();
   check('the server has all 5 registered domains', [...realDomains.map((d) => d.id)].sort().join(',') === 'ewm,llm,vla,vlm,world');
   for (const d of realDomains) await page.getByTestId(`domain-tab-${d.id}`).waitFor({ timeout: 10000 });
@@ -236,7 +236,7 @@ try {
 
   // ---- 6. quantize-only forces off VLA attribution (it needs the BF16 baseline this also skips) and a
   // real submission with it on still goes through the server's real validate_jobspec, not just the preview ----
-  await page.goto(`${base}/new`, { waitUntil: 'load' });
+  await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
   await page.getByTestId('domain-tab-vla').click();
   await page.getByTestId('model-path').fill(MODEL);
   await page.getByTestId('dataset-path').fill('synthetic');

@@ -64,7 +64,7 @@ try {
   const until = (fn, arg) => page.waitForFunction(fn, arg, { timeout: 10000 });
 
   // ---- wizard ----
-  await page.goto(`${base}/new`, { waitUntil: 'load' });
+  await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
   await page.getByTestId('domain-tab-vlm').click();
   await page.getByTestId('vlm-note').waitFor({ timeout: 10000 });
   check('the VLM tab is a form, not the "no pipeline" notice', (await page.getByTestId('domain-blocked').count()) === 0);

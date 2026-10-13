@@ -80,8 +80,13 @@ export default function NewJobPage() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // 作业派生 (/new?from=<job>&step=eval|device|deploy|recipe|all): every field comes from that job's job.yaml
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const fromJob = params.get("from");
+  // A real step-by-step wizard (one step on screen, ①…⑥ nav on top) is the default; ?mode=all shows every step on one
+  // page, which is also how the older e2e files drive the form.
+  const singlePage = params.get("mode") === "all";
+  const [step, setStep] = useState<number>(() => ({ eval: 4, device: 4, deploy: 5, recipe: 3 } as Record<string, number>)[params.get("step") ?? ""] ?? 1);
+  const show = (n: number) => singlePage || step === n;
   const fromStep = (params.get("step") ?? "all") as DeriveStep;
   const [parentJob, setParentJob] = useState<string | null>(null);
   const [inheritedRules, setInheritedRules] = useState<Rule[]>([]);
@@ -407,14 +412,32 @@ export default function NewJobPage() {
       )}
       <div className="split">
       <div>
-      <div className="card">
-        <h2>① 领域 + 模型</h2>
+      <StepNav
+        step={step}
+        setStep={setStep}
+        singlePage={singlePage}
+        setSinglePage={(v) => setParams((p) => { const n = new URLSearchParams(p); if (v) n.set("mode", "all"); else n.delete("mode"); return n; }, { replace: true })}
+        blocked={blocked}
+        artifact={!!artifact}
+        canLeave={{ 1: !!model, 3: picked.length > 0 }}
+        summary={{
+          1: `${domain.toUpperCase()} · ${model.split("/").pop() || "—"}`,
+          2: algorithm === "recipe" ? "按配方默认" : algorithm,
+          3: artifact ? "沿用父作业产物" : picked.map((x) => x.toUpperCase()).join("、") || "—",
+          4: kind === "llm" ? (artifact ? `${windows} 窗口 × ${seqLen}` : `${windows} 窗口 × ${seqLen} · 量化 ${quantDevice.toUpperCase()} / 评估 ${evalDevice.toUpperCase()}`) : `${dataset.split("/").pop()} · ${nEval} 样本`,
+          5: `${profiles.data?.find((p) => p.id === hw)?.name ?? hw}${kind === "llm" && deployBackend !== "none" ? ` · ${deployBackend}` : ""}`,
+        }}
+      />
+      <div className="card" style={{ display: show(1) || show(2) || show(3) ? undefined : "none" }}>
+        <h2 style={{ display: show(1) ? undefined : "none" }}>① 领域 + 模型</h2>
+        <div style={{ display: show(1) ? undefined : "none" }}>
         <div className="tabs" style={{ marginBottom: 12 }}>
           {(domainsQ.data ?? [{ id: "llm", display_name: "LLM（HF CausalLM · wikitext-2 PPL）" }, { id: "vla", display_name: "VLA（视觉-语言-动作）" }]).map((d) => (
             <div key={d.id} className={`tab ${domain === d.id ? "on" : ""}`} onClick={() => switchDomain(d.id)} data-testid={`domain-tab-${d.id}`}>
               {d.display_name}
             </div>
           ))}
+        </div>
         </div>
         {blocked ? (
           <div className="error-box" data-testid="domain-blocked">
@@ -424,6 +447,7 @@ export default function NewJobPage() {
           </div>
         ) : (
           <>
+            <div style={{ display: show(1) ? undefined : "none" }}>
             {kind === "llm" && (
               <div className="tabs" style={{ marginBottom: 8, borderBottom: "none" }}>
                 <div className={`tab ${modelMode === "custom" ? "on" : ""}`} onClick={() => setModelMode("custom")}>
@@ -448,7 +472,9 @@ export default function NewJobPage() {
                 </div>
               </div>
             )}
+            </div>
             <div style={{ display: artifact ? "none" : undefined }} data-testid="quant-steps">
+            <div style={{ display: show(1) ? undefined : "none" }}>
             <AdvicePanel
               model={model}
               kind={kind}
@@ -465,6 +491,8 @@ export default function NewJobPage() {
                 if (kind === "llm") setDeployBackend(a.backend === "vllm" ? "vllm" : "none");
               }}
             />
+            </div>
+            <div style={{ display: show(2) ? undefined : "none" }}>
             <h2 style={{ marginTop: 16 }}>② 量化算法</h2>
             <div className="form-row">
               <div className="field" style={{ minWidth: 260 }}>
@@ -495,6 +523,8 @@ export default function NewJobPage() {
               </p>
             )}
             {algos.error && <div className="error-box">{algos.error}</div>}
+            </div>
+            <div style={{ display: show(3) ? undefined : "none" }}>
             <h2 style={{ marginTop: 16 }} id="step-recipe" className={parentJob && fromStep === "recipe" ? "derive-focus" : ""}>③ 量化配方</h2>
             {inheritedRules.length > 0 && (
               <div className="small" style={{ marginBottom: 8 }} data-testid="inherited-rules">
@@ -614,6 +644,7 @@ export default function NewJobPage() {
               </div>
             )}
             </div>
+            </div>
             {artifact && (
               <p className="note" data-testid="artifact-quant-note">
                 ②③ 量化算法与配方：产物 {artifact.format === "gguf" ? `GGUF ${artifact.type}` : `${artifact.recipe} · ${artifact.format}`} 在父作业里已经量化好，这次不再量化。
@@ -623,7 +654,7 @@ export default function NewJobPage() {
         )}
       </div>
       {!blocked && (
-      <div className={`card ${parentJob && (fromStep === "eval" || fromStep === "device") ? "derive-focus" : ""}`} id="step-eval">
+      <div className={`card ${parentJob && (fromStep === "eval" || fromStep === "device") ? "derive-focus" : ""}`} id="step-eval" style={{ display: show(4) ? undefined : "none" }}>
         <h2>④ 评估数据 + 设备</h2>
         {parentJob && fromStep === "device" && kind !== "llm" && (
           <p className="note" data-testid="derive-device-note">
@@ -737,7 +768,7 @@ export default function NewJobPage() {
       </div>
       )}
       {!blocked && (
-      <div className={`card ${parentJob && fromStep === "deploy" ? "derive-focus" : ""}`} id="step-deploy">
+      <div className={`card ${parentJob && fromStep === "deploy" ? "derive-focus" : ""}`} id="step-deploy" style={{ display: show(5) ? undefined : "none" }}>
         <h2>⑤ 部署与导出</h2>
         <div className="form-row">
           <div className="field">
@@ -837,8 +868,9 @@ export default function NewJobPage() {
         <p className="note">当前执行后端为 PyTorch fake-quant（评估量化误差）；选择一个部署后端后，上面的导出格式/GGUF 类型会按建议自动勾选，仍可手动调整。</p>
       </div>
       )}
-      <div className="card">
-        <h2>JobSpec 预览</h2>
+      <div className="card" style={{ display: show(6) ? undefined : "none" }} data-testid="step-confirm">
+        <h2>⑥ 确认提交 · JobSpec 预览</h2>
+        {!singlePage && <StepSummary rows={[["领域 / 模型", `${domain.toUpperCase()} · ${model}`], ["算法 / 配方", artifact ? `沿用父作业产物 ${artifact.format === "gguf" ? `GGUF ${artifact.type}` : `${artifact.recipe} · ${artifact.format}`}` : `${algorithm === "recipe" ? "按配方默认" : algorithm} · ${picked.map((x) => x.toUpperCase()).join("、")}`], ["评估", kind === "llm" ? `wikitext-2 · ${windows} 窗口 × ${seqLen}${quantizeOnly ? " · 仅量化不评测" : ""}` : `${dataset} · ${nEval} 样本${kind === "vlm" ? ` · 最长回答 ${maxNewTokens}` : ""}`], ["设备", kind === "llm" ? (artifact ? (isGguf ? evalDevice.toUpperCase() : "GPU 池") : `量化 ${quantDevice.toUpperCase()} · 评估 ${evalDevice.toUpperCase()}`) : "GPU 池"], ["部署", kind === "llm" && deployBackend !== "none" ? `${deployBackend}${exportFmts.length ? ` · 导出 ${exportFmts.join("/")}` : ""}${gguf.length ? ` · GGUF ${gguf.join("/")}` : ""}` : "不部署"]]} />}
         <pre className="log" style={{ height: "auto", maxHeight: 240 }}>
           {JSON.stringify(job, null, 2)}
         </pre>
@@ -846,6 +878,21 @@ export default function NewJobPage() {
           {busy ? "提交中…" : blocked ? "该领域尚未支持提交" : "提交作业"}
         </button>
       </div>
+      {!singlePage && (
+        <div className="form-row" style={{ justifyContent: "space-between", marginTop: 4 }} data-testid="step-buttons">
+          <button className="secondary" disabled={step <= 1} onClick={() => setStep(prevStep(step, !!artifact))} data-testid="step-prev">
+            ← 上一步
+          </button>
+          <span className="small muted">第 {step} / 6 步</span>
+          {step < 6 ? (
+            <button disabled={blocked || (step === 1 && !model) || (step === 3 && picked.length === 0)} onClick={() => setStep(nextStep(step, !!artifact))} data-testid="step-next">
+              下一步 →
+            </button>
+          ) : (
+            <span />
+          )}
+        </div>
+      )}
       </div>
       <aside className="card" style={{ position: "sticky", top: 12 }} data-testid="live-estimate">
         <h2>实时预估</h2>
@@ -1163,4 +1210,55 @@ function artifactOptions(job: string, rep: Record<string, any> | null | undefine
   for (const [ty, g] of Object.entries<any>(rep.llamacpp?.results ?? {}))
     out.push({ key: `gguf/${ty}`, label: `GGUF ${ty}${g?.ppl != null ? `（llama.cpp PPL ${Number(g.ppl).toFixed(3)}）` : ""}`, artifact: { job, format: "gguf", type: ty } });
   return out;
+}
+
+const STEP_TITLES = ["领域 + 模型", "量化算法", "量化配方", "评估数据 + 设备", "部署与导出", "确认提交"];
+// reusing a parent's export skips ②③ (nothing is quantized)
+const nextStep = (n: number, artifact: boolean) => (artifact && n === 1 ? 4 : Math.min(6, n + 1));
+const prevStep = (n: number, artifact: boolean) => (artifact && n === 4 ? 1 : Math.max(1, n - 1));
+
+function StepNav({ step, setStep, singlePage, setSinglePage, blocked, artifact, canLeave, summary }: {
+  step: number; setStep: (n: number) => void; singlePage: boolean; setSinglePage: (v: boolean) => void; blocked: boolean; artifact: boolean;
+  canLeave: Record<number, boolean>; summary: Record<number, string>;
+}) {
+  return (
+    <div className="stepper card" data-testid="stepper">
+      <ol>
+        {STEP_TITLES.map((t, i) => {
+          const n = i + 1;
+          const skipped = artifact && (n === 2 || n === 3);
+          const state = singlePage ? "all" : n === step ? "current" : n < step ? "done" : "todo";
+          const reachable = !blocked || n === 1;
+          return (
+            <li key={n} className={`${state} ${skipped ? "skipped" : ""}`} onClick={() => reachable && !skipped && setStep(n)} data-testid={`step-tab-${n}`} aria-current={state === "current" ? "step" : undefined}>
+              <span className="n">{state === "done" ? "✓" : n}</span>
+              <span className="t">
+                <b>{t}</b>
+                {!singlePage && (skipped ? <small>沿用父作业</small> : summary[n] && n !== step && n < 6 ? <small title={summary[n]}>{summary[n]}</small> : null)}
+                {!singlePage && n === step && n < 6 && canLeave[n] === false && <small className="warn">请先完成本步</small>}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      <button className="secondary small" onClick={() => setSinglePage(!singlePage)} data-testid="toggle-single-page">
+        {singlePage ? "分步显示" : "单页显示全部"}
+      </button>
+    </div>
+  );
+}
+
+function StepSummary({ rows }: { rows: [string, string][] }) {
+  return (
+    <table className="kv" data-testid="step-summary">
+      <tbody>
+        {rows.map(([k, v]) => (
+          <tr key={k}>
+            <th>{k}</th>
+            <td>{v}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
 }

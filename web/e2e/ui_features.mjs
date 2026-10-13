@@ -119,7 +119,7 @@ try {
   check('the two backends give different max concurrency (batched is far higher)', cVl > 2 * cHf, `hf ${cHf}, vllm ${cVl}`);
 
   // ---- 3. new job: the options reach the submitted job ----
-  await page.goto(`${base}/new`, { waitUntil: 'load' });
+  await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
   await page.getByTestId('domain-tab-llm').click();
   const preview = async () => JSON.parse(await page.locator('pre.log').innerText());
   check('options are off by default: no analysis, no vllm in the job', (await preview()).analysis === undefined && (await preview()).deploy.vllm === undefined);

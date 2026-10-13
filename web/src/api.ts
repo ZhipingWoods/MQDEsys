@@ -149,6 +149,7 @@ export interface JobListItem {
   kind?: "vla" | "llm" | "vlm" | "llm_deploy";
   device?: string;
   device_name?: string; // measured device from the report (GPU index is unknown after a server restart)
+  parent_job?: string; // 作业派生: the job this one was derived from
   started_ts?: number;
   last_ts?: number;
   n_events: number;

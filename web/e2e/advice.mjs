@@ -86,7 +86,7 @@ try {
     return rows();
   };
 
-  await page.goto(`${base}/new`, { waitUntil: 'load' });
+  await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
   await page.getByTestId('model-path').fill(MODEL);
   await page.getByTestId('advice-card').waitFor({ timeout: 10000 });
   check('the 部署建议 card is in step ①, before the algorithm', true);

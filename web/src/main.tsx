@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
 import "./styles.css";
+import HomePage from "./pages/Home";
 import FitPage from "./pages/Fit";
 import GraphPage from "./pages/Graph";
 import EstimatePage from "./pages/Estimate";
@@ -17,6 +18,7 @@ import SuggestPage from "./pages/Suggest";
 // T-1306: "误差分析"/"优化建议" used to live only as tabs buried inside a job's own detail page; promoted
 // to their own top-level nav items (standalone /analysis, /suggest routes) so the site map is flat.
 const NAV: { group: string; items: [string, string, string][] }[] = [
+  { group: "总览", items: [["/", "⌂", "总览"]] },
   { group: "评估前", items: [["/fit", "◎", "部署预评估"], ["/graph", "◇", "模型结构"], ["/estimate", "▦", "资源预估"]] },
   { group: "量化与评测", items: [["/new", "＋", "新建作业"], ["/jobs", "▶", "作业与执行"], ["/analysis", "△", "误差分析"], ["/suggest", "☆", "优化建议"], ["/compare", "⇄", "配方对比"]] },
   { group: "部署", items: [["/hardware", "▣", "硬件与后端"], ["/catalog", "◈", "模型目录"]] },
@@ -61,7 +63,7 @@ function App() {
             <div key={g.group}>
               <div className="nav-group">{g.group}</div>
               {g.items.map(([to, ico, label]) => (
-                <NavLink key={to} to={to}>
+                <NavLink key={to} to={to} end={to === "/"}>
                   <span className="ico">{ico}</span>
                   {label}
                 </NavLink>
@@ -76,7 +78,7 @@ function App() {
       </aside>
       <main className="main">
         <Routes>
-          <Route path="/" element={<Navigate to="/fit" replace />} />
+          <Route path="/" element={<HomePage />} />
           <Route path="/fit" element={<FitPage />} />
           <Route path="/graph" element={<GraphPage />} />
           <Route path="/estimate" element={<EstimatePage />} />

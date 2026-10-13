@@ -122,6 +122,8 @@ try {
   await page.getByTestId('derive-eval').click();
   await page.waitForURL(/\/new\?from=/, { timeout: 5000 });
   await page.getByTestId('derive-banner').waitFor({ timeout: 10000 });
+  check('the derive link lands in the wizard at step ④ (评估数据 + 设备)', (await page.getByTestId('step-tab-4').getAttribute('aria-current')) === 'step');
+  await page.getByTestId('toggle-single-page').click(); // the rest of this test reads/sets fields of several steps at once
   await waitJob(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.metadata?.parent_job; } catch { return false; } });
   await page.waitForTimeout(800); // let the export-suggestion round trip land: it must NOT replace the parent's gptq
   let j = await preview();
@@ -149,7 +151,7 @@ try {
   check('its page links back to the parent', (await page.getByTestId('derived-from').locator(`a[href="/jobs/${LLM}"]`).count()) === 1);
 
   // ---- B2: reuse the parent's exported checkpoint instead of quantizing again ----
-  await page.goto(`${base}/new?from=${LLM}&step=deploy`, { waitUntil: 'load' });
+  await page.goto(`${base}/new?mode=all&from=${LLM}&step=deploy`, { waitUntil: 'load' });
   await page.getByTestId('artifact-select').waitFor({ timeout: 10000 });
   await waitJob(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.artifact; } catch { return false; } });
   const opts = await page.getByTestId('artifact-select').locator('option').allInnerTexts();
@@ -186,7 +188,7 @@ try {
   const nope = await fetch(`${base}/api/v1/jobs`, { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ ...djy, artifact: { job: 'nope', recipe: 'W4A16', format: 'awq' }, output_dir: undefined, apiVersion: undefined, kind: undefined }) });
   check('an artifact from a job that does not exist is refused before it is queued', nope.status === 400 && (await nope.text()).includes('not found'));
-  await page.goto(`${base}/new?from=${LLM}&step=deploy`, { waitUntil: 'load' });
+  await page.goto(`${base}/new?mode=all&from=${LLM}&step=deploy`, { waitUntil: 'load' });
   await page.getByTestId('artifact-select').waitFor({ timeout: 10000 });
   await waitJob(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.artifact; } catch { return false; } });
   await page.getByTestId('artifact-select').selectOption('');
@@ -203,13 +205,13 @@ try {
   check('the artifact links to the job it came from', (await page.getByTestId('deploy-artifact').locator(`a[href="/jobs/${LLM}"]`).count()) === 1);
 
   // deriving from a deploy job keeps serving the same artifact, even for a step that does not reuse by default
-  await page.goto(`${base}/new?from=${DEP}&step=eval`, { waitUntil: 'load' });
+  await page.goto(`${base}/new?mode=all&from=${DEP}&step=eval`, { waitUntil: 'load' });
   await page.getByTestId('artifact-select').waitFor({ timeout: 10000 });
   await waitJob(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.artifact; } catch { return false; } });
   check('a job derived from a deploy job serves that same artifact (from the original job), with its backend', (await page.getByTestId('artifact-select').inputValue()) === 'W4A16/awq' && (await preview()).artifact.job === LLM && !!(await preview()).deploy.sglang, JSON.stringify((await preview()).artifact));
 
   // ---- LLM: 换推理框架 focuses ⑤ ----
-  await page.goto(`${base}/new?from=${LLM}&step=deploy`, { waitUntil: 'load' });
+  await page.goto(`${base}/new?mode=all&from=${LLM}&step=deploy`, { waitUntil: 'load' });
   await page.getByTestId('derive-banner').waitFor({ timeout: 10000 });
   check('换推理框架 puts ⑤ in focus', ((await page.locator('#step-deploy').getAttribute('class')) ?? '').includes('derive-focus'));
   await waitJob(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.metadata?.name === 'qwen-p-deploy'; } catch { return false; } });
@@ -218,7 +220,7 @@ try {
   check('switching the backend there works as in a fresh job (SGLang on, vLLM off)', true);
 
   // ---- LLM whose rules are exactly what the wizard's two controls write: they map back onto those controls ----
-  await page.goto(`${base}/new?from=${CANON}&step=recipe`, { waitUntil: 'load' });
+  await page.goto(`${base}/new?mode=all&from=${CANON}&step=recipe`, { waitUntil: 'load' });
   await page.getByTestId('derive-banner').waitFor({ timeout: 10000 });
   await waitJob(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.metadata?.name === 'qwen-c-recipe'; } catch { return false; } });
   j = await preview();
@@ -232,6 +234,7 @@ try {
   check('for a VLM job 换推理框架 is disabled (no serving backend for VLM yet)', await page.getByTestId('derive-deploy').isDisabled());
   await page.getByTestId('derive-device').click();
   await page.getByTestId('derive-banner').waitFor({ timeout: 10000 });
+  await page.getByTestId('toggle-single-page').click();
   await waitJob(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.model?.type === 'vlm'; } catch { return false; } });
   j = await preview();
   check('VLM: domain, data, answer length and parent_job carried over', j.metadata.parent_job === VLM && j.metadata.name === 'minicpmv-p-dev' && j.domain === 'vlm' && j.evaluation.n_samples === 18 && j.evaluation.max_new_tokens === 20 && j.calibration.dataset === 'synthetic', JSON.stringify(j.evaluation));
@@ -241,7 +244,7 @@ try {
   await waitJob(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.quant?.mixed_precision === undefined; } catch { return false; } });
   check('去掉这些规则 removes them from the job', (await preview()).quant.mixed_precision === undefined);
 
-  const bad = await (await page.goto(`${base}/new?from=no-such-job&step=eval`, { waitUntil: 'load' })) && page.locator('.error-box').first();
+  const bad = await (await page.goto(`${base}/new?mode=all&from=no-such-job&step=eval`, { waitUntil: 'load' })) && page.locator('.error-box').first();
   await bad.waitFor({ timeout: 10000 });
   check('an unknown parent job is an error on the page, not a silent blank wizard', (await bad.innerText()).length > 0, await bad.innerText());
   check('no page errors', errors.length === 0, errors.slice(0, 2).join(' | '));

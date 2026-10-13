@@ -1239,11 +1239,12 @@ Result<void> serve(const ServerOptions& o) {
         j["name"] = rep.value("/spec/name"_json_pointer, id);
         j["recipes"] = rep.value("/spec/recipes"_json_pointer, Json::array());
         j["model"] = rep.value("/spec/model_path"_json_pointer, "");
-      } else if (auto spec = load_structured_file(e.path() / "job.yaml")) {
-        j["name"] = spec->value("/metadata/name"_json_pointer, id);
-        j["recipes"] = spec->value("/quant/recipe"_json_pointer, Json::array());
-        j["model"] = spec->value("/model/path"_json_pointer, "");
+      } else if (spec_yaml) {
+        j["name"] = jy.value("/metadata/name"_json_pointer, id);
+        j["recipes"] = jy.value("/quant/recipe"_json_pointer, Json::array());
+        j["model"] = jy.value("/model/path"_json_pointer, "");
       }
+      if (const auto pj = jy.value("/metadata/parent_job"_json_pointer, std::string()); !pj.empty()) j["parent_job"] = pj;
       arr.push_back(j);
     }
     std::sort(arr.begin(), arr.end(), [](const Json& a, const Json& b) { return a["job_id"] > b["job_id"]; });

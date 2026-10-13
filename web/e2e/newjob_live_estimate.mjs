@@ -74,7 +74,7 @@ try {
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
   const calls = [];
   page.on('request', (r) => r.url().endsWith('/api/v1/estimate') && calls.push(Date.now()));
-  await page.goto(`${base}/new`, { waitUntil: 'load' });
+  await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
   const side = page.getByTestId('live-estimate');
   await side.waitFor({ timeout: 20000 });
   // The wizard opens on LLM; this test compares the four VLA default recipes, so pick that tab explicitly.
