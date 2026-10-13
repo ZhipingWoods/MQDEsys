@@ -26,14 +26,16 @@ IMAGE_SIZE = (448, 448)
 class MiniCPMV:
     family_name = "minicpmv"
 
-    def __init__(self, path: str | Path, device: str = "cuda", dtype: torch.dtype = torch.bfloat16) -> None:
+    def __init__(self, path: str | Path, device: str = "cuda", dtype: torch.dtype = torch.bfloat16, trust_remote_code: bool = False) -> None:
         from transformers import AutoModelForImageTextToText, AutoProcessor
 
         self.path = str(path)
         self.device = torch.device(device)
-        self.processor = AutoProcessor.from_pretrained(self.path, trust_remote_code=True)
+        # Off unless asked for (AGENTS.md section 6): it runs the Python files the model directory ships. MiniCPM-V 4.6 is a native
+        # transformers architecture and needs none.
+        self.processor = AutoProcessor.from_pretrained(self.path, trust_remote_code=trust_remote_code)
         self.tokenizer = self.processor.tokenizer
-        self.model = AutoModelForImageTextToText.from_pretrained(self.path, trust_remote_code=True, dtype=dtype)
+        self.model = AutoModelForImageTextToText.from_pretrained(self.path, trust_remote_code=trust_remote_code, dtype=dtype)
         self.model.to(self.device).eval()
         self.qmodel = QuantModel(self.model, QuantModel.load_family(self.family_name))
         eos = self.model.generation_config.eos_token_id
