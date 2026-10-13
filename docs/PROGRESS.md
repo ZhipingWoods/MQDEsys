@@ -112,6 +112,14 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 ---
 
 
+### 2026-10-13 · T-0006 CI 方案的干净环境试跑
+- **状态**：方案 REVIEW（`docs/proposals/T-0006-ci/`，未启用）；修复已提交 `23ae095`
+- **本次完成**：按 `environment.ci.yml` 新建 `mqde-ci` 环境跑 `check_all.sh`，第一次失败（clang-format 555 处、GCC `-O3` format-truncation、ruff 146、mypy 13、pytest 19），全部修复；干净环境与开发环境都全绿（ctest 344，pytest 583 / 610）。工具版本已固定。
+- **校验**：`BUILD_DIR=build/ci bash scripts/check_all.sh` → GATE_EXIT=0（clang-tidy SKIP：该工具链的系统头文件解析不了）
+- **未完成**：GitHub 专属语法、Chrome、冷/热构建时间没法在 GitHub 之外验证（见方案第 3 节）。
+- **需要人工决策**：评审并启用 CI 方案（L2）；`python/pyproject.toml` 的 B023 单文件豁免。
+- **前端**：本次无前端改动（构建通过）。
+
 ### 2026-09-28 · T-R20 实测基线库
 
 - **完成**：
