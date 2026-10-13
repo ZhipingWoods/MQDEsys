@@ -755,6 +755,8 @@
   - **没做**：Qwen2-VL / LLaVA 适配器；VLM 的 vLLM 部署与服务端评测；MMMU / 自定义图文 JSONL；估算器对 MiniCPM-V 的 VLM 专属上下文（图像 token 数）。
   - **校验**：pytest `test_vlm_data`(6) + `test_vlm_job_e2e`(23，CPU 微型 VLM 用同样的模块路径跑真实 `FakeQuantEngine` 与探针；13 处 mutation 里首轮 5 处存活——答案掩码、禁用配方、per_group 判断、前缀比例、完全一致——补 4 个测试后全部被抓)；`web/e2e/vlm_ui.mjs` 25/25（含 `max_new_tokens` 漏发、VLM 被算进 VLA 对比两处 mutation 变红）；`ctest` 314/314，planner/job_runner 三处 C++ mutation 均被抓。fixture `python/tests/fixtures/reports/vlm_full.json` 来自真机报告（路径已脱敏）。
 
+- **T-R10 动态量化（2026-10-13，VLM）**：`python/mqde/quant/suggest.py::suggest_skips`——在**各自组件内**找输出 SQNR 的鲁棒离群层（低于中位数 3.5 倍 1.4826·MAD 且至少 3 dB，最多 5%，向上取整），输出锚定的正则 skip 规则（`^…$`，免得 `layers.1` 误伤 `layers.11`）和保持原精度的额外字节。视觉塔整体比语言模型噪声大 8 dB 属于组件特性，不会被整体标出。`vlm_job` 读 `quant.mixed_precision`（只认 skip，`bits` 规则直接报错而不是悄悄忽略），attribution 与量化都排除被跳过的层，报告写 `skipped` 与每个配方的 `summary.suggestion`。前端：VLM 配方页和独立"优化建议"页（之前会把 VLM 作业说成 VLA）的建议卡 + "按建议生成新作业"。**真机诚实结果**：W4A16(GPTQ) 标出 3 层（视觉塔 layers.1/2 的 v_proj 27.4 dB、语言模型 layers.4 的 linear_attn.out_proj 28.4 dB，中位数 38.4/39.1），跳过后 KL 8.8e-4→8.2e-4（−7%），Top-1/生成一致仍 100%，答案 PPL 1.000106→1.000115（噪声量级）——该基线本来就几乎无损，收益小；价值在更狠的配方上，尚未验证。校验：pytest `test_dynamic_quant`(12) + `test_vlm_job_e2e`(+7)，12 处 mutation 全部被抓（首轮 2 处存活：`min`→`max` 的双条件、缺省位宽，补测试后被抓；MAD 下限被证明多余，已删）；`web/e2e/vlm_suggest.mjs` 9/9（漏发规则、Suggest 页丢掉 VLM 分支两处 mutation 变红）。
+
 #### T-1003 MoE / MLA 支持
 - **依赖**：T-0508, T-0208 **级别**：L1
 - **产出**：MoE 专家线性层枚举与校准（按路由统计专家样本不足时的处理策略）；MLA KV 预估与 KV 量化适配；DeepSeek-V2-Lite 端到端。
@@ -958,7 +960,7 @@
 | T-R07 | Looper/Processor + 每模块日志表 | GPTQModel | L2 | TODO |
 | T-R08 | GPTQ 算法 + AWQ Processor | GPTQModel | L1 | TODO |
 | T-R09 | 导出 GPTQ v1/v2 / merged 16bit / GGUF | GPTQModel / unsloth | L2 | TODO |
-| T-R10 | 动态量化（按误差自动生成 skip 名单） | unsloth | L1 | TODO |
+| T-R10 | 动态量化（按误差自动生成 skip 名单） | unsloth | L1 | PARTIAL (2026-10-13，VLM 作业：`quant/suggest.py` 按逐层输出 SQNR 在各组件内找离群层 → `summary.suggestion` → 前端一键带清单重跑；真机 MiniCPM-V-4.6 W4A16 标出 3 层(+6.8 MiB)，KL 8.8e-4→8.2e-4(−7%)；未做：LLM/VLA 作业接入、bits 型规则) |
 | T-R11 | eval：TaskConfig + registry + Evaluator + Report | evalscope | L2 | TODO |
 | T-R12 | perf：并发扫描 + TTFT/TPOT/ITL 百分位 | evalscope | L1 | TODO |
 | T-R13 | 前端评测页：Reports / Compare / Perf | evalscope | L1 | TODO |

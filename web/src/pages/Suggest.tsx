@@ -3,8 +3,9 @@
 // suggestion feature at all, so a VLA job just explains that here instead of showing an empty page.
 import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { api, JobDetail, LLMJobReport } from "../api";
+import { api, JobDetail, LLMJobReport, VLMJobReport } from "../api";
 import { ordered, RecipeSuggestion } from "./JobLLM";
+import { orderedVlm, VLMSuggestion } from "./JobVLM";
 
 export default function SuggestPage() {
   const { jobId } = useParams();
@@ -25,7 +26,7 @@ export default function SuggestPage() {
     return (
       <>
         <h1>优化建议</h1>
-        <p className="subtitle">从某个 LLM 作业的详情页里，每个配方的"误差分析"旁边有一个带上下文的链接会跳到这里。先去挑一个已完成的作业。</p>
+        <p className="subtitle">从某个 LLM / VLM 作业的详情页里，每个配方的"误差分析"旁边有一个带上下文的链接会跳到这里。先去挑一个已完成的作业。</p>
         <Link to="/jobs">前往作业与执行 →</Link>
       </>
     );
@@ -36,12 +37,38 @@ export default function SuggestPage() {
   if (!rep) return <p className="note">该作业还没有报告（尚未完成，或已失败）。</p>;
 
   const isLLM = rep.kind === "llm" || (detail.job as { model?: { type?: string } } | undefined)?.model?.type === "llm";
+  const isVLM = rep.kind === ("vlm" as string) || (detail.job as { model?: { type?: string } } | undefined)?.model?.type === "vlm";
+  if (isVLM) {
+    const vrep = rep as unknown as VLMJobReport;
+    const vs = orderedVlm(vrep);
+    const vtab = params.get("recipe") ?? vs[0]?.recipe;
+    const vcur = vs.find((r) => r.recipe === vtab);
+    return (
+      <>
+        <h1>优化建议</h1>
+        <p className="subtitle">
+          作业 <Link to={`/jobs/${jobId}`}>{jobId}</Link> · {vrep.spec?.name ?? ""}
+        </p>
+        {vs.length > 1 && (
+          <div className="tabs">
+            {vs.map((r) => (
+              <div key={r.recipe} className={`tab ${vtab === r.recipe ? "on" : ""}`} onClick={() => setParams({ recipe: r.recipe }, { replace: true })} data-testid={`suggest-recipe-tab-${r.recipe}`}>
+                {r.recipe}
+              </div>
+            ))}
+          </div>
+        )}
+        {!vcur && <p className="note">该作业没有配方报告。</p>}
+        {vcur && <VLMSuggestion r={vcur} job={detail.job} />}
+      </>
+    );
+  }
   if (!isLLM) {
     return (
       <>
         <h1>优化建议</h1>
         <p className="subtitle">
-          作业 <Link to={`/jobs/${jobId}`}>{jobId}</Link> 是 VLA 作业——优化建议（敏感度分析 → 混合精度）目前只有 LLM 流水线实现了（`analysis.sensitivity`），VLA 没有对应的后端能力，这里不假装有。
+          作业 <Link to={`/jobs/${jobId}`}>{jobId}</Link> 是 VLA 作业——优化建议目前只有 LLM（敏感度分析 → 混合精度）和 VLM（逐层误差 → 跳过清单）实现了，VLA 没有对应的后端能力，这里不假装有。
         </p>
       </>
     );

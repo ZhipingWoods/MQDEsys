@@ -39,7 +39,9 @@ import yaml
 from mqde.data.vlm import VLMSample, load_split
 from mqde.eval.logits_probe import capture_sample_reference, compare_to_sample_reference
 from mqde.pipeline.events import EventSink
+from mqde.quant.blockwise import MixedPrecisionPolicy
 from mqde.quant.engine import FakeQuantEngine, RecipeSpec
+from mqde.quant.suggest import suggest_skips
 
 TOPK = 64  # reference size per position: the top-64 logits and the log-sum-exp (a lower bound of the exact KL, see logits_probe)
 
@@ -61,6 +63,7 @@ class VLMJobSpec:
     # calibrate + quantize only: skips the reference, attribution and evaluation (all three need the unquantized answers)
     quantize_only: bool = False
     group_size_override: int | None = None  # quant.group_size: overrides every per_group recipe's group size
+    mixed_precision: dict[str, Any] | None = None  # quant.mixed_precision: {rules: [{match, skip}]}; matching layers stay unquantized
     seed: int = 0
     output_dir: str = "runs"
 
@@ -83,6 +86,7 @@ class VLMJobSpec:
             attribution=bool(e.get("attribution", True)),
             quantize_only=bool(e.get("skip", False)),
             group_size_override=int(q["group_size"]) if q.get("group_size") is not None else None,
+            mixed_precision=q.get("mixed_precision"),
             seed=int(d.get("seed", 0)),
             output_dir=d.get("output_dir", "runs"),
         )
@@ -194,6 +198,9 @@ class VLMJob:
     def _run(self) -> None:
         s = self.spec
         recipes = self._stage("validate", lambda: [RecipeSpec.load(r) for r in s.recipes], msg=",".join(s.recipes))
+        policy = MixedPrecisionPolicy.from_dict(s.mixed_precision)
+        if any(pol.bits is not None for _, pol in policy.rules):
+            raise ValueError("quant.mixed_precision: 'bits' rules are not supported for VLM jobs (only skip rules)")
         if s.group_size_override is not None:
             for r in recipes:
                 if r.weight.granularity == "per_group":
@@ -275,13 +282,18 @@ class VLMJob:
             rep: dict[str, Any] = {"recipe": recipe.name, "weight": recipe.weight.to_dict(), "act": recipe.act.to_dict(),
                                    "maturity": recipe.maturity, "algorithm": algo}
             engine = FakeQuantEngine(ad.qmodel, recipe, progress=lambda e: self.ev.emit("trace", **e) if e["kind"] == "layer" else None, algorithm=algo)
-            modalities = [m for m in dict.fromkeys(recipe.modalities) if engine.select_units([m])]
+
+            def usable(mods: list[str]) -> list[Any]:
+                return [u for u in engine.select_units(mods) if not policy.lookup(u.name, u.block).skip]
+
+            modalities = [m for m in dict.fromkeys(recipe.modalities) if usable([m])]
+            rep["skipped"] = sorted(u.name for u in engine.select_units(list(recipe.modalities)) if policy.lookup(u.name, u.block).skip)
 
             if s.attribution and not s.quantize_only:
                 def attribution() -> list[dict[str, Any]]:
                     rows = []
                     for mod in modalities:
-                        units = engine.select_units([mod])
+                        units = usable([mod])
                         engine.apply(units, engine.capture(units, calibrate, max_rows=256) if algo != "rtn" else None)
                         m = evaluate(False)
                         engine.restore()
@@ -293,7 +305,7 @@ class VLMJob:
                 rep["attribution"] = self._stage("attribution", attribution, msg=recipe.name)
 
             def quantize() -> list[dict[str, Any]]:
-                units = engine.select_units(modalities)
+                units = usable(modalities)
                 cache = engine.capture(units, calibrate, max_rows=256)
                 traces = engine.apply(units, cache)
                 del cache
@@ -320,6 +332,7 @@ class VLMJob:
         for t in layers:
             by_comp.setdefault(t["component"], []).append(t["out_sqnr_db"])
         out: dict[str, Any] = {
+            "suggestion": suggest_skips(layers, bits=int((rep.get("weight") or {}).get("bits") or 4)),
             "worst_layers": [{"name": t["name"], "out_sqnr_db": t["out_sqnr_db"], "act_kurtosis": t["act_kurtosis"]} for t in worst],
             "component_mean_out_sqnr_db": {k: sum(v) / len(v) for k, v in by_comp.items()},
         }

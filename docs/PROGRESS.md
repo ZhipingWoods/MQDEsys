@@ -180,6 +180,13 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-13（续） · Claude · T-R10 动态量化（VLM）+ 前端检查规则
+
+- **规则（用户 2026-10-13 强制）**：每个任务完成后检查前端是否更新、能否正常控制；已写入记忆。按此规则检查 VLM 工作时发现 4090 生产服务（18080）跑的是旧前端和旧二进制：已重建 `web/dist`（生产立即生效），**重启二进制被权限拒绝，待用户决定**（无运行中作业）；并修了"优化建议"页把 VLM 当 VLA 的 bug。
+- **本次完成**：见 TASKS T-R10。
+- **校验**：pytest 动态量化 12 + VLM 作业；e2e `vlm_suggest` 9/9、`vlm_ui` 25/25、`nav_split` 11/11、`newjob_wizard` 48/48。
+- **待用户**：重启生产服务以加载新二进制（否则经 18080 提交 VLM 作业会被旧 `validate` 拒绝——未实测）；L2：`schemas/job_spec.schema.json`。
+
 ### 2026-10-13 · Claude · VLM 领域（MiniCPM-V 4.6）+ llama.cpp CUDA 源码编译
 
 - **状态**：T-1002 PARTIAL，T-0704 llama.cpp 环境脚本补完。

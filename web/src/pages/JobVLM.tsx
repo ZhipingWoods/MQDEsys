@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { fmt, VLMJobReport, VLMRecipeReport } from "../api";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { api, fmt, fmtBytes, VLMJobReport, VLMRecipeReport } from "../api";
 import { baseOption, Chart, series, token } from "../charts";
 import { Tile } from "./Estimate";
 import { LayerAnalysis } from "./LayerAnalysis";
@@ -25,7 +25,7 @@ export function orderedVlm(rep: VLMJobReport): VLMRecipeReport[] {
   return Object.values(rep.recipes ?? {}).sort((a, b) => order.indexOf(a.recipe.toLowerCase()) - order.indexOf(b.recipe.toLowerCase()));
 }
 
-export function VLMReportView({ rep, jobId }: { rep: VLMJobReport; jobId?: string }) {
+export function VLMReportView({ rep, job, jobId }: { rep: VLMJobReport; job?: Record<string, unknown>; jobId?: string }) {
   const rs = orderedVlm(rep);
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") ?? "overview";
@@ -60,10 +60,14 @@ export function VLMReportView({ rep, jobId }: { rep: VLMJobReport; jobId?: strin
           在独立页面打开：{" "}
           <Link to={`/analysis/${jobId}?recipe=${cur.recipe}`} data-testid="open-analysis-link">
             误差分析
+          </Link>{" "}
+          ·{" "}
+          <Link to={`/suggest/${jobId}?recipe=${cur.recipe}`} data-testid="open-suggest-link">
+            优化建议
           </Link>
         </p>
       )}
-      {cur && <RecipeView r={cur} rep={rep} />}
+      {cur && <RecipeView r={cur} rep={rep} job={job} />}
     </>
   );
 }
@@ -143,12 +147,13 @@ function Overview({ rep, rs }: { rep: VLMJobReport; rs: VLMRecipeReport[] }) {
   );
 }
 
-function RecipeView({ r, rep }: { r: VLMRecipeReport; rep: VLMJobReport }) {
+function RecipeView({ r, rep, job }: { r: VLMRecipeReport; rep: VLMJobReport; job?: Record<string, unknown> }) {
   const [showAll, setShowAll] = useState(false);
   const ex = r.eval?.examples ?? [];
   const base = rep.baseline?.examples ?? [];
   return (
     <>
+      <VLMSuggestion r={r} job={job} />
       {r.attribution && r.attribution.length > 0 && (
         <div className="card">
           <h2>模态归因：只量化其中一部分时的 KL</h2>
@@ -208,5 +213,72 @@ function RecipeView({ r, rep }: { r: VLMRecipeReport; rep: VLMJobReport }) {
       )}
       {r.layers.length > 0 && <LayerAnalysis layers={r.layers} strip="model." />}
     </>
+  );
+}
+
+/** T-R10 动态量化：按逐层误差给出"保持原精度"的层清单，一键带着这份清单重新跑。 */
+export function VLMSuggestion({ r, job }: { r: VLMRecipeReport; job?: Record<string, unknown> }) {
+  const nav = useNavigate();
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const sug = r.summary.suggestion;
+  if (!sug) return <p className="note" data-testid="vlm-suggest-none">这份报告是旧版本生成的，没有逐层跳过建议；重新运行一次即可。</p>;
+  const clone = async () => {
+    if (!job) return;
+    setErr(null);
+    setBusy(true);
+    try {
+      const j = JSON.parse(JSON.stringify(job)) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+      delete j.output_dir;
+      delete j.apiVersion;
+      delete j.kind;
+      j.metadata = { ...(j.metadata ?? {}), name: `${j.metadata?.name ?? "job"}-dq` };
+      j.quant = { ...j.quant, recipe: [r.recipe], mixed_precision: { rules: sug.rules } };
+      const { job_id } = await api.submit(j);
+      nav(`/jobs/${job_id}`);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="card" data-testid="vlm-suggest">
+      <h2>动态量化建议：哪些层保持原精度</h2>
+      {sug.layers.length === 0 ? (
+        <p className="small" data-testid="vlm-suggest-empty">没有层的输出误差明显偏离同组件的其它层，不需要跳过任何层。</p>
+      ) : (
+        <>
+          <table data-testid="vlm-suggest-table">
+            <thead>
+              <tr>
+                <th>层</th>
+                <th>组件</th>
+                <th>输出 SQNR (dB)</th>
+                <th>该组件中位数 (dB)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sug.layers.map((l) => (
+                <tr key={l.name}>
+                  <td className="mono">{l.name}</td>
+                  <td>{l.component}</td>
+                  <td className="num">{l.out_sqnr_db.toFixed(1)}</td>
+                  <td className="num">{l.median_db.toFixed(1)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="small">
+            共 {sug.layers.length} 层，保持原精度的额外权重约 <b>{fmtBytes(sug.extra_weight_bytes)}</b>。依据：{sug.basis}。
+          </p>
+        </>
+      )}
+      <p className="note">只看量化误差（不需要评测），所以这是线索而不是保证；点按钮按这份清单重新跑一次，在结果页对比 KL 才是证据。</p>
+      {err && <div className="error-box">{err}</div>}
+      <button disabled={!job || busy || sug.rules.length === 0} onClick={clone} data-testid="vlm-suggest-clone">
+        {busy ? "提交中…" : `按建议生成新作业（${r.recipe} + 跳过 ${sug.layers.length} 层）`}
+      </button>
+    </div>
   );
 }

@@ -356,6 +356,7 @@ export interface VLMRecipeReport {
   summary: {
     kl: number | null; top1_agreement: number | null; answer_ppl: number | null; answer_ppl_delta_pct: number | null;
     generation_exact_match: number | null; generation_prefix_match: number | null; gt_accuracy: number | null; gt_accuracy_delta: number | null;
+    suggestion?: { rules: { match: string; skip: boolean }[]; layers: { name: string; component: string; out_sqnr_db: number; median_db: number }[]; extra_weight_bytes: number; basis: string };
     worst_stage: string | null; worst_layers: { name: string; out_sqnr_db: number; act_kurtosis: number }[];
     component_mean_out_sqnr_db: Record<string, number>;
   };

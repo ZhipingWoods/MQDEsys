@@ -152,6 +152,58 @@ def test_generation_agreement_is_exact_match_and_fraction_of_the_reference_prefi
     assert e["generation_prefix_match"] == pytest.approx((1 + 0.5 + 0 + 0.75 + 1 + 0.75) / 6)
 
 
+def test_skip_rules_keep_the_matching_layers_unquantized(tmp_path: Path) -> None:
+    rules = [{"match": r"language_model\.layers\.0\.", "skip": True}, {"match": r"^model\.merger\.", "skip": True}]
+    rep, _ = run(tmp_path, attribution=False, mixed_precision={"rules": rules})
+    names = {t["name"] for t in rep["recipes"]["W4A16"]["layers"]}
+    assert not [n for n in names if "language_model.layers.0." in n or n.startswith("model.merger.")]
+    assert any("language_model.layers.1." in n for n in names) and any("vision_tower" in n for n in names)
+    r = rep["recipes"]["W4A16"]
+    assert sorted(r["skipped"]) == sorted(u.name for u in FakeAdapter().qmodel.units if "language_model.layers.0." in u.name or u.name.startswith("model.merger."))
+    full, _ = run(tmp_path / "full", attribution=False)
+    assert r["summary"]["kl"] < full["recipes"]["W4A16"]["summary"]["kl"], "leaving layers in FP can only move the distribution less"
+
+
+def test_skipped_layers_are_excluded_from_attribution_too(tmp_path: Path) -> None:
+    rules = [{"match": r"vision_tower", "skip": True}]
+    rep, _ = run(tmp_path, mixed_precision={"rules": rules})
+    rows = {a["modality"]: a for a in rep["recipes"]["W4A16"]["attribution"]}
+    assert "vision" not in rows or rows["vision"]["units"] == 1, rows  # only the merger (also modality vision) is left
+
+
+def test_a_modality_skipped_entirely_is_still_listed_as_skipped_and_not_attributed(tmp_path: Path) -> None:
+    rep, _ = run(tmp_path, mixed_precision={"rules": [{"match": r"vision_tower|\.merger\.", "skip": True}]})
+    r = rep["recipes"]["W4A16"]
+    assert any("vision_tower" in n for n in r["skipped"]) and any(n.startswith("model.merger.") for n in r["skipped"])
+    assert [a["modality"] for a in r["attribution"]] == ["language"]
+
+
+def test_a_bit_width_rule_is_refused_rather_than_silently_ignored(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="bits"):
+        run(tmp_path, mixed_precision={"rules": [{"match": "layers", "bits": 8}]})
+
+
+def test_every_recipe_summary_carries_a_skip_suggestion_in_the_job_rule_format() -> None:
+    layers = [{"name": f"model.language_model.layers.{i}.mlp.up_proj", "component": "language", "shape": [256, 128], "act_kurtosis": 1.0,
+               "out_sqnr_db": 27.0 if i == 5 else 38.0 + 0.1 * (i % 4)} for i in range(24)]
+    s = VLMJob._summarize({"layers": layers, "weight": {"bits": 4}, "eval": {}}, None)
+    assert s["suggestion"]["rules"] == [{"match": r"^model\.language_model\.layers\.5\.mlp\.up_proj$", "skip": True}]
+    assert s["suggestion"]["extra_weight_bytes"] == 256 * 128 * 12 // 8
+
+
+def test_the_suggestion_costs_bytes_at_the_recipes_bit_width_and_assumes_4_when_it_is_missing() -> None:
+    layers = [{"name": f"model.language_model.layers.{i}.mlp.up_proj", "component": "language", "shape": [256, 128], "act_kurtosis": 1.0,
+               "out_sqnr_db": 27.0 if i == 5 else 38.0 + 0.1 * (i % 4)} for i in range(24)]
+    got = {b: VLMJob._summarize({"layers": layers, "weight": {"bits": b} if b else {}, "eval": {}}, None)["suggestion"]["extra_weight_bytes"] for b in (8, 4, None)}
+    assert got == {8: 256 * 128, 4: 256 * 128 * 12 // 8, None: 256 * 128 * 12 // 8}
+
+
+def test_from_yaml_reads_mixed_precision(tmp_path: Path) -> None:
+    p = tmp_path / "j.yaml"
+    p.write_text(yaml.safe_dump({"model": {"path": "/m"}, "quant": {"recipe": "w4a16", "mixed_precision": {"rules": [{"match": "x", "skip": True}]}}}))
+    assert VLMJobSpec.from_yaml(p).mixed_precision == {"rules": [{"match": "x", "skip": True}]}
+
+
 @pytest.mark.parametrize(("text", "gt", "ok"), [("The color is red.", "red", True), ("RED", "red", True), ("blue", "red", False),
                                                 ("3", "3", True), ("There are 33 shapes", "3", False), ("yes, there is", "yes", True),
                                                 ("", "yes", False), ("no", "yes", False),
