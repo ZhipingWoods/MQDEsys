@@ -100,7 +100,7 @@ class CatalogRefresher {
 
   struct Status {
     int64_t interval_s = 0;
-    bool last_refresh_ok = true;   // true before the first attempt too: nothing has failed yet
+    bool last_refresh_ok = true;  // true before the first attempt too: nothing has failed yet
     std::string last_refresh_at;  // ISO8601 UTC, empty before the first attempt
   };
 

@@ -4,8 +4,8 @@ the install flows, against a local fake PyPI / GitHub server and a fake ``uv`` -
 from __future__ import annotations
 
 import io
-import re
 import json
+import re
 import stat
 import tarfile
 import threading
@@ -26,16 +26,19 @@ def sh(path: Path, body: str) -> Path:
 
 
 # ---------------------------------------------------------------- versions
-@pytest.mark.parametrize(("lo", "hi"), [
-    ("0.5.21", "0.5.22.dev586+g86624f14e"),  # a dev build of the next release is ahead of the last release...
-    ("0.5.22.dev586", "0.5.22"),             # ...and behind that release itself
-    ("0.5.22", "0.5.22.post1"),
-    ("0.5.9", "0.5.10"),                      # numeric, not lexicographic
-    ("0.30.0", "0.31.0"),
-    ("1.0rc1", "1.0"),
-    ("b11564", "b11565"),
-    ("b999", "b11565"),
-])
+@pytest.mark.parametrize(
+    ("lo", "hi"),
+    [
+        ("0.5.21", "0.5.22.dev586+g86624f14e"),  # a dev build of the next release is ahead of the last release...
+        ("0.5.22.dev586", "0.5.22"),  # ...and behind that release itself
+        ("0.5.22", "0.5.22.post1"),
+        ("0.5.9", "0.5.10"),  # numeric, not lexicographic
+        ("0.30.0", "0.31.0"),
+        ("1.0rc1", "1.0"),
+        ("b11564", "b11565"),
+        ("b999", "b11565"),
+    ],
+)
 def test_version_order(lo: str, hi: str) -> None:
     assert envs.version_key(lo) < envs.version_key(hi)
     assert envs.is_newer(hi, lo) and not envs.is_newer(lo, hi)
@@ -77,7 +80,8 @@ INDEX_HTML = """<html><body>
 <a href="https://x/vllm-0.30.0-cp38-abi3-manylinux1_x86_64.whl#sha256=2">vllm-0.30.0-cp38-abi3-manylinux1_x86_64.whl</a>
 <a href="https://x/vllm-0.31.0-cp38-abi3-manylinux1_x86_64.whl#sha256=3">vllm-0.31.0-cp38-abi3-manylinux1_x86_64.whl</a>
 <a href="https://x/vllm-0.32.0rc1-cp38-abi3-manylinux1_x86_64.whl#sha256=4">vllm-0.32.0rc1-cp38-abi3-manylinux1_x86_64.whl</a>
-<a href="https://x/vllm-0.99.0-cp38-abi3-manylinux1_x86_64.whl#sha256=5" data-yanked="broken">vllm-0.99.0-cp38-abi3-manylinux1_x86_64.whl</a>
+<a href="https://x/vllm-0.99.0-cp38-abi3-manylinux1_x86_64.whl#sha256=5"
+   data-yanked="broken">vllm-0.99.0-cp38-abi3-manylinux1_x86_64.whl</a>
 <a href="https://x/vllm_flash_attn-9.0.0.tar.gz">vllm_flash_attn-9.0.0.tar.gz</a>
 </body></html>"""
 
@@ -122,7 +126,12 @@ class Fake:
 
 @pytest.fixture
 def pypi(monkeypatch: pytest.MonkeyPatch) -> Iterator[Fake]:
-    f = Fake({"/simple/vllm/": INDEX_HTML.encode(), "/simple/sglang/": b'<a href="x/sglang-0.5.21-py3-none-any.whl">sglang-0.5.21-py3-none-any.whl</a>'})
+    f = Fake(
+        {
+            "/simple/vllm/": INDEX_HTML.encode(),
+            "/simple/sglang/": b'<a href="x/sglang-0.5.21-py3-none-any.whl">sglang-0.5.21-py3-none-any.whl</a>',
+        }
+    )
     monkeypatch.setenv("MQDE_PIP_INDEX", f"{f.url}/simple")
     yield f
     f.close()
@@ -150,7 +159,9 @@ def test_index_comes_from_pip_conf_without_needing_pip_installed(no_index_env: P
     """The system python on the dev machine has no pip module, but the user's pip.conf still names the mirror."""
     assert envs.pip_index_url() == "https://pypi.org/simple"
     (no_index_env / ".config/pip").mkdir(parents=True)
-    (no_index_env / ".config/pip/pip.conf").write_text("[global]\nindex-url = https://mirror.example/pypi/simple/\ntrusted-host = mirror.example\n")
+    (no_index_env / ".config/pip/pip.conf").write_text(
+        "[global]\nindex-url = https://mirror.example/pypi/simple/\ntrusted-host = mirror.example\n"
+    )
     assert envs.pip_index_url() == "https://mirror.example/pypi/simple"
 
 
@@ -173,19 +184,33 @@ def asset(tag: str, kind: str) -> str:
 
 
 TAG = "b11565"
-NAMES = [asset(TAG, k) for k in ("ubuntu-x64", "ubuntu-arm64", "ubuntu-cuda-12.8-x64", "ubuntu-cuda-13.4-x64", "macos-arm64", "macos-x64", "ubuntu-vulkan-x64")] + [
-    f"cudart-llama-{TAG}-bin-ubuntu-cuda-12.8-x64.tar.gz", f"cudart-llama-{TAG}-bin-ubuntu-cuda-13.4-x64.tar.gz", f"llama-{TAG}-bin-win-cpu-x64.zip"]
+NAMES = [
+    asset(TAG, k)
+    for k in ("ubuntu-x64", "ubuntu-arm64", "ubuntu-cuda-12.8-x64", "ubuntu-cuda-13.4-x64", "macos-arm64", "macos-x64", "ubuntu-vulkan-x64")
+] + [
+    f"cudart-llama-{TAG}-bin-ubuntu-cuda-12.8-x64.tar.gz",
+    f"cudart-llama-{TAG}-bin-ubuntu-cuda-13.4-x64.tar.gz",
+    f"llama-{TAG}-bin-win-cpu-x64.zip",
+]
 
 
-@pytest.mark.parametrize(("system", "machine", "cuda", "want"), [
-    ("Linux", "x86_64", None, [asset(TAG, "ubuntu-x64")]),
-    ("Linux", "x86_64", (13, 0), [asset(TAG, "ubuntu-cuda-12.8-x64"), f"cudart-llama-{TAG}-bin-ubuntu-cuda-12.8-x64.tar.gz"]),  # 13.4 > driver's 13.0
-    ("Linux", "x86_64", (13, 4), [asset(TAG, "ubuntu-cuda-13.4-x64"), f"cudart-llama-{TAG}-bin-ubuntu-cuda-13.4-x64.tar.gz"]),
-    ("Linux", "x86_64", (11, 8), [asset(TAG, "ubuntu-x64")]),      # driver older than every CUDA build: CPU build, not a broken one
-    ("Linux", "aarch64", None, [asset(TAG, "ubuntu-arm64")]),
-    ("Darwin", "arm64", None, [asset(TAG, "macos-arm64")]),
-    ("Darwin", "x86_64", None, [asset(TAG, "macos-x64")]),
-])
+@pytest.mark.parametrize(
+    ("system", "machine", "cuda", "want"),
+    [
+        ("Linux", "x86_64", None, [asset(TAG, "ubuntu-x64")]),
+        (
+            "Linux",
+            "x86_64",
+            (13, 0),
+            [asset(TAG, "ubuntu-cuda-12.8-x64"), f"cudart-llama-{TAG}-bin-ubuntu-cuda-12.8-x64.tar.gz"],
+        ),  # 13.4 > driver's 13.0
+        ("Linux", "x86_64", (13, 4), [asset(TAG, "ubuntu-cuda-13.4-x64"), f"cudart-llama-{TAG}-bin-ubuntu-cuda-13.4-x64.tar.gz"]),
+        ("Linux", "x86_64", (11, 8), [asset(TAG, "ubuntu-x64")]),  # driver older than every CUDA build: CPU build, not a broken one
+        ("Linux", "aarch64", None, [asset(TAG, "ubuntu-arm64")]),
+        ("Darwin", "arm64", None, [asset(TAG, "macos-arm64")]),
+        ("Darwin", "x86_64", None, [asset(TAG, "macos-x64")]),
+    ],
+)
 def test_asset_choice(system: str, machine: str, cuda: tuple[int, int] | None, want: list[str]) -> None:
     assert envs.pick_llamacpp_assets(NAMES, TAG, system, machine, cuda) == want
 
@@ -198,22 +223,31 @@ def test_candidates_are_ordered_cuda_build_first_with_the_cpu_build_as_the_fallb
 
 
 def test_asset_choice_errors_clearly_when_nothing_fits() -> None:
-    with pytest.raises(RuntimeError, match="no llama.cpp b11565 release asset for Linux/riscv64"):
+    with pytest.raises(RuntimeError, match=r"no llama\.cpp b11565 release asset for Linux/riscv64"):
         envs.pick_llamacpp_assets(NAMES, TAG, "Linux", "riscv64", None)
     with pytest.raises(RuntimeError, match="Windows"):
         envs.pick_llamacpp_assets(NAMES, TAG, "Windows", "AMD64", None)
 
 
 def release(tag: str, names: list[str], base: str, sizes: dict[str, int] | None = None) -> dict[str, object]:
-    return {"tag_name": tag, "draft": False,
-            "assets": [{"name": n, "size": (sizes or {}).get(n, 100), "browser_download_url": f"{base}/dl/{n}"} for n in names]}
+    return {
+        "tag_name": tag,
+        "draft": False,
+        "assets": [{"name": n, "size": (sizes or {}).get(n, 100), "browser_download_url": f"{base}/dl/{n}"} for n in names],
+    }
 
 
 def test_only_numbered_builds_count_as_releases(monkeypatch: pytest.MonkeyPatch) -> None:
     f = Fake({})
     f.srv.RequestHandlerClass  # noqa: B018 - keep the server alive for the duration of the test
-    body = json.dumps([{"tag_name": "v0.6.0", "assets": []}, {"tag_name": "b11564", "assets": []}, {"tag_name": "b11565", "assets": []},
-                       {"tag_name": "b99999", "draft": True, "assets": []}]).encode()
+    body = json.dumps(
+        [
+            {"tag_name": "v0.6.0", "assets": []},
+            {"tag_name": "b11564", "assets": []},
+            {"tag_name": "b11565", "assets": []},
+            {"tag_name": "b99999", "draft": True, "assets": []},
+        ]
+    ).encode()
     g = Fake({"/repos/ggml-org/llama.cpp/releases": body})
     monkeypatch.setenv("MQDE_GITHUB_API", g.url)
     try:
@@ -282,15 +316,18 @@ def test_installed_versions_are_read_from_the_binaries(clean: Path) -> None:
     assert all(r["installed"] for r in rows.values())
 
 
-@pytest.mark.parametrize(("out", "want"), [
-    # verbatim from a real b11567 release binary
-    ("version: 0.6.0-dev (build 11567, commit 972b5fcc1)\nbuilt with GNU 11.4.0 for Linux x86_64", "b11567"),
-    ("version: 11565 (abc1234)\nbuilt with gcc", "b11565"),
-    # a local build without a git history reports build 1: not a release number, keep what it says
-    ("version: 0.5.0-dev (build 1, commit 81ff93e)", "0.5.0-dev (build 1)"),
-    ("version: 0.5.0-dev", "0.5.0-dev"),
-    ("no version here", None),
-])
+@pytest.mark.parametrize(
+    ("out", "want"),
+    [
+        # verbatim from a real b11567 release binary
+        ("version: 0.6.0-dev (build 11567, commit 972b5fcc1)\nbuilt with GNU 11.4.0 for Linux x86_64", "b11567"),
+        ("version: 11565 (abc1234)\nbuilt with gcc", "b11565"),
+        # a local build without a git history reports build 1: not a release number, keep what it says
+        ("version: 0.5.0-dev (build 1, commit 81ff93e)", "0.5.0-dev (build 1)"),
+        ("version: 0.5.0-dev", "0.5.0-dev"),
+        ("no version here", None),
+    ],
+)
 def test_llama_version_parsing(out: str, want: str | None) -> None:
     assert envs.parse_llama_version(out) == want
 
@@ -358,11 +395,15 @@ def test_a_dropped_connection_is_resumed_from_where_it_stopped(tmp_path: Path, m
         srv.close()
     assert (tmp_path / "f.bin").read_bytes() == DATA, "the resumed file is byte-identical, not truncated or duplicated"
     assert srv.requests[0] is None and srv.requests[1].startswith("bytes=") and srv.requests[2].startswith("bytes="), srv.requests
-    assert int(srv.requests[2].split("=")[1].rstrip("-")) > int(srv.requests[1].split("=")[1].rstrip("-")), "each retry continues further on"
+    assert int(srv.requests[2].split("=")[1].rstrip("-")) > int(srv.requests[1].split("=")[1].rstrip("-")), (
+        "each retry continues further on"
+    )
     assert sum("resuming" in line for line in logs) == 2
 
 
-def test_a_server_that_ignores_range_restarts_the_download_instead_of_corrupting_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_server_that_ignores_range_restarts_the_download_instead_of_corrupting_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(envs.time, "sleep", lambda _s: None)
     srv = RangeServer(DATA, drops=1, honor_range=False)
     try:
@@ -457,9 +498,13 @@ def github(monkeypatch: pytest.MonkeyPatch, clean: Path) -> Iterator[dict[str, o
 def put_release(state: dict[str, object], tag: str, server_script: str = '#!/bin/sh\necho "version: {n} (abc)"') -> None:
     n = tag[1:]
     state["tags"].append(tag)  # type: ignore[attr-defined]
-    state["assets"][asset(tag, "ubuntu-x64")] = tarball({  # type: ignore[index]
-        f"llama-{tag}/llama-server": (server_script.replace("{n}", n), 0o644),  # archived without the exec bit: install must set it
-        f"llama-{tag}/llama-quantize": ("#!/bin/sh\ntrue", 0o644), f"llama-{tag}/libggml.so": ("lib", 0o644)})
+    state["assets"][asset(tag, "ubuntu-x64")] = tarball(
+        {  # type: ignore[index]
+            f"llama-{tag}/llama-server": (server_script.replace("{n}", n), 0o644),  # archived without the exec bit: install must set it
+            f"llama-{tag}/llama-quantize": ("#!/bin/sh\ntrue", 0o644),
+            f"llama-{tag}/libggml.so": ("lib", 0o644),
+        }
+    )
 
 
 def test_llamacpp_install_downloads_verifies_and_switches_current(github: dict[str, object], clean: Path) -> None:
@@ -498,13 +543,21 @@ def test_a_release_whose_llama_server_does_not_start_is_not_installed(github: di
 
 
 def test_a_server_that_does_not_start_reports_why_in_the_error(github: dict[str, object], clean: Path) -> None:
-    put_release(github, "b11566", server_script="#!/bin/sh\necho 'error while loading shared libraries: libcudart.so.12: cannot open shared object file' >&2\nexit 127")
-    with pytest.raises(RuntimeError, match="libcudart.so.12: cannot open shared object file"):
+    put_release(
+        github,
+        "b11566",
+        server_script=(
+            "#!/bin/sh\necho 'error while loading shared libraries: libcudart.so.12: cannot open shared object file' >&2\n"
+            "exit 127"
+        ),
+    )
+    with pytest.raises(RuntimeError, match=r"libcudart\.so\.12: cannot open shared object file"):
         envs.install("llamacpp", "b11566", lambda _l: None)
 
 
-def test_downloaded_archives_are_kept_for_the_next_attempt_and_dropped_after_success(github: dict[str, object], clean: Path,
-                                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+def test_downloaded_archives_are_kept_for_the_next_attempt_and_dropped_after_success(
+    github: dict[str, object], clean: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A 700 MB download must not be thrown away because the install step after it failed (here: a transient start failure)."""
     put_release(github, "b11566")
     real = envs._run_out
@@ -520,7 +573,9 @@ def test_downloaded_archives_are_kept_for_the_next_attempt_and_dropped_after_suc
     assert len([h for h in fake.hits if h.startswith("/dl/")]) == 1, "the retry used the cached archive: no second download"
     assert any("using the downloaded" in line for line in logs)
     assert (clean / "envs/llamacpp/current").readlink() == Path("b11566")
-    assert not list((clean / "envs/llamacpp/.cache").glob("*")) if (clean / "envs/llamacpp/.cache").exists() else True, "emptied after success"
+    assert not list((clean / "envs/llamacpp/.cache").glob("*")) if (clean / "envs/llamacpp/.cache").exists() else True, (
+        "emptied after success"
+    )
 
 
 def test_a_cached_archive_of_the_wrong_size_is_downloaded_again(github: dict[str, object], clean: Path) -> None:
@@ -535,19 +590,25 @@ def test_a_cached_archive_of_the_wrong_size_is_downloaded_again(github: dict[str
 # a CUDA release that needs a newer glibc than this machine has (real: llama.cpp's CUDA builds vs Ubuntu 22.04)
 GLIBC_FAIL = (
     "#!/bin/sh\n"
-    "printf '%s\\n' \"./llama-server: /lib/x86_64-linux-gnu/libc.so.6: version \\`GLIBC_2.38' not found (required by ./libggml-base.so.0)\" >&2\n"
+    "printf '%s\\n' \"./llama-server: /lib/x86_64-linux-gnu/libc.so.6: version \\`GLIBC_2.38' not found "
+    "(required by ./libggml-base.so.0)\" >&2\n"
     "exit 1"
 )
 
 
 def put_cuda_release(state: dict[str, object], tag: str, main_script: str, cudart_file: bool = True) -> None:
     state["tags"].append(tag)  # type: ignore[attr-defined]
-    state["assets"][asset(tag, "ubuntu-cuda-12.8-x64")] = tarball({f"llama-{tag}/llama-server": (main_script, 0o755), f"llama-{tag}/libggml-cuda.so": ("lib", 0o644)})  # type: ignore[index]
-    state["assets"][f"cudart-llama-{tag}-bin-ubuntu-cuda-12.8-x64.tar.gz"] = tarball({f"llama-{tag}/libcudart.so.12": ("rt", 0o644)} if cudart_file else {"x": ("", 0o644)})  # type: ignore[index]
+    state["assets"][asset(tag, "ubuntu-cuda-12.8-x64")] = tarball(
+        {f"llama-{tag}/llama-server": (main_script, 0o755), f"llama-{tag}/libggml-cuda.so": ("lib", 0o644)}
+    )  # type: ignore[index]
+    state["assets"][f"cudart-llama-{tag}-bin-ubuntu-cuda-12.8-x64.tar.gz"] = tarball(
+        {f"llama-{tag}/libcudart.so.12": ("rt", 0o644)} if cudart_file else {"x": ("", 0o644)}
+    )  # type: ignore[index]
 
 
 def test_a_cuda_build_this_glibc_cannot_run_falls_back_to_the_cpu_build_without_downloading_cudart(
-        github: dict[str, object], clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    github: dict[str, object], clean: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(envs, "driver_cuda_version", lambda: (12, 8))
     put_cuda_release(github, "b11566", GLIBC_FAIL)
     put_release(github, "b11566")  # also publishes the plain CPU build
@@ -556,25 +617,32 @@ def test_a_cuda_build_this_glibc_cannot_run_falls_back_to_the_cpu_build_without_
     fake: Fake = github["fake"]  # type: ignore[assignment]
     got = [h for h in fake.hits if h.startswith("/dl/")]
     assert not any("cudart" in h for h in got), f"the 566 MB runtime bundle is pointless for a binary that cannot load: {got}"
-    assert any("GLIBC_2.38" in line and "ubuntu-x64" in line for line in logs) or any("CPU" in line or "ubuntu-x64" in line for line in logs)
+    assert any("GLIBC_2.38" in line and "ubuntu-x64" in line for line in logs) or any(
+        "CPU" in line or "ubuntu-x64" in line for line in logs
+    )
     r = envs.resolve("llamacpp")
     assert r is not None and r.source == "managed" and envs.installed_version("llamacpp", r) == "b11566"
     assert not (r.path.parent / "libggml-cuda.so").exists(), "the CPU build, not a half-installed CUDA one"
 
 
 def test_a_missing_cuda_runtime_is_fixed_by_the_cudart_bundle_not_treated_as_incompatible(
-        github: dict[str, object], clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    github: dict[str, object], clean: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(envs, "driver_cuda_version", lambda: (12, 8))
-    needs_rt = ('#!/bin/sh\n[ -f "${0%/*}/libcudart.so.12" ] || { echo "error while loading shared libraries: '
-                'libcudart.so.12: cannot open shared object file: No such file or directory" >&2; exit 127; }\n'
-                'echo "version: 0.6.0-dev (build 11566, commit abc)"')
+    needs_rt = (
+        '#!/bin/sh\n[ -f "${0%/*}/libcudart.so.12" ] || { echo "error while loading shared libraries: '
+        'libcudart.so.12: cannot open shared object file: No such file or directory" >&2; exit 127; }\n'
+        'echo "version: 0.6.0-dev (build 11566, commit abc)"'
+    )
     put_cuda_release(github, "b11566", needs_rt)
     assert envs.install("llamacpp", "b11566", lambda _l: None) == "b11566"
     r = envs.resolve("llamacpp")
     assert r is not None and (r.path.parent / "libggml-cuda.so").exists() and (r.path.parent / "libcudart.so.12").exists()
 
 
-def test_when_every_build_fails_the_error_says_why_for_each(github: dict[str, object], clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_when_every_build_fails_the_error_says_why_for_each(
+    github: dict[str, object], clean: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(envs, "driver_cuda_version", lambda: (12, 8))
     put_cuda_release(github, "b11566", GLIBC_FAIL)
     put_release(github, "b11566", server_script="#!/bin/sh\necho 'Illegal instruction' >&2\nexit 132")
@@ -621,18 +689,25 @@ def test_dry_run_touches_nothing(github: dict[str, object], clean: Path) -> None
 def fake_uv(clean: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A `uv` that records its arguments and, for `venv`, creates an env whose python reports $FAKE_VERSION."""
     rec = clean / "uv.calls"
-    uv = sh(clean / "toolbin/uv", f'''echo "$@" >> {rec}
+    uv = sh(
+        clean / "toolbin/uv",
+        f"""echo "$@" >> {rec}
 case "$1" in
   python) echo /usr/bin/python3.12 ;;
-  venv) mkdir -p "$2/bin"; printf '#!/bin/sh\\necho "${{FAKE_VERSION}}"\\n' > "$2/bin/python"; chmod +x "$2/bin/python"; touch "$2/bin/vllm"; chmod +x "$2/bin/vllm" ;;
+  venv) mkdir -p "$2/bin"
+        printf '#!/bin/sh\\necho "${{FAKE_VERSION}}"\\n' > "$2/bin/python"
+        chmod +x "$2/bin/python"; touch "$2/bin/vllm"; chmod +x "$2/bin/vllm" ;;
   pip) [ -n "$FAKE_PIP_FAIL" ] && {{ echo "boom: no matching distribution" >&2; exit 1; }}; exit 0 ;;
-esac''')
+esac""",
+    )
     monkeypatch.setenv("PATH", f"{uv.parent}:{clean / 'emptybin'}:/bin:/usr/bin")
     monkeypatch.setenv("MQDE_PIP_INDEX", "http://index.invalid/simple")
     return rec
 
 
-def test_fresh_install_creates_the_env_then_installs_the_pinned_version(fake_uv: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fresh_install_creates_the_env_then_installs_the_pinned_version(
+    fake_uv: Path, clean: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("FAKE_VERSION", "0.31.0")
     logs: list[str] = []
     assert envs.install("vllm", "0.31.0", logs.append) == "0.31.0"
@@ -640,8 +715,9 @@ def test_fresh_install_creates_the_env_then_installs_the_pinned_version(fake_uv:
     env = clean / "envs/vllm"
     assert calls[0] == "python find 3.12"
     assert calls[1] == f"venv {env} --python /usr/bin/python3.12 --seed"
-    assert calls[2] == (f"pip install --python {env}/bin/python --index-url http://index.invalid/simple "
-                        "--index-strategy unsafe-best-match vllm==0.31.0")
+    assert calls[2] == (
+        f"pip install --python {env}/bin/python --index-url http://index.invalid/simple --index-strategy unsafe-best-match vllm==0.31.0"
+    )
     r = envs.resolve("vllm")
     assert r is not None and r.source == "managed" and envs.installed_version("vllm", r) == "0.31.0"
 
@@ -656,7 +732,9 @@ def test_update_reuses_the_existing_env(fake_uv: Path, clean: Path, monkeypatch:
     assert len(calls) == 1 and calls[0].startswith("pip install") and calls[0].endswith("vllm==0.31.0"), "no new venv for an update"
 
 
-def test_a_failed_first_install_leaves_no_env_that_resolve_would_pick_up(fake_uv: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_failed_first_install_leaves_no_env_that_resolve_would_pick_up(
+    fake_uv: Path, clean: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("FAKE_VERSION", "0.31.0")
     monkeypatch.setenv("FAKE_PIP_FAIL", "1")
     logs: list[str] = []
@@ -676,7 +754,9 @@ def test_a_failed_update_keeps_the_working_env(fake_uv: Path, clean: Path, monke
     assert r is not None and envs.installed_version("vllm", r) == "0.30.0"
 
 
-def test_install_is_refused_when_the_installed_version_is_not_what_was_asked(fake_uv: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_install_is_refused_when_the_installed_version_is_not_what_was_asked(
+    fake_uv: Path, clean: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("FAKE_VERSION", "0.30.0")  # uv "succeeds" but the env still reports the old version
     with pytest.raises(RuntimeError, match=r"reports '0\.30\.0', expected '0\.31\.0'"):
         envs.install("vllm", "0.31.0", lambda _l: None)
@@ -767,7 +847,9 @@ def test_the_installer_still_parses_as_python_3_10() -> None:
             pytest.fail(f"{rel} is not valid Python 3.10: {e}")
         # feature_version only gates grammar the parser tracks; f-string nesting is tokenizer-level in 3.12, so also look for it
         for i, line in enumerate(src.splitlines(), 1):
-            if re.search(r"""f"[^"\n]*\{[^}"\n]*"[^"\n]*"[^}"\n]*\}""", line) or re.search(r"""f'[^'\n]*\{[^}'\n]*'[^'\n]*'[^}'\n]*\}""", line):
+            if re.search(r"""f"[^"\n]*\{[^}"\n]*"[^"\n]*"[^}"\n]*\}""", line) or re.search(
+                r"""f'[^'\n]*\{[^}'\n]*'[^'\n]*'[^}'\n]*\}""", line
+            ):
                 pytest.fail(f"{rel}:{i} reuses the f-string's own quote inside a replacement field (3.12+ only): {line.strip()[:100]}")
 
 
@@ -798,47 +880,67 @@ def llama_src(clean: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     src.mkdir(parents=True)
     (src / "CMakeLists.txt").write_text("project(fake)")
     calls = clean / "cmake.calls"
-    cmake = sh(clean / "toolbin/cmake", f'''echo "$@" >> {calls}
+    cmake = sh(
+        clean / "toolbin/cmake",
+        f"""echo "$@" >> {calls}
 case "$1" in
-  --build) mkdir -p "$2/bin"; printf '#!/bin/sh\\n[ -n "$FAKE_BUILD_BROKEN" ] && exit 9\\necho "version: 0.6.0-dev (build 11574, commit 8bb3cf0d2)"\\n' > "$2/bin/llama-server"; chmod +x "$2/bin/llama-server" ;;
+  --build) mkdir -p "$2/bin"
+    v='echo "version: 0.6.0-dev (build 11574, commit 8bb3cf0d2)"'
+    printf '#!/bin/sh\\n[ -n "$FAKE_BUILD_BROKEN" ] && exit 9\\n%s\\n' "$v" > "$2/bin/llama-server"
+    chmod +x "$2/bin/llama-server" ;;
   --install) mkdir -p "$4/bin"; cp "$2/bin/llama-server" "$4/bin/llama-server" ;;
   *) [ -n "$FAKE_CONFIGURE_FAIL" ] && {{ echo "CMake Error: could not find CUDA" >&2; exit 1; }}; mkdir -p "$4" 2>/dev/null; true ;;
-esac''')
+esac""",
+    )
     monkeypatch.setenv("PATH", f"{cmake.parent}:{clean / 'emptybin'}:/bin:/usr/bin")
     monkeypatch.setattr(envs, "driver_cuda_version", lambda: None)
-    monkeypatch.setattr(envs, "_run_out", lambda cmd, timeout=90: ("8.9\n" if cmd and "nvidia-smi" in str(cmd[0]) else real_run_out(cmd, timeout)))
+    monkeypatch.setattr(
+        envs, "_run_out", lambda cmd, timeout=90: "8.9\n" if cmd and "nvidia-smi" in str(cmd[0]) else real_run_out(cmd, timeout)
+    )
     return calls
 
 
 real_run_out = envs._run_out
 
 
-def test_build_from_the_submodule_configures_cuda_for_this_gpu_and_installs_it_as_the_current_release(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_from_the_submodule_configures_cuda_for_this_gpu_and_installs_it_as_the_current_release(
+    llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     sh(clean / "toolbin/nvidia-smi", "true")
     nvcc = sh(clean / "toolbin/nvcc", "true")
     monkeypatch.setattr(envs, "CUDA_ROOTS", [])
     logs: list[str] = []
     tag = envs.build_llamacpp(envs.Runner(logs.append))
     assert tag == "b11574", "named by the build number the binary itself reports"
-    configure = [c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c][0]
-    for want in ("-DGGML_CUDA=ON", "-DCMAKE_CUDA_ARCHITECTURES=89", f"-DCMAKE_CUDA_COMPILER={nvcc}", "-DCMAKE_BUILD_TYPE=Release",
-                 "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_OPENSSL=OFF"):
+    configure = next(c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c)
+    for want in (
+        "-DGGML_CUDA=ON",
+        "-DCMAKE_CUDA_ARCHITECTURES=89",
+        f"-DCMAKE_CUDA_COMPILER={nvcc}",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DLLAMA_BUILD_TESTS=OFF",
+        "-DLLAMA_OPENSSL=OFF",
+    ):
         assert want in configure, (want, configure)
     r = envs.resolve("llamacpp")
     assert r is not None and r.source == "managed" and envs.installed_version("llamacpp", r) == "b11574"
     assert (clean / "envs/llamacpp/current").readlink() == Path("b11574")
 
 
-def test_build_makes_the_installed_binary_find_its_libraries_relative_to_itself(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_makes_the_installed_binary_find_its_libraries_relative_to_itself(
+    llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """`cmake --install` strips the build tree's rpath: without this llama-server died with `libllama-server-impl.so: cannot open`."""
     monkeypatch.setattr(envs, "CUDA_ROOTS", [])
     monkeypatch.setattr(envs, "find_host_compiler", lambda: None)
     envs.build_llamacpp(envs.Runner(lambda _m: None))
-    configure = [c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c][0]
+    configure = next(c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c)
     assert "-DCMAKE_INSTALL_RPATH=$ORIGIN/../lib" in configure.split(), configure
 
 
-def test_build_lets_the_linker_find_the_cuda_runtime_next_to_the_toolkit(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_lets_the_linker_find_the_cuda_runtime_next_to_the_toolkit(
+    llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A conda `ld` does not search the toolkit's lib64, so `libggml-cuda.so` -> `libcudart.so.13` was `undefined reference` when
     linking the tools; the toolkit lives beside its nvcc (`<root>/bin/nvcc`, `<root>/lib64`)."""
     sh(clean / "toolbin/nvidia-smi", "true")
@@ -847,12 +949,14 @@ def test_build_lets_the_linker_find_the_cuda_runtime_next_to_the_toolkit(llama_s
     monkeypatch.setattr(envs, "CUDA_ROOTS", [])
     monkeypatch.setattr(envs, "find_host_compiler", lambda: None)
     envs.build_llamacpp(envs.Runner(lambda _m: None))
-    configure = [c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c][0]
+    configure = next(c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c)
     assert f"-DCMAKE_EXE_LINKER_FLAGS=-Wl,-rpath-link,{clean / 'lib64'}" in configure, configure
     assert f"-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-rpath-link,{clean / 'lib64'}" in configure, configure
 
 
-def test_build_lets_the_linker_find_the_host_compilers_own_runtime_libraries(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_lets_the_linker_find_the_host_compilers_own_runtime_libraries(
+    llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The conda GCC's libgomp lives in its prefix's lib/, which its own `ld` does not search for a shared library's needs."""
     sh(clean / "toolbin/nvidia-smi", "true")
     sh(clean / "toolbin/nvcc", "true")
@@ -861,17 +965,19 @@ def test_build_lets_the_linker_find_the_host_compilers_own_runtime_libraries(lla
     monkeypatch.setattr(envs, "CUDA_ROOTS", [])
     monkeypatch.setattr(envs, "find_host_compiler", lambda: (None, str(clean / "conda/bin/c++")))
     envs.build_llamacpp(envs.Runner(lambda _m: None))
-    configure = [c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c][0]
+    configure = next(c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c)
     assert f"-DCMAKE_EXE_LINKER_FLAGS=-Wl,-rpath-link,{clean / 'lib64'}:{clean / 'conda/lib'} " in configure + " ", configure
     assert f"-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-rpath-link,{clean / 'lib64'}:{clean / 'conda/lib'} " in configure + " ", configure
 
 
-def test_a_cpu_only_build_still_gets_the_host_compilers_library_directory(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_cpu_only_build_still_gets_the_host_compilers_library_directory(
+    llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     (clean / "conda/lib").mkdir(parents=True)
     monkeypatch.setattr(envs, "CUDA_ROOTS", [])
     monkeypatch.setattr(envs, "find_host_compiler", lambda: (None, str(clean / "conda/bin/c++")))
     envs.build_llamacpp(envs.Runner(lambda _m: None))
-    configure = [c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA=OFF" in c][0]
+    configure = next(c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA=OFF" in c)
     assert f"-DCMAKE_EXE_LINKER_FLAGS=-Wl,-rpath-link,{clean / 'conda/lib'} " in configure + " ", configure
 
 
@@ -881,19 +987,21 @@ def test_build_without_a_toolkit_lib_directory_adds_no_linker_flags(llama_src: P
     monkeypatch.setattr(envs, "CUDA_ROOTS", [])
     monkeypatch.setattr(envs, "find_host_compiler", lambda: None)
     envs.build_llamacpp(envs.Runner(lambda _m: None))
-    assert "LINKER_FLAGS" not in [c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c][0]
+    assert "LINKER_FLAGS" not in next(c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c)
 
 
 def test_build_without_cuda_makes_a_cpu_build_and_says_so(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(envs, "CUDA_ROOTS", [])
     logs: list[str] = []
     envs.build_llamacpp(envs.Runner(logs.append))
-    configure = [c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c][0]
+    configure = next(c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c)
     assert "-DGGML_CUDA=OFF" in configure and "CUDA_ARCHITECTURES" not in configure
     assert any("no CUDA compiler" in line for line in logs)
 
 
-def test_a_failed_build_leaves_the_working_install_alone(llama_src: Path, clean: Path, github: dict[str, object], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_failed_build_leaves_the_working_install_alone(
+    llama_src: Path, clean: Path, github: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
     sh(clean / "envs/llamacpp/b11500/llama-server", 'echo "version: 0.6.0-dev (build 11500, commit x)"')
     (clean / "envs/llamacpp/current").symlink_to("b11500")
     monkeypatch.setattr(envs, "CUDA_ROOTS", [])
@@ -914,7 +1022,7 @@ def test_a_build_whose_server_does_not_start_is_not_installed(llama_src: Path, c
 
 
 def test_building_without_the_submodule_checked_out_explains_how_to_get_it(clean: Path) -> None:
-    with pytest.raises(RuntimeError, match="git submodule update --init 3rdpart/llama.cpp"):
+    with pytest.raises(RuntimeError, match=r"git submodule update --init 3rdpart/llama\.cpp"):
         envs.build_llamacpp(envs.Runner(lambda _l: None))
 
 
@@ -976,11 +1084,13 @@ def test_when_no_compiler_passes_the_probe_the_default_is_left_alone(clean: Path
     assert envs.find_host_compiler() is None
 
 
-def test_build_passes_the_chosen_compiler_to_cmake_for_c_cxx_and_cuda_host(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_passes_the_chosen_compiler_to_cmake_for_c_cxx_and_cuda_host(
+    llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(envs, "CUDA_ROOTS", [])
     monkeypatch.setattr(envs, "find_host_compiler", lambda: ("/opt/gcc12/cc", "/opt/gcc12/c++"))
     envs.build_llamacpp(envs.Runner(lambda _l: None))
-    configure = [c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c][0]
+    configure = next(c for c in llama_src.read_text().splitlines() if "-DGGML_CUDA" in c)
     for want in ("-DCMAKE_C_COMPILER=/opt/gcc12/cc", "-DCMAKE_CXX_COMPILER=/opt/gcc12/c++", "-DCMAKE_CUDA_HOST_COMPILER=/opt/gcc12/c++"):
         assert want in configure, configure
 
@@ -997,7 +1107,9 @@ def test_changing_compiler_discards_the_stale_build_directory(llama_src: Path, c
     assert not (work / "stale.o").exists()
 
 
-def test_the_same_compiler_keeps_the_build_directory_for_an_incremental_rebuild(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_same_compiler_keeps_the_build_directory_for_an_incremental_rebuild(
+    llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(envs, "CUDA_ROOTS", [])
     work = clean / "envs/llamacpp/build-src"
     work.mkdir(parents=True)
@@ -1008,7 +1120,9 @@ def test_the_same_compiler_keeps_the_build_directory_for_an_incremental_rebuild(
     assert (work / "kept.o").exists()
 
 
-def test_a_source_build_is_reported_as_such_and_updating_it_rebuilds_instead_of_downloading(llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_source_build_is_reported_as_such_and_updating_it_rebuilds_instead_of_downloading(
+    llama_src: Path, clean: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The UI's update button must never replace a CUDA source build with the CPU release (the only official build
     this host can run)."""
     monkeypatch.setattr(envs, "CUDA_ROOTS", [])

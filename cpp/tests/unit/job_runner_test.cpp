@@ -44,8 +44,8 @@ fs::path write_fake_worker(const fs::path& dir) {
 }
 
 fs::path fresh_dir(const char* name) {
-  auto d = fs::temp_directory_path() /
-           (std::string("mqde_job_runner_") + name + "_" + std::to_string(::getpid()));
+  auto d =
+      fs::temp_directory_path() / (std::string("mqde_job_runner_") + name + "_" + std::to_string(::getpid()));
   fs::remove_all(d);
   fs::create_directories(d);
   return d;
@@ -221,7 +221,8 @@ TEST(job_runner_device_split, a_job_with_no_split_fields_only_gets_the_one_devic
   wait_for_terminal(runner, id);
   const auto argv = read_argv(base / "runs", id);
   EXPECT_NE(argv.find("--device cpu"), std::string::npos) << argv;
-  EXPECT_EQ(argv.find("--quant-device"), std::string::npos) << "unset quant_device/eval_device must not add flags: " << argv;
+  EXPECT_EQ(argv.find("--quant-device"), std::string::npos)
+      << "unset quant_device/eval_device must not add flags: " << argv;
   EXPECT_EQ(argv.find("--eval-device"), std::string::npos) << argv;
 }
 
@@ -230,7 +231,8 @@ TEST(job_runner_device_split, a_job_that_sets_both_gets_both_flags_resolved_agai
   const auto script = write_fake_worker(base / "bin");
   ::setenv("MQDE_TEST_FAIL_UNTIL", "0", 1);
   JobRunner runner(base / "runs", base, script.string(), {7}, 1, 0.05);  // one GPU slot: index 7
-  const auto id = runner.submit(Json{{"deploy", {{"device", "gpu"}}}, {"quant_device", "cpu"}, {"evaluation", {{"device", "gpu"}}}});
+  const auto id = runner.submit(
+      Json{{"deploy", {{"device", "gpu"}}}, {"quant_device", "cpu"}, {"evaluation", {{"device", "gpu"}}}});
   wait_for_terminal(runner, id);
   const auto argv = read_argv(base / "runs", id);
   EXPECT_NE(argv.find("--quant-device cpu"), std::string::npos) << argv;
@@ -239,26 +241,33 @@ TEST(job_runner_device_split, a_job_that_sets_both_gets_both_flags_resolved_agai
   EXPECT_NE(argv.find("--eval-device cuda:0"), std::string::npos) << argv;
 }
 
-TEST(job_runner_device_split, evaluation_device_gpu_alone_still_reserves_a_gpu_slot_even_though_deploy_device_is_cpu) {
+TEST(job_runner_device_split,
+     evaluation_device_gpu_alone_still_reserves_a_gpu_slot_even_though_deploy_device_is_cpu) {
   auto base = fresh_dir("split_eval_only");
   const auto script = write_fake_worker(base / "bin");
   ::setenv("MQDE_TEST_FAIL_UNTIL", "0", 1);
   JobRunner runner(base / "runs", base, script.string(), {3}, 1, 0.05);
   // deploy.device=cpu alone would mean "no GPU needed" (today's single-device meaning) -- but
-  // evaluation.device=gpu means this job does need the pool, or eval_fake_wo_kv etc. would have nowhere to run.
+  // evaluation.device=gpu means this job does need the pool, or eval_fake_wo_kv etc. would have nowhere to
+  // run.
   const auto id = runner.submit(Json{{"deploy", {{"device", "cpu"}}}, {"evaluation", {{"device", "gpu"}}}});
   const auto final_ = wait_for_terminal(runner, id);
-  EXPECT_EQ(final_.gpu, 3) << "must have taken the GPU slot, not the (unlimited-looking but still single) CPU one";
+  EXPECT_EQ(final_.gpu, 3)
+      << "must have taken the GPU slot, not the (unlimited-looking but still single) CPU one";
   EXPECT_FALSE(final_.cpu);
   const auto argv = read_argv(base / "runs", id);
-  EXPECT_EQ(argv.find("--quant-device"), std::string::npos) << "quant_device was never set, so no flag for it: " << argv;
+  EXPECT_EQ(argv.find("--quant-device"), std::string::npos)
+      << "quant_device was never set, so no flag for it: " << argv;
   EXPECT_NE(argv.find("--eval-device cuda:0"), std::string::npos) << argv;
 }
 
 // ---- model.type picks the executor module ----
 TEST(job_runner_module, model_type_selects_the_python_pipeline_module) {
-  for (const auto& [type, module] : std::vector<std::pair<std::string, std::string>>{
-           {"llm", "mqde.pipeline.llm_job"}, {"vlm", "mqde.pipeline.vlm_job"}, {"vla", "mqde.pipeline.vla_job"}, {"", "mqde.pipeline.vla_job"}}) {
+  for (const auto& [type, module] :
+       std::vector<std::pair<std::string, std::string>>{{"llm", "mqde.pipeline.llm_job"},
+                                                        {"vlm", "mqde.pipeline.vlm_job"},
+                                                        {"vla", "mqde.pipeline.vla_job"},
+                                                        {"", "mqde.pipeline.vla_job"}}) {
     auto base = fresh_dir(("module_" + (type.empty() ? std::string("default") : type)).c_str());
     const auto script = write_fake_worker(base / "bin");
     ::setenv("MQDE_TEST_FAIL_UNTIL", "0", 1);
@@ -279,7 +288,8 @@ TEST(job_runner_module, a_job_that_reuses_an_export_runs_the_deploy_pipeline_wha
   const auto script = write_fake_worker(base / "bin");
   ::setenv("MQDE_TEST_FAIL_UNTIL", "0", 1);
   JobRunner runner(base / "runs", base, script.string(), {}, 1, 0.05);
-  const auto id = runner.submit(Json{{"deploy", {{"device", "cpu"}}}, {"model", {{"type", "llm"}}},
+  const auto id = runner.submit(Json{{"deploy", {{"device", "cpu"}}},
+                                     {"model", {{"type", "llm"}}},
                                      {"artifact", {{"job", "j1"}, {"format", "gguf"}, {"type", "q4_k"}}}});
   wait_for_terminal(runner, id);
   std::ifstream f(base / "runs" / id / ".argv");

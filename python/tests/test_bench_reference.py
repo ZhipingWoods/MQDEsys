@@ -11,28 +11,51 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "scripts"))
-import bench_reference as br  # noqa: E402
+import bench_reference as br
 
 FIX = Path(__file__).parent / "fixtures" / "reports"
 
 
 def rep(**recipes: dict) -> dict:
-    return {"job_id": "j1", "kind": "llm", "spec": {"model_path": "/m/Qwen2.5-0.5B-Instruct", "name": "m4"},
-            "env": {"eval_device_name": "NVIDIA GeForce RTX 4090"}, "baseline": {"ppl": 10.0, "windows": 40, "seq_len": 512},
-            "recipes": recipes}
+    return {
+        "job_id": "j1",
+        "kind": "llm",
+        "spec": {"model_path": "/m/Qwen2.5-0.5B-Instruct", "name": "m4"},
+        "env": {"eval_device_name": "NVIDIA GeForce RTX 4090"},
+        "baseline": {"ppl": 10.0, "windows": 40, "seq_len": 512},
+        "recipes": recipes,
+    }
 
 
 def recipe(name: str, delta: float, algo: str = "gptq", export: dict | None = None) -> dict:
-    return {"recipe": name, "algorithm": algo, "summary": {"ppl": 10.0 * (1 + delta / 100), "ppl_delta_pct": delta},
-            "eval": {"fake_quant_wo_kv": {"ppl": 10.0 * (1 + delta / 100)}}, **({"export": export} if export is not None else {})}
+    return {
+        "recipe": name,
+        "algorithm": algo,
+        "summary": {"ppl": 10.0 * (1 + delta / 100), "ppl_delta_pct": delta},
+        "eval": {"fake_quant_wo_kv": {"ppl": 10.0 * (1 + delta / 100)}},
+        **({"export": export} if export is not None else {}),
+    }
 
 
-@pytest.mark.parametrize(("name", "delta", "want"), [
-    ("FP8", 0.99, "PASS"), ("FP8", 1.0, "PASS"), ("FP8", 1.01, "FAIL"),
-    ("W4A16", 5.0, "PASS"), ("W4A16", 14.1, "FAIL"), ("W4A16", -0.3, "PASS"),
-    ("W4A16", 5.01, "FAIL"), ("W4A8", 8.0, "PASS"), ("W4A8", 8.01, "FAIL"), ("W4A8", 21.2, "FAIL"),
-    ("W2A16", 900.0, "INFO"), ("W2A8", 5.0, "INFO"), ("W8A16", 99.0, "INFO"), ("BF16", 0.0, "INFO"),
-])
+@pytest.mark.parametrize(
+    ("name", "delta", "want"),
+    [
+        ("FP8", 0.99, "PASS"),
+        ("FP8", 1.0, "PASS"),
+        ("FP8", 1.01, "FAIL"),
+        ("W4A16", 5.0, "PASS"),
+        ("W4A16", 14.1, "FAIL"),
+        ("W4A16", -0.3, "PASS"),
+        ("W4A16", 5.01, "FAIL"),
+        ("W4A8", 8.0, "PASS"),
+        ("W4A8", 8.01, "FAIL"),
+        ("W4A8", 21.2, "FAIL"),
+        ("W2A16", 900.0, "INFO"),
+        ("W2A8", 5.0, "INFO"),
+        ("W8A16", 99.0, "INFO"),
+        ("BF16", 0.0, "INFO"),
+    ],
+)
 def test_the_ppl_threshold_verdicts(name: str, delta: float, want: str) -> None:
     assert br.verdict(name, delta) == want
 
@@ -58,13 +81,26 @@ def test_the_summary_line_counts_passes_and_failures() -> None:
 
 
 def served(ppl: float, pct: float | None, tps: float = 500.0, gib: float | None = 0.43, kernel: str = "MarlinLinearKernel") -> dict:
-    return {"status": "succeeded", "served_ppl": ppl, "served_vs_real_ppl_pct": pct, "load": {"ok": 16, "output_tokens_per_s": tps, "ttft_ms": {"p50": 50.0}},
-            "engine": {"weights_gib": gib, "kv_cache_tokens": 560000, "quant_kernel": kernel}}
+    return {
+        "status": "succeeded",
+        "served_ppl": ppl,
+        "served_vs_real_ppl_pct": pct,
+        "load": {"ok": 16, "output_tokens_per_s": tps, "ttft_ms": {"p50": 50.0}},
+        "engine": {"weights_gib": gib, "kv_cache_tokens": 560000, "quant_kernel": kernel},
+    }
 
 
 def test_the_deployment_matrix_has_a_row_per_export_and_backend_with_its_numbers() -> None:
-    exp = {"awq": {"status": "exported", "real_ppl": 11.4, "bytes": 470_000_000, "vllm": served(11.41, 0.1, 460.0), "sglang": served(11.40, 0.0, 900.0, None, "")},
-           "compressed-tensors": {"status": "exported", "real_ppl": 11.4, "bytes": 470_000_000, "vllm": served(11.41, 0.1, 470.0)}}
+    exp = {
+        "awq": {
+            "status": "exported",
+            "real_ppl": 11.4,
+            "bytes": 470_000_000,
+            "vllm": served(11.41, 0.1, 460.0),
+            "sglang": served(11.40, 0.0, 900.0, None, ""),
+        },
+        "compressed-tensors": {"status": "exported", "real_ppl": 11.4, "bytes": 470_000_000, "vllm": served(11.41, 0.1, 470.0)},
+    }
     md = br.render([rep(W4A16=recipe("W4A16", 14.1, export=exp))], None)
     sec = md.split("## Deployment")[1].split("##")[0]
     rows = [r for r in sec.splitlines() if r.startswith("| W4A16")]
@@ -75,7 +111,9 @@ def test_the_deployment_matrix_has_a_row_per_export_and_backend_with_its_numbers
 
 
 def test_a_recipe_that_cannot_be_exported_is_listed_with_why_not_dropped_silently() -> None:
-    exp = {"awq": {"status": "unsupported", "problems": [{"layer": "x", "reason": "2-bit weights are not supported by awq"}], "n_problems": 3}}
+    exp = {
+        "awq": {"status": "unsupported", "problems": [{"layer": "x", "reason": "2-bit weights are not supported by awq"}], "n_problems": 3}
+    }
     md = br.render([rep(W2A16=recipe("W2A16", 900.0, export=exp), W4A8=recipe("W4A8", 3.0))], None)
     gaps = md.split("## Not deployable")[1]
     assert "W2A16" in gaps and "2-bit weights are not supported by awq" in gaps
@@ -83,15 +121,23 @@ def test_a_recipe_that_cannot_be_exported_is_listed_with_why_not_dropped_silentl
 
 
 def test_a_failed_or_skipped_serving_run_shows_its_reason_in_the_matrix() -> None:
-    exp = {"awq": {"status": "exported", "real_ppl": 11.4, "vllm": {"status": "skipped", "reason": "vllm not found"},
-                   "sglang": {"status": "failed", "error": "boom\nmore", "diagnosis": "CUDA out of memory"}}}
+    exp = {
+        "awq": {
+            "status": "exported",
+            "real_ppl": 11.4,
+            "vllm": {"status": "skipped", "reason": "vllm not found"},
+            "sglang": {"status": "failed", "error": "boom\nmore", "diagnosis": "CUDA out of memory"},
+        }
+    }
     md = br.render([rep(W4A16=recipe("W4A16", 14.1, export=exp))], None)
     assert "skipped" in md and "vllm not found" in md and "CUDA out of memory" in md
 
 
 def test_a_served_ppl_that_is_not_comparable_shows_a_dash_not_a_made_up_percentage() -> None:
     exp = {"awq": {"status": "exported", "real_ppl": 11.4, "vllm": served(11.41, None)}}
-    row = next(r for r in br.render([rep(W4A16=recipe("W4A16", 14.1, export=exp))], None).splitlines() if r.startswith("| W4A16") and "vLLM" in r)
+    row = next(
+        r for r in br.render([rep(W4A16=recipe("W4A16", 14.1, export=exp))], None).splitlines() if r.startswith("| W4A16") and "vLLM" in r
+    )
     assert " – " in row
 
 
@@ -101,8 +147,15 @@ def gg(ty: str, ppl: float, b: int, pp: float, tg: float) -> dict:
 
 def test_llama_cpp_is_one_table_and_compared_with_its_own_f16() -> None:
     r = rep(FP8=recipe("FP8", 0.5))
-    r["llamacpp"] = {"protocol": "llama-perplexity ctx 512, 40 chunks", "backend": "CUDA0", "results": {
-        "f16": gg("f16", 13.89, 948_000_000, 800.0, 26.0), "q4_k": gg("q4_k", 14.75, 511_000_000, 826.0, 48.0), "q2_k": gg("q2_k", 20.0, 330_000_000, 900.0, 60.0)}}
+    r["llamacpp"] = {
+        "protocol": "llama-perplexity ctx 512, 40 chunks",
+        "backend": "CUDA0",
+        "results": {
+            "f16": gg("f16", 13.89, 948_000_000, 800.0, 26.0),
+            "q4_k": gg("q4_k", 14.75, 511_000_000, 826.0, 48.0),
+            "q2_k": gg("q2_k", 20.0, 330_000_000, 900.0, 60.0),
+        },
+    }
     sec = br.render([r], None).split("## llama.cpp")[1].split("##")[0]
     rows = [x for x in sec.splitlines() if x.startswith("| ")]
     q4 = next(x for x in rows if "q4_k" in x)
@@ -121,7 +174,9 @@ def test_weight_memory_estimate_error_against_the_engines_own_report() -> None:
     sec = md.split("## Memory estimate")[1].split("##")[0]
     row = next(x for x in sec.splitlines() if x.startswith("| W4A16") and "vLLM" in x)
     assert "| awq |" in row and "0.42" in row and "0.43" in row and "-2.3%" in row and "PASS" in row
-    assert not any("SGLang" in x for x in sec.splitlines() if x.startswith("| W4A16")), "an engine that reports no weight size has nothing to compare"
+    assert not any("SGLang" in x for x in sec.splitlines() if x.startswith("| W4A16")), (
+        "an engine that reports no weight size has nothing to compare"
+    )
     assert "weights only" in sec.lower()
 
 
@@ -176,8 +231,8 @@ def test_the_f16_row_of_the_llama_cpp_table_is_the_reference_not_a_comparison_wi
 
 
 # ---- --suite m4: submit the reference jobs to a running server, wait, render ----
-import http.server  # noqa: E402
-import threading  # noqa: E402
+import http.server
+import threading
 
 
 class FakeServer:
@@ -205,26 +260,56 @@ class FakeServer:
             def _body(self) -> dict:
                 return json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
 
-            def do_GET(self) -> None:  # noqa: N802
+            def do_GET(self) -> None:
                 if self.path == "/api/v1/health":
                     return self._send(200, {"status": "ok"})
                 if self.path == "/api/v1/jobs":
                     outer.polls += 1
                     done = outer.polls >= 2 and not never_finish
-                    return self._send(200, [{"job_id": j["id"], "state": ("FAILED" if fail_name and j["metadata"]["name"] == fail_name else "SUCCEEDED") if done else "RUNNING"} for j in outer.real])
+                    return self._send(
+                        200,
+                        [
+                            {
+                                "job_id": j["id"],
+                                "state": ("FAILED" if fail_name and j["metadata"]["name"] == fail_name else "SUCCEEDED")
+                                if done
+                                else "RUNNING",
+                            }
+                            for j in outer.real
+                        ],
+                    )
                 if self.path.startswith("/api/v1/jobs/"):
                     jid = self.path.rsplit("/", 1)[1]
                     j = next(x for x in outer.real if x["id"] == jid)
                     failed = fail_name and j["metadata"]["name"] == fail_name
-                    return self._send(200, {"state": "FAILED" if failed else "SUCCEEDED", "report": {"job_id": jid, "kind": "llm", "spec": {"model_path": "/m/q", "name": j["metadata"]["name"]}, "baseline": {"ppl": 10.0},
-                                                                                                  "recipes": {r.upper(): recipe(r.upper(), 1.0) for r in j["quant"]["recipe"]}, **({"error": "RuntimeError: boom"} if failed else {})}})
+                    return self._send(
+                        200,
+                        {
+                            "state": "FAILED" if failed else "SUCCEEDED",
+                            "report": {
+                                "job_id": jid,
+                                "kind": "llm",
+                                "spec": {"model_path": "/m/q", "name": j["metadata"]["name"]},
+                                "baseline": {"ppl": 10.0},
+                                "recipes": {r.upper(): recipe(r.upper(), 1.0) for r in j["quant"]["recipe"]},
+                                **({"error": "RuntimeError: boom"} if failed else {}),
+                            },
+                        },
+                    )
                 self._send(404, {"code": "not_found"})
 
-            def do_POST(self) -> None:  # noqa: N802
+            def do_POST(self) -> None:
                 body = self._body()
                 if self.path.startswith("/api/v1/jobs"):
                     if invalid_name and body["metadata"]["name"] == invalid_name:
-                        return self._send(400, {"code": "invalid_argument", "message": "/export/formats: recipe 'FP8' cannot be exported as awq", "problems": [{"field": "/export/formats"}]})
+                        return self._send(
+                            400,
+                            {
+                                "code": "invalid_argument",
+                                "message": "/export/formats: recipe 'FP8' cannot be exported as awq",
+                                "problems": [{"field": "/export/formats"}],
+                            },
+                        )
                     if "dry_run" in self.path:
                         outer.dry.append(body)
                         return self._send(200, {"valid": True})
@@ -262,10 +347,16 @@ def test_the_suite_splits_recipes_so_that_every_export_format_suits_every_recipe
     specs = br.suite_specs("/models/Qwen2.5-0.5B-Instruct")
     by = {s["metadata"]["name"]: s for s in specs}
     assert sorted(by) == ["m4-fp8", "m4-w4a16", "m4-w4a8-w2"]
-    assert by["m4-fp8"]["quant"]["recipe"] == ["fp8"] and by["m4-fp8"]["export"]["formats"] == ["compressed-tensors"], "fp8 is not an awq checkpoint"
+    assert by["m4-fp8"]["quant"]["recipe"] == ["fp8"] and by["m4-fp8"]["export"]["formats"] == ["compressed-tensors"], (
+        "fp8 is not an awq checkpoint"
+    )
     assert by["m4-w4a16"]["export"]["formats"] == ["awq", "compressed-tensors"]
-    assert by["m4-w4a8-w2"]["quant"]["recipe"] == ["w4a8", "w2a16", "w2a8"] and "export" not in by["m4-w4a8-w2"], "no container holds these yet"
-    assert "llamacpp" in by["m4-fp8"]["deploy"] and "llamacpp" not in by["m4-w4a16"]["deploy"], "GGUF does not depend on the recipe: measured once"
+    assert by["m4-w4a8-w2"]["quant"]["recipe"] == ["w4a8", "w2a16", "w2a8"] and "export" not in by["m4-w4a8-w2"], (
+        "no container holds these yet"
+    )
+    assert "llamacpp" in by["m4-fp8"]["deploy"] and "llamacpp" not in by["m4-w4a16"]["deploy"], (
+        "GGUF does not depend on the recipe: measured once"
+    )
     assert all(s["model"]["path"] == "/models/Qwen2.5-0.5B-Instruct" and s["evaluation"]["max_windows"] == 40 for s in specs)
     covered = [r for s in specs for r in s["quant"]["recipe"]]
     assert sorted(covered) == ["fp8", "w2a16", "w2a8", "w4a16", "w4a8"], "all five recipes of the suite, none twice"
@@ -279,7 +370,7 @@ def test_a_dry_run_validates_every_job_and_queues_none(server) -> None:  # type:
 
 def test_every_job_is_validated_before_any_of_them_takes_the_gpu(server) -> None:  # type: ignore[no-untyped-def]
     s = server(invalid_name="m4-w4a16")
-    with pytest.raises(br.SuiteError, match="m4-w4a16.*cannot be exported as awq"):
+    with pytest.raises(br.SuiteError, match=r"m4-w4a16.*cannot be exported as awq"):
         br.run_suite(s.url, "/m/q", poll_s=0.01)
     assert s.real == [], "the fp8 job was valid but must not have been submitted: the suite is all-or-nothing"
 
@@ -289,13 +380,19 @@ def test_the_suite_submits_waits_collects_reports_and_asks_for_estimates(server)
     reports, estimates = br.run_suite(s.url, "/m/q", poll_s=0.01)
     assert [r["job_id"] for r in reports] == ["job-0", "job-1", "job-2"] and len(s.real) == 3
     assert s.polls >= 2, "it waited for the jobs to finish rather than reading half-written reports"
-    assert s.estimate_bodies[0]["backend"] == "vllm" and sorted(s.estimate_bodies[0]["recipes"]) == ["fp8", "w2a16", "w2a8", "w4a16", "w4a8"]
+    assert s.estimate_bodies[0]["backend"] == "vllm" and sorted(s.estimate_bodies[0]["recipes"]) == [
+        "fp8",
+        "w2a16",
+        "w2a8",
+        "w4a16",
+        "w4a8",
+    ]
     assert {e["recipe_id"] for e in estimates} == {"fp8", "w4a16", "w4a8", "w2a16", "w2a8"}
 
 
 def test_a_failed_job_stops_the_suite_with_its_error(server) -> None:  # type: ignore[no-untyped-def]
     s = server(fail_name="m4-w4a16")
-    with pytest.raises(br.SuiteError, match="m4-w4a16.*FAILED.*boom"):
+    with pytest.raises(br.SuiteError, match=r"m4-w4a16.*FAILED.*boom"):
         br.run_suite(s.url, "/m/q", poll_s=0.01)
 
 
@@ -325,8 +422,14 @@ def test_the_throughput_columns_carry_the_warning_that_engines_are_not_configure
     """Real run: SGLang 1889 tok/s vs vLLM 200 on the same checkpoint. vLLM stages run enforce_eager (no CUDA graphs), SGLang with
     CUDA graphs: the gap is mostly that, so the page must say it next to the numbers."""
     exp = {"awq": {"status": "exported", "real_ppl": 11.4, "vllm": served(11.4, 0.0, 200.0), "sglang": served(11.4, 0.0, 1889.0)}}
-    sec = br.render([rep(W4A16=recipe("W4A16", 3.0, export=exp))], None).split("## Deployment")[1].split("## llama")[0].split("## Memory")[0]
-    assert "enforce_eager=True` (no CUDA graphs)" in sec and "SGLang stage with CUDA graphs on" in sec and "not comparable across engines" in sec
+    sec = (
+        br.render([rep(W4A16=recipe("W4A16", 3.0, export=exp))], None).split("## Deployment")[1].split("## llama")[0].split("## Memory")[0]
+    )
+    assert (
+        "enforce_eager=True` (no CUDA graphs)" in sec
+        and "SGLang stage with CUDA graphs on" in sec
+        and "not comparable across engines" in sec
+    )
 
 
 def test_recipes_that_have_no_container_say_why_in_the_plannersterms() -> None:
@@ -347,4 +450,6 @@ def test_a_recipe_without_a_known_reason_keeps_the_generic_one() -> None:
 
 def test_the_page_states_its_scope() -> None:
     md = br.render([rep(FP8=recipe("FP8", 0.5))], None)
-    assert "Scope: Qwen2.5-0.5B-Instruct only (one model of ARCHITECTURE §11.3's reference set)" in md and "does not claim M4 acceptance" in md
+    assert (
+        "Scope: Qwen2.5-0.5B-Instruct only (one model of ARCHITECTURE §11.3's reference set)" in md and "does not claim M4 acceptance" in md
+    )

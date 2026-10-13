@@ -249,12 +249,14 @@ void add(std::vector<Problem>& out, std::string field, std::string message, std:
 std::vector<Problem> validate_jobspec(const Json& job) {
   std::vector<Problem> out;
 
-  // A job that serves an existing export (B2, `artifact`) quantizes nothing: no recipe, algorithm or calibration.
+  // A job that serves an existing export (B2, `artifact`) quantizes nothing: no recipe, algorithm or
+  // calibration.
   const bool serving_export = job.contains("artifact");
   const auto recipes = job.value(Json::json_pointer("/quant/recipe"), Json::array());
   if (serving_export) {
     if (job.contains("quant"))
-      add(out, "/quant", "a job that serves an existing export quantizes nothing", "remove quant (the artifact names what was quantized)");
+      add(out, "/quant", "a job that serves an existing export quantizes nothing",
+          "remove quant (the artifact names what was quantized)");
   } else if (!recipes.is_array() || recipes.empty()) {
     add(out, "/quant/recipe", "must be a non-empty list of recipe names",
         "pick at least one of w4a16, w4a8, w2a16, w2a8, fp8, bf16");
@@ -329,7 +331,8 @@ std::vector<Problem> validate_jobspec(const Json& job) {
             "quantize-only is incompatible with analysis.sensitivity/logits_probe (both need an evaluated "
             "baseline)",
             "remove them, or turn off evaluation.skip");
-    } else if (mtype == "vla" || mtype == "vlm") {  // both attribute error per modality against an unquantized reference
+    } else if (mtype == "vla" ||
+               mtype == "vlm") {  // both attribute error per modality against an unquantized reference
       if (job.value(Json::json_pointer("/evaluation/attribution"), true))
         add(out, "/evaluation/skip",
             "quantize-only is incompatible with evaluation.attribution=true (attribution needs the BF16 "
@@ -337,14 +340,16 @@ std::vector<Problem> validate_jobspec(const Json& job) {
             "set evaluation.attribution to false, or turn off evaluation.skip");
     }
   }
-  // B2 (作业派生): `artifact` serves a checkpoint a finished llm job already exported (deploy_job.py), on another
-  // backend / device / eval set, without quantizing again. Whether it exists is checked by the server, which
-  // knows the runs directory; here only that the request is coherent.
+  // B2 (作业派生): `artifact` serves a checkpoint a finished llm job already exported (deploy_job.py), on
+  // another backend / device / eval set, without quantizing again. Whether it exists is checked by the
+  // server, which knows the runs directory; here only that the request is coherent.
   if (job.contains("artifact")) {
     const auto& a = job["artifact"];
     const auto& dep = job.contains("deploy") && job["deploy"].is_object() ? job["deploy"] : Json::object();
-    const bool vllm = dep.contains("vllm"), sglang = dep.contains("sglang"), llamacpp = dep.contains("llamacpp");
-    if (mtype != "llm") add(out, "/artifact", "only llm jobs export checkpoints that can be served again", "");
+    const bool vllm = dep.contains("vllm"), sglang = dep.contains("sglang"),
+               llamacpp = dep.contains("llamacpp");
+    if (mtype != "llm")
+      add(out, "/artifact", "only llm jobs export checkpoints that can be served again", "");
     if (!a.is_object()) {
       add(out, "/artifact", "must be {job, recipe, format} or {job, format: gguf, type}", "");
     } else {
@@ -353,17 +358,21 @@ std::vector<Problem> validate_jobspec(const Json& job) {
       if (!std::regex_match(aj, kId)) add(out, "/artifact/job", fmt::format("'{}' is not a job id", aj), "");
       const bool gguf = af == "gguf";
       if (!gguf && af != "awq" && af != "gptq" && af != "compressed-tensors")
-        add(out, "/artifact/format", fmt::format("'{}' is not awq, gptq, compressed-tensors or gguf", af), "");
+        add(out, "/artifact/format", fmt::format("'{}' is not awq, gptq, compressed-tensors or gguf", af),
+            "");
       if (gguf && !std::regex_match(a.value("type", std::string()), kName))
-        add(out, "/artifact/type", "a GGUF artifact is named by its llama.cpp type (q4_k, q8_0, f16, ...)", "");
+        add(out, "/artifact/type", "a GGUF artifact is named by its llama.cpp type (q4_k, q8_0, f16, ...)",
+            "");
       if (!gguf && !std::regex_match(a.value("recipe", std::string()), kName))
         add(out, "/artifact/recipe", "an exported checkpoint is named by its recipe (W4A16, ...)", "");
       if (!vllm && !sglang && !llamacpp)
         add(out, "/deploy", "no serving backend: set deploy.vllm, deploy.sglang or deploy.llamacpp", "");
       else if (gguf && (vllm || sglang))
-        add(out, "/deploy", "a GGUF artifact is served by llama.cpp, not vLLM / SGLang", "use deploy.llamacpp");
+        add(out, "/deploy", "a GGUF artifact is served by llama.cpp, not vLLM / SGLang",
+            "use deploy.llamacpp");
       else if (!gguf && llamacpp)
-        add(out, "/deploy", fmt::format("llama.cpp serves GGUF files; a {} checkpoint goes to vLLM or SGLang", af),
+        add(out, "/deploy",
+            fmt::format("llama.cpp serves GGUF files; a {} checkpoint goes to vLLM or SGLang", af),
             "use deploy.vllm or deploy.sglang");
       if (!gguf && (vllm || sglang) && dep.value("device", std::string()) == "cpu")
         add(out, "/deploy/device", "vLLM / SGLang need a GPU", "set deploy.device to 'gpu'");
@@ -409,7 +418,7 @@ std::vector<Problem> validate_jobspec(const Json& job) {
 
 std::string preferred_export_format(const QuantSpec& weight, const std::string& backend) {
   if (backend == "llamacpp") return "gguf";  // ignores weight entirely; see check_deploy's matching case
-  if (!weight.enabled()) return "";  // bf16: nothing to export
+  if (!weight.enabled()) return "";          // bf16: nothing to export
   if (weight.fmt == NumFormat::kFp8E4M3 || weight.fmt == NumFormat::kFp8E5M2) return "compressed-tensors";
   return weight.bits == 4 ? "awq" : "gptq";
 }

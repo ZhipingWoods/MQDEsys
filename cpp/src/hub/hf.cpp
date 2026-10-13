@@ -292,9 +292,9 @@ Result<RangeProbe> probe_range(httplib::Client& cli, const std::string& path) {
 // Fetches [start, end] (inclusive) into `part` at the matching offset. Retries once on a transient
 // failure; on any other failure sets *cancel so sibling chunks stop promptly.
 Result<void> fetch_range(const HfOptions& o, const std::string& repo, const std::string& file,
-                        const fs::path& part, uint64_t start, uint64_t end, std::atomic<uint64_t>& done,
-                        uint64_t total, const std::function<bool(uint64_t, uint64_t)>& progress,
-                        std::mutex& progress_mu, CancelToken cancel) {
+                         const fs::path& part, uint64_t start, uint64_t end, std::atomic<uint64_t>& done,
+                         uint64_t total, const std::function<bool(uint64_t, uint64_t)>& progress,
+                         std::mutex& progress_mu, CancelToken cancel) {
   std::fstream out(part, std::ios::binary | std::ios::in | std::ios::out);
   if (!out) return make_error(Errc::kIo, "cannot open {} for chunk {}-{}", part.string(), start, end);
   out.seekp(static_cast<std::streamoff>(start));
@@ -331,8 +331,8 @@ Result<void> fetch_range(const HfOptions& o, const std::string& repo, const std:
     if (attempt == 0) continue;  // one retry on a transient mid-chunk failure
     cancel.cancel();
     return r ? std::unexpected(http_error(r, fmt::format("{}/{} range {}-{}", repo, file, start, end)))
-             : make_error(Errc::kExternal, "{}/{} range {}-{}: incomplete chunk ({} of {} bytes)", repo,
-                         file, start, end, got, end - start + 1);
+             : make_error(Errc::kExternal, "{}/{} range {}-{}: incomplete chunk ({} of {} bytes)", repo, file,
+                          start, end, got, end - start + 1);
   }
   cancel.cancel();
   return make_error(Errc::kExternal, "{}/{} range {}-{}: failed", repo, file, start, end);

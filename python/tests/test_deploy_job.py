@@ -31,25 +31,48 @@ def runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (p / "export" / "w4a16-awq" / "config.json").write_text("{}")
     (p / "export" / "gguf").mkdir()
     (p / "export" / "gguf" / "model-q4_k.gguf").write_bytes(b"GGUF")
-    (p / "report.json").write_text(json.dumps({
-        "kind": "llm", "job_id": PARENT, "spec": {"model_path": "/models/qwen", "name": "parent"}, "baseline": {"ppl": 3.5},
-        "data": {"eval": {"dataset": "wikitext-2 test", "windows": 2, "seq_len": 64}},
-        "stages": [{"stage": "report", "status": "succeeded"}],
-        "recipes": {"W4A16": {"recipe": "W4A16", "algorithm": "gptq", "summary": {"ppl": 3.9, "ppl_delta_pct": 11.4},
-                              "export": {"awq": {"status": "exported", "real_ppl": 4.0, "bytes": 449_000_000},
-                                         "gptq": {"status": "unsupported", "problems": []}}}},
-        "llamacpp": {"results": {"q4_k": {"type": "q4_k", "ppl": 14.7, "bytes": 4}}},
-    }))
+    (p / "report.json").write_text(
+        json.dumps(
+            {
+                "kind": "llm",
+                "job_id": PARENT,
+                "spec": {"model_path": "/models/qwen", "name": "parent"},
+                "baseline": {"ppl": 3.5},
+                "data": {"eval": {"dataset": "wikitext-2 test", "windows": 2, "seq_len": 64}},
+                "stages": [{"stage": "report", "status": "succeeded"}],
+                "recipes": {
+                    "W4A16": {
+                        "recipe": "W4A16",
+                        "algorithm": "gptq",
+                        "summary": {"ppl": 3.9, "ppl_delta_pct": 11.4},
+                        "export": {
+                            "awq": {"status": "exported", "real_ppl": 4.0, "bytes": 449_000_000},
+                            "gptq": {"status": "unsupported", "problems": []},
+                        },
+                    }
+                },
+                "llamacpp": {"results": {"q4_k": {"type": "q4_k", "ppl": 14.7, "bytes": 4}}},
+            }
+        )
+    )
     monkeypatch.setattr(deploy_job, "load_tokenizer", lambda path: TOKENIZER_FROM.append(str(path)))
     monkeypatch.setattr(deploy_job, "eval_ids", lambda tok: torch.arange(1000, 1000 + 4 * 64))
+    # no dataset, no pyarrow
+    monkeypatch.setattr(deploy_job, "wikitext_text", lambda split: "stand-in for the wikitext-2 file llama-perplexity reads")
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)  # the stages only gate on it; the mocks need no GPU
     monkeypatch.setenv("FAKE_LOGPROB", "-1.5")
     return r
 
 
 def spec(runs: Path, **kw: object) -> DeployJobSpec:
-    base: dict = {"name": "derived", "model_path": "/models/qwen", "artifact": {"job": PARENT, "recipe": "W4A16", "format": "awq"},
-                  "eval_seq_len": 64, "eval_windows": 2, "output_dir": str(runs)}
+    base: dict = {
+        "name": "derived",
+        "model_path": "/models/qwen",
+        "artifact": {"job": PARENT, "recipe": "W4A16", "format": "awq"},
+        "eval_seq_len": 64,
+        "eval_windows": 2,
+        "output_dir": str(runs),
+    }
     return DeployJobSpec(**{**base, **kw})
 
 
@@ -57,8 +80,9 @@ def serve_cfg() -> dict:
     return {"requests": 4, "concurrency": 2, "prompt_len": 32, "n_predict": 4, "ppl_windows": 2}
 
 
-def test_sglang_serves_the_parents_checkpoint_and_compares_with_its_real_weights(runs: Path, tmp_path: Path,
-                                                                               monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sglang_serves_the_parents_checkpoint_and_compares_with_its_real_weights(
+    runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("MQDE_SGLANG_PYTHON", str(mock_backend.wrapper(tmp_path, "python")))
     before = sorted(p.name for p in (runs / PARENT / "export").iterdir())
     rep = DeployJob(spec(runs, sglang=serve_cfg()), job_id="child").run()
@@ -73,15 +97,16 @@ def test_sglang_serves_the_parents_checkpoint_and_compares_with_its_real_weights
     assert list((runs / "child" / "serve").glob("sglang-*.log"))
 
 
-def test_the_tokenizer_comes_from_the_checkpoint_or_for_a_gguf_from_the_original_model(runs: Path, tmp_path: Path,
-                                                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_tokenizer_comes_from_the_checkpoint_or_for_a_gguf_from_the_original_model(
+    runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("MQDE_SGLANG_PYTHON", str(mock_backend.wrapper(tmp_path, "python")))
     TOKENIZER_FROM.clear()
     DeployJob(spec(runs, sglang=serve_cfg()), job_id="a").run()
     monkeypatch.setattr(deploy_job, "perplexity", lambda *a, **k: {"ppl": 15.0})
     monkeypatch.setattr(deploy_job, "bench", lambda *a, **k: {})
     DeployJob(spec(runs, artifact={"job": PARENT, "format": "gguf", "type": "q4_k"}, llamacpp={"serve": None}), job_id="b").run()
-    assert TOKENIZER_FROM == [str(runs / PARENT / "export" / "w4a16-awq"), "/models/qwen"]
+    assert [str(runs / PARENT / "export" / "w4a16-awq"), "/models/qwen"] == TOKENIZER_FROM
 
 
 def test_vllm_through_the_mock(runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -103,24 +128,29 @@ def test_gguf_on_llama_cpp_runs_perplexity_bench_and_the_server(runs: Path, tmp_
     monkeypatch.setattr(deploy_job, "bench", lambda *a, **k: {"backend": "CPU", "pp_tokens_per_s": 100.0, "tg_tokens_per_s": 20.0})
     monkeypatch.setenv("MQDE_LLAMA_SERVER_BIN", str(mock_backend.wrapper(tmp_path, "llama-server")))
     art = {"job": PARENT, "recipe": "", "format": "gguf", "type": "q4_k"}
-    rep = DeployJob(spec(runs, artifact=art, llamacpp={"gpu_layers": 0, "serve": {"concurrency": 2, "requests": 4, "prompt_len": 32, "n_predict": 4}}),
-                    job_id="child").run()
+    rep = DeployJob(
+        spec(runs, artifact=art, llamacpp={"gpu_layers": 0, "serve": {"concurrency": 2, "requests": 4, "prompt_len": 32, "n_predict": 4}}),
+        job_id="child",
+    ).run()
     assert rep["verdict"] == "succeeded", rep.get("error")
     assert seen["ppl"] == ("model-q4_k.gguf", 64, 2, 0), "the CPU run of the parent's q4_k, on this job's eval settings"
-    l = rep["deploy"]["llamacpp"]
-    assert l["ppl"] == 15.0 and l["parent_ppl"] == 14.7 and l["ppl_vs_parent_pct"] == pytest.approx(100 * (15.0 / 14.7 - 1))
-    assert l["tg_tokens_per_s"] == 20.0 and l["serve"]["status"] in ("succeeded", "degraded")
+    cpp = rep["deploy"]["llamacpp"]
+    assert cpp["ppl"] == 15.0 and cpp["parent_ppl"] == 14.7 and cpp["ppl_vs_parent_pct"] == pytest.approx(100 * (15.0 / 14.7 - 1))
+    assert cpp["tg_tokens_per_s"] == 20.0 and cpp["serve"]["status"] in ("succeeded", "degraded")
 
 
-@pytest.mark.parametrize(("art", "msg"), [
-    ({"job": "nope", "recipe": "W4A16", "format": "awq"}, "not found"),
-    ({"job": PARENT, "recipe": "W4A16", "format": "gptq"}, "unsupported"),           # the parent could not export it
-    ({"job": PARENT, "recipe": "W8A16", "format": "awq"}, "W8A16"),                  # never quantized there
-    ({"job": f"../{PARENT}", "recipe": "W4A16", "format": "awq"}, "job id"),         # no path tricks
-    ({"job": PARENT, "recipe": "../W4A16", "format": "awq"}, "recipe"),
-    ({"job": PARENT, "recipe": "W4A16", "format": "safetensors"}, "format"),
-    ({"job": PARENT, "recipe": "", "format": "gguf", "type": "q2_k"}, "q2_k"),        # no such GGUF in the parent
-])
+@pytest.mark.parametrize(
+    ("art", "msg"),
+    [
+        ({"job": "nope", "recipe": "W4A16", "format": "awq"}, "not found"),
+        ({"job": PARENT, "recipe": "W4A16", "format": "gptq"}, "unsupported"),  # the parent could not export it
+        ({"job": PARENT, "recipe": "W8A16", "format": "awq"}, "W8A16"),  # never quantized there
+        ({"job": f"../{PARENT}", "recipe": "W4A16", "format": "awq"}, "job id"),  # no path tricks
+        ({"job": PARENT, "recipe": "../W4A16", "format": "awq"}, "recipe"),
+        ({"job": PARENT, "recipe": "W4A16", "format": "safetensors"}, "format"),
+        ({"job": PARENT, "recipe": "", "format": "gguf", "type": "q2_k"}, "q2_k"),  # no such GGUF in the parent
+    ],
+)
 def test_a_bad_artifact_fails_the_job_with_a_reason(runs: Path, art: dict, msg: str) -> None:
     with pytest.raises(ValueError, match=msg):
         DeployJob(spec(runs, artifact=art, sglang=serve_cfg()), job_id="child").run()
@@ -129,7 +159,7 @@ def test_a_bad_artifact_fails_the_job_with_a_reason(runs: Path, art: dict, msg: 
 
 
 def test_a_format_the_backend_cannot_load_is_refused(runs: Path) -> None:
-    with pytest.raises(ValueError, match="llama.cpp"):
+    with pytest.raises(ValueError, match=r"llama\.cpp"):
         DeployJob(spec(runs, llamacpp={}), job_id="child").run()  # an awq checkpoint on llama.cpp
     with pytest.raises(ValueError, match="GGUF"):
         DeployJob(spec(runs, artifact={"job": PARENT, "format": "gguf", "type": "q4_k"}, vllm={}), job_id="child3").run()
@@ -139,14 +169,29 @@ def test_a_format_the_backend_cannot_load_is_refused(runs: Path) -> None:
 
 def test_from_yaml_reads_the_wizards_deploy_job(tmp_path: Path) -> None:
     p = tmp_path / "j.yaml"
-    p.write_text(yaml.safe_dump({
-        "metadata": {"name": "d", "parent_job": PARENT}, "model": {"type": "llm", "path": "/m"},
-        "artifact": {"job": PARENT, "recipe": "W4A16", "format": "awq"},
-        "evaluation": {"dataset": "wikitext-2-raw-v1:test", "seq_len": 256, "max_windows": 10},
-        "deploy": {"device": "gpu", "sglang": {"mem_fraction_static": 0.4}}, "output_dir": "/runs"}))
+    p.write_text(
+        yaml.safe_dump(
+            {
+                "metadata": {"name": "d", "parent_job": PARENT},
+                "model": {"type": "llm", "path": "/m"},
+                "artifact": {"job": PARENT, "recipe": "W4A16", "format": "awq"},
+                "evaluation": {"dataset": "wikitext-2-raw-v1:test", "seq_len": 256, "max_windows": 10},
+                "deploy": {"device": "gpu", "sglang": {"mem_fraction_static": 0.4}},
+                "output_dir": "/runs",
+            }
+        )
+    )
     s = DeployJobSpec.from_yaml(p)
-    assert (s.name, s.model_path, s.artifact["format"], s.eval_seq_len, s.eval_windows, s.sglang, s.vllm, s.output_dir) == \
-        ("d", "/m", "awq", 256, 10, {"mem_fraction_static": 0.4}, None, "/runs")
+    assert (s.name, s.model_path, s.artifact["format"], s.eval_seq_len, s.eval_windows, s.sglang, s.vllm, s.output_dir) == (
+        "d",
+        "/m",
+        "awq",
+        256,
+        10,
+        {"mem_fraction_static": 0.4},
+        None,
+        "/runs",
+    )
     assert (s.device, s.parent_job) == ("cuda:0", PARENT)
     d = yaml.safe_load(p.read_text())
     d["deploy"] = {"device": "cpu", "llamacpp": {"gpu_layers": 0}}
@@ -155,7 +200,9 @@ def test_from_yaml_reads_the_wizards_deploy_job(tmp_path: Path) -> None:
     assert s.device == "cpu" and s.llamacpp_gpu_layers == 0
 
 
-def test_a_concurrency_sweep_is_run_against_the_served_checkpoint_when_asked(runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_concurrency_sweep_is_run_against_the_served_checkpoint_when_asked(
+    runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("MQDE_SGLANG_PYTHON", str(mock_backend.wrapper(tmp_path, "python")))
     cfg = {**serve_cfg(), "sweep": {"levels": [4, 1, 2], "requests_per_level": 2, "max_ttft_p99_ms": 5000}}
     rep = DeployJob(spec(runs, sglang=cfg), job_id="child").run()
@@ -176,7 +223,9 @@ def test_a_sweep_with_no_levels_given_uses_the_default_ladder(runs: Path, tmp_pa
     assert _flag(rep["deploy"]["sglang"]["args"], "--max-running-requests") == "16", "the engine admits the default ladder's top"
 
 
-def test_a_failing_sweep_does_not_throw_away_the_rest_of_the_serving_result(runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_failing_sweep_does_not_throw_away_the_rest_of_the_serving_result(
+    runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from mqde.eval import loadtest
 
     monkeypatch.setenv("MQDE_VLLM_BIN", str(mock_backend.wrapper(tmp_path, "vllm")))
@@ -190,7 +239,9 @@ def _flag(args: list, name: str) -> str:
     return str(args[args.index(name) + 1])
 
 
-def test_the_engine_admits_as_many_sequences_as_the_highest_sweep_level(runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_engine_admits_as_many_sequences_as_the_highest_sweep_level(
+    runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Real vLLM run (2026-10-13): with max_num_seqs left at 8, throughput 'saturated' at concurrency 8 and TTFT p99 jumped
     from 60 ms to 1.2 s at 16 -- the sweep was measuring the engine's own admission limit, not the hardware."""
     monkeypatch.setenv("MQDE_SGLANG_PYTHON", str(mock_backend.wrapper(tmp_path, "python")))
@@ -205,10 +256,15 @@ def test_the_engine_admits_as_many_sequences_as_the_highest_sweep_level(runs: Pa
     low = {**serve_cfg(), "sweep": {"levels": [1, 2], "requests_per_level": 2}}
     assert _flag(DeployJob(spec(runs, vllm=low), job_id="d").run()["deploy"]["vllm"]["args"], "--max-num-seqs") == "8"
     # a plain concurrency above 8 still wins over the floor
-    assert _flag(DeployJob(spec(runs, vllm={**serve_cfg(), "concurrency": 12}), job_id="e").run()["deploy"]["vllm"]["args"], "--max-num-seqs") == "12"
+    assert (
+        _flag(DeployJob(spec(runs, vllm={**serve_cfg(), "concurrency": 12}), job_id="e").run()["deploy"]["vllm"]["args"], "--max-num-seqs")
+        == "12"
+    )
 
 
-def test_served_ppl_is_compared_with_the_parent_only_when_the_evaluation_protocol_is_the_same(runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_served_ppl_is_compared_with_the_parent_only_when_the_evaluation_protocol_is_the_same(
+    runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Real vLLM run (2026-10-13): 256 x 4 windows against the parent's 512 x 40 showed '+26.45%', which was only the shorter
     context. PPL depends on seq_len (and the windows drawn), so a different protocol is not comparable at all."""
     monkeypatch.setenv("MQDE_SGLANG_PYTHON", str(mock_backend.wrapper(tmp_path, "python")))
@@ -219,11 +275,15 @@ def test_served_ppl_is_compared_with_the_parent_only_when_the_evaluation_protoco
         diff = DeployJob(spec(runs, sglang=serve_cfg(), **kw), job_id="diff").run()
         assert diff["artifact"]["ppl_comparable"] is False, kw
         sg = diff["deploy"]["sglang"]
-        assert sg["status"] == "succeeded" and sg["served_ppl"] > 0 and sg["served_vs_real_ppl_pct"] is None, "still measured, just not compared"
+        assert sg["status"] == "succeeded" and sg["served_ppl"] > 0 and sg["served_vs_real_ppl_pct"] is None, (
+            "still measured, just not compared"
+        )
         assert "not comparable" in diff["artifact"]["ppl_note"] and "2 x 64" in diff["artifact"]["ppl_note"]
 
 
-def test_a_parent_that_does_not_say_how_it_evaluated_is_not_assumed_comparable(runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_parent_that_does_not_say_how_it_evaluated_is_not_assumed_comparable(
+    runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("MQDE_SGLANG_PYTHON", str(mock_backend.wrapper(tmp_path, "python")))
     rp = runs / PARENT / "report.json"
     rep = json.loads(rp.read_text())
@@ -234,7 +294,9 @@ def test_a_parent_that_does_not_say_how_it_evaluated_is_not_assumed_comparable(r
     assert out["deploy"]["sglang"]["served_vs_real_ppl_pct"] is None and "did not record" in out["artifact"]["ppl_note"]
 
 
-def test_a_gguf_is_compared_with_the_parents_llama_cpp_ppl_under_the_same_rule(runs: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_a_gguf_is_compared_with_the_parents_llama_cpp_ppl_under_the_same_rule(
+    runs: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(deploy_job, "perplexity", lambda *a, **k: {"ppl": 15.0})
     monkeypatch.setattr(deploy_job, "bench", lambda *a, **k: {})
     art = {"job": PARENT, "format": "gguf", "type": "q4_k"}

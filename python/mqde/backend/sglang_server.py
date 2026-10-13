@@ -116,7 +116,7 @@ class SglangServer(ServerBackend):
                 out[k] = conv(m)
         # K and V are separate pools (MHA/GQA: "K size: a GB, V size: b GB"); MLA-style caches print one "KV size: c GB".
         # kv_cache_gib is the total either way.
-        m = re.search(r"KV Cache is allocated\..*?K size: ([\d.]+) GB, V size: ([\d.]+) GB", log) 
+        m = re.search(r"KV Cache is allocated\..*?K size: ([\d.]+) GB, V size: ([\d.]+) GB", log)
         if m:
             out["kv_cache_gib"] = float(m.group(1)) + float(m.group(2))
         elif m := re.search(r"KV Cache is allocated\..*?KV size: ([\d.]+) GB", log):

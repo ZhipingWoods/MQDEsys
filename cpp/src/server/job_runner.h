@@ -20,9 +20,9 @@ namespace mqde::server {
 struct JobProc {
   std::string id;
   std::string state;  // QUEUED | RUNNING | SUCCEEDED | FAILED | CANCELLED
-  int gpu = -1;        // -1 while queued, and for CPU jobs
-  bool cpu = false;    // no GPU slot needed: deploy.device == "cpu" and neither quant_device nor
-                       // evaluation.device (below) asks for one either
+  int gpu = -1;       // -1 while queued, and for CPU jobs
+  bool cpu = false;   // no GPU slot needed: deploy.device == "cpu" and neither quant_device nor
+                      // evaluation.device (below) asks for one either
   std::string module = "mqde.pipeline.vla_job";  // model.type == "llm" -> mqde.pipeline.llm_job
   // T-1304/T-1306: top-level quant_device / evaluation.device, read verbatim from the submitted job (same
   // "cpu"|"gpu" symbols the frontend's single device selector already sends as deploy.device) -- unset
@@ -32,8 +32,8 @@ struct JobProc {
   pid_t pid = -1;
   int exit_code = 0;
   double submitted_at = 0, started_at = 0, finished_at = 0;
-  int attempt = 1;       // 1-based: which launch this is
-  int max_attempts = 3;  // stop retrying once attempt reaches this
+  int attempt = 1;         // 1-based: which launch this is
+  int max_attempts = 3;    // stop retrying once attempt reaches this
   double retry_after = 0;  // while QUEUED again after a failure: epoch seconds before it may be relaunched
 };
 

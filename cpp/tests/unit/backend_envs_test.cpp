@@ -1,5 +1,6 @@
 // BackendEnvs: the server side of "update vLLM / SGLang / llama.cpp" -- validated, non-shell invocation of
-// scripts/setup_backend.py, one install at a time, progress in a log. Driven by a fake script, no packages touched.
+// scripts/setup_backend.py, one install at a time, progress in a log. Driven by a fake script, no packages
+// touched.
 #include <gtest/gtest.h>
 #include <signal.h>
 #include <sys/stat.h>
@@ -21,7 +22,8 @@ namespace fs = std::filesystem;
 namespace {
 
 fs::path fresh_dir(const char* name) {
-  auto d = fs::temp_directory_path() / (std::string("mqde_backend_envs_") + name + "_" + std::to_string(::getpid()));
+  auto d = fs::temp_directory_path() /
+           (std::string("mqde_backend_envs_") + name + "_" + std::to_string(::getpid()));
   fs::remove_all(d);
   fs::create_directories(d);
   return d;
@@ -30,18 +32,19 @@ fs::path fresh_dir(const char* name) {
 // Records every invocation's arguments (one line each) in $FAKE_LOG, then behaves per the first argument.
 fs::path fake_script(const fs::path& dir) {
   const auto p = dir / "setup_backend.sh";
-  std::ofstream(p) << "#!/bin/sh\n"
-                      "echo \"$@\" >> \"$FAKE_LOG\"\n"
-                      "echo $$ > \"$FAKE_LOG.pid\"\n"
-                      "case \"$1\" in\n"
-                      "  status) [ -n \"$FAKE_STATUS_FAIL\" ] && { echo 'boom: uv exploded' >&2; exit 1; }\n"
-                      "          sleep \"${FAKE_STATUS_SLEEP:-0}\"\n"
-                      "          echo 'warning on stdout first'\n"
-                      "          echo '[{\"id\":\"vllm\",\"installed\":true,\"version\":\"0.30.0\"}]' ;;\n"
-                      "  install) echo \"installing $2\"; echo 'to stderr' >&2\n"
-                      "           i=0; while [ $i -lt \"${FAKE_LINES:-0}\" ]; do echo \"line $i\"; i=$((i+1)); done\n"
-                      "           sleep \"${FAKE_SLEEP:-0}\"; exit \"${FAKE_EXIT:-0}\" ;;\n"
-                      "esac\n";
+  std::ofstream(p)
+      << "#!/bin/sh\n"
+         "echo \"$@\" >> \"$FAKE_LOG\"\n"
+         "echo $$ > \"$FAKE_LOG.pid\"\n"
+         "case \"$1\" in\n"
+         "  status) [ -n \"$FAKE_STATUS_FAIL\" ] && { echo 'boom: uv exploded' >&2; exit 1; }\n"
+         "          sleep \"${FAKE_STATUS_SLEEP:-0}\"\n"
+         "          echo 'warning on stdout first'\n"
+         "          echo '[{\"id\":\"vllm\",\"installed\":true,\"version\":\"0.30.0\"}]' ;;\n"
+         "  install) echo \"installing $2\"; echo 'to stderr' >&2\n"
+         "           i=0; while [ $i -lt \"${FAKE_LINES:-0}\" ]; do echo \"line $i\"; i=$((i+1)); done\n"
+         "           sleep \"${FAKE_SLEEP:-0}\"; exit \"${FAKE_EXIT:-0}\" ;;\n"
+         "esac\n";
   ::chmod(p.c_str(), 0755);
   return p;
 }
@@ -50,7 +53,8 @@ struct Env {
   fs::path dir, script, log;
   Env(const char* name) : dir(fresh_dir(name)), script(fake_script(dir)), log(dir / "calls.log") {
     ::setenv("FAKE_LOG", log.c_str(), 1);
-    for (const char* k : {"FAKE_STATUS_FAIL", "FAKE_STATUS_SLEEP", "FAKE_LINES", "FAKE_SLEEP", "FAKE_EXIT"}) ::unsetenv(k);
+    for (const char* k : {"FAKE_STATUS_FAIL", "FAKE_STATUS_SLEEP", "FAKE_LINES", "FAKE_SLEEP", "FAKE_EXIT"})
+      ::unsetenv(k);
   }
   std::string calls() const {
     std::ifstream f(log);
@@ -111,7 +115,8 @@ TEST(backend_envs, hostile_backend_ids_and_versions_are_rejected_and_nothing_run
     ASSERT_FALSE(r) << backend;
     EXPECT_EQ(r.error().code, Errc::kInvalidArgument) << backend;
   }
-  for (const char* version : {"1.0; rm -rf /", "$(id)", "1 2", "../x", "-1", "==1.0", "1.0\n", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}) {
+  for (const char* version : {"1.0; rm -rf /", "$(id)", "1 2", "../x", "-1", "==1.0", "1.0\n",
+                              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}) {
     auto r = b.start_install("vllm", version);
     ASSERT_FALSE(r) << version;
     EXPECT_EQ(r.error().code, Errc::kInvalidArgument) << version;
@@ -120,7 +125,8 @@ TEST(backend_envs, hostile_backend_ids_and_versions_are_rejected_and_nothing_run
 }
 
 TEST(backend_envs, valid_ids_and_versions) {
-  for (const char* v : {"0.31.0", "b11565", "0.5.22.dev586+g86624f14e", "1!2.0"}) EXPECT_TRUE(valid_backend_version(v)) << v;
+  for (const char* v : {"0.31.0", "b11565", "0.5.22.dev586+g86624f14e", "1!2.0"})
+    EXPECT_TRUE(valid_backend_version(v)) << v;
   EXPECT_TRUE(valid_backend_version("")) << "no version = the newest";
   for (const char* id : {"vllm", "sglang", "llamacpp"}) EXPECT_TRUE(valid_backend_id(id)) << id;
 }
@@ -174,7 +180,8 @@ TEST(backend_envs, only_one_install_runs_at_a_time) {
   EXPECT_NE(second.error().message.find("vllm"), std::string::npos) << "says which install is in the way";
   ASSERT_TRUE(b.current_install());
   EXPECT_EQ(b.current_install()->at("id"), *first);
-  for (int i = 0; i < 150 && e.calls().empty(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(20));  // let the first script start
+  for (int i = 0; i < 150 && e.calls().empty(); ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));  // let the first script start
   EXPECT_EQ(e.calls(), "install vllm --version 0.31.0\n") << "the refused request ran nothing";
 }
 
@@ -218,11 +225,13 @@ TEST(backend_envs, destroying_the_manager_stops_a_running_install) {
   {
     BackendEnvs b({e.script.string()}, e.dir / "logs");
     ASSERT_TRUE(b.start_install("vllm", ""));
-    for (int i = 0; i < 100 && !fs::exists(e.log.string() + ".pid"); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    for (int i = 0; i < 100 && !fs::exists(e.log.string() + ".pid"); ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
     std::ifstream(e.log.string() + ".pid") >> pid;
     ASSERT_GT(pid, 0);
     ASSERT_EQ(::kill(pid, 0), 0) << "the install is running";
   }
-  for (int i = 0; i < 100 && ::kill(pid, 0) == 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  for (int i = 0; i < 100 && ::kill(pid, 0) == 0; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
   EXPECT_NE(::kill(pid, 0), 0) << "no orphaned installer left behind when the server stops";
 }

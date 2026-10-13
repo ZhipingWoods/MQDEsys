@@ -39,7 +39,8 @@ TEST(estimator_domain, vlm_is_implemented_and_knows_the_minicpmv_family) {
   auto d = load_domain("vlm");
   ASSERT_TRUE(d) << d.error().message;
   EXPECT_EQ(d->pipeline_status, "implemented");
-  EXPECT_NE(std::find(d->model_families.begin(), d->model_families.end(), "minicpmv"), d->model_families.end());
+  EXPECT_NE(std::find(d->model_families.begin(), d->model_families.end(), "minicpmv"),
+            d->model_families.end());
 }
 
 TEST(estimator_domain, domains_with_no_real_pipeline_say_so_instead_of_pretending) {
@@ -103,9 +104,11 @@ TEST(estimator_domain, order_is_part_of_the_json_and_a_missing_order_sorts_last_
   auto d = load_domain("llm");
   ASSERT_TRUE(d);
   EXPECT_EQ(to_json(*d).at("order"), 10);
-  const auto dir = std::filesystem::temp_directory_path() / ("mqde_domain_order_" + std::to_string(::getpid()));
+  const auto dir =
+      std::filesystem::temp_directory_path() / ("mqde_domain_order_" + std::to_string(::getpid()));
   std::filesystem::create_directories(dir);
-  for (const auto& [id, order] : {std::pair<std::string, std::string>{"zeta", ""}, {"alpha", ""}, {"mid", "order: 5\n"}}) {
+  for (const auto& [id, order] :
+       {std::pair<std::string, std::string>{"zeta", ""}, {"alpha", ""}, {"mid", "order: 5\n"}}) {
     std::ofstream(dir / (id + ".yaml")) << "id: " << id << "\ndisplay_name: " << id << "\n" << order;
   }
   auto ds = list_domains_in(dir);

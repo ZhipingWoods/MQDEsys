@@ -19,7 +19,7 @@ dependencies:
   - cpp-httplib=0.58
   - gtest
   - pybind11
-  - clang-format
+  - clang-format=23.1.2   # pinned: the formatter version decides what "formatted" means
   - clang-tools
   - nodejs=20
   - pip
@@ -28,10 +28,11 @@ dependencies:
       - torch
       - transformers
       - safetensors
+      - pyarrow   # the `quant` extra of python/pyproject.toml
       - numpy
       - pyyaml
       - jsonschema
       - pytest
-      - ruff
-      - mypy
+      - ruff==0.16.8
+      - mypy==2.3.1
       - pillow

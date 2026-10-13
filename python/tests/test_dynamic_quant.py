@@ -67,7 +67,7 @@ def test_extra_weight_bytes_is_what_keeping_those_layers_in_16_bit_costs() -> No
 
 
 def test_layers_without_a_measurement_are_ignored() -> None:
-    layers = lang(24, {3: 27.0}) + [{"name": "model.x", "component": "language", "out_sqnr_db": None, "shape": [8, 8]}]
+    layers = [*lang(24, {3: 27.0}), {"name": "model.x", "component": "language", "out_sqnr_db": None, "shape": [8, 8]}]
     assert [x["name"].split(".")[3] for x in suggest_skips(layers, bits=4)["layers"]] == ["3"]
 
 

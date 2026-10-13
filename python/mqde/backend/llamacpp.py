@@ -1,8 +1,8 @@
 """llama.cpp backend (T-0705): run a GGUF with ``llama-perplexity`` / ``llama-bench`` on CPU, Metal or CUDA builds.
 
 Binaries come from MQDE_LLAMACPP_BIN, then the managed release ``scripts/setup_backend.py`` installs, then the repo's
-out-of-tree builds (``build/llamacpp/bin``, then ``build/llamacpp-metal/bin``). ``gpu_layers`` maps to ``-ngl``: 0 keeps every layer on the CPU, 99 offloads all
-of them (Metal/CUDA), None leaves llama.cpp's own default.
+out-of-tree builds (``build/llamacpp/bin``, then ``build/llamacpp-metal/bin``). ``gpu_layers`` maps to ``-ngl``: 0 keeps every
+layer on the CPU, 99 offloads all of them (Metal/CUDA), None leaves llama.cpp's own default.
 """
 
 from __future__ import annotations

@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import argparse
 import configparser
-import glob
 import contextlib
+import glob
 import http.client
 import json
 import os
@@ -230,7 +230,7 @@ def status() -> list[dict[str, Any]]:
 # ------------------------------------------------------------------------------------------------ latest versions
 def _urlopen(url: str, timeout: float) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": "mqde-setup", "Accept": "*/*"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 - https URLs we construct, or a test server
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         data: bytes = r.read()
     return data
 
@@ -372,7 +372,7 @@ def _safe_extract(tf: tarfile.TarFile, dest: Path) -> None:
             link = (target.parent / m.linkname).resolve() if m.issym() else (dest / m.linkname).resolve()
             if root != link and root not in link.parents:
                 raise RuntimeError(f"refusing link {m.name!r} -> {m.linkname!r} outside {dest}")
-    tf.extractall(dest)  # noqa: S202 - members validated above
+    tf.extractall(dest)
 
 
 def download(url: str, dest: Path, expected_size: int | None, log: Log, retries: int = 8, timeout: float = 60) -> None:
@@ -389,7 +389,7 @@ def download(url: str, dest: Path, expected_size: int | None, log: Log, retries:
         complete = False
         try:
             with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout) as resp, \
-                    dest.open("ab" if have else "wb") as out:  # noqa: S310
+                    dest.open("ab" if have else "wb") as out:
                 if have and resp.status != 206:  # Range ignored: the body is the whole file again
                     have = 0
                     out.seek(0)
@@ -471,9 +471,7 @@ def pick_python(uv: str, r: Runner) -> str:
         p = subprocess.run([uv, "python", "find", c], capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
         if p.returncode == 0 and p.stdout.strip():
             return p.stdout.strip().splitlines()[-1]
-    if sys.version_info >= (3, 10):
-        return sys.executable
-    raise RuntimeError("no Python >= 3.10 found (set MQDE_BACKEND_PYTHON)")
+    return sys.executable  # this module needs Python >= 3.10 itself, so the interpreter running it always qualifies
 
 
 def install_pypi(backend: str, version: str | None, r: Runner) -> str:
@@ -555,7 +553,8 @@ def install_llamacpp(version: str | None, r: Runner) -> str:
     if is_source_build(resolve("llamacpp")):
         # the official CUDA release does not run on this host (that is why it was built from source): an "update" that
         # replaced it with the CPU release would be a downgrade -- rebuild the submodule instead
-        r.log("the installed llama.cpp was built from 3rdpart/llama.cpp: rebuilding from source rather than replacing it with a release build")
+        r.log("the installed llama.cpp was built from 3rdpart/llama.cpp: "
+              "rebuilding from source rather than replacing it with a release build")
         return build_llamacpp(r)
     rels = llamacpp_releases()
     if version:
@@ -572,7 +571,8 @@ def install_llamacpp(version: str | None, r: Runner) -> str:
     root = envs_dir() / "llamacpp"
     dest = root / tag
     if r.dry_run:
-        r.log(f"llama.cpp {tag}: " + " | fallback: ".join(", ".join(f"{n} ({by_name[n].get('size', 0) // 2**20} MiB)" for n in c) for c in candidates))
+        r.log(f"llama.cpp {tag}: " + " | fallback: ".join(
+            ", ".join(f"{n} ({by_name[n].get('size', 0) // 2**20} MiB)" for n in c) for c in candidates))
         for n in candidates[0]:
             r.log(f"+ download {by_name[n]['browser_download_url']} -> {dest}")
         return tag
@@ -583,7 +583,7 @@ def install_llamacpp(version: str | None, r: Runner) -> str:
     cache.mkdir(exist_ok=True)
     failures: list[str] = []
     for names in candidates:
-        sizes = ", ".join("%s (%d MiB)" % (n, by_name[n].get("size", 0) // 2**20) for n in names)
+        sizes = ", ".join(f"{n} ({by_name[n].get('size', 0) // 2**20} MiB)" for n in names)
         r.log(f"llama.cpp {tag}: trying {sizes}")
         tmp = Path(tempfile.mkdtemp(prefix=f".{tag}.", dir=root))
         try:
@@ -594,7 +594,8 @@ def install_llamacpp(version: str | None, r: Runner) -> str:
             break
         except StartFailure as e:
             failures.append(f"{names[0]}: {e}")
-            r.log(f"{names[0]} cannot run on this machine ({e}); " + ("trying the next build" if names is not candidates[-1] else "no build left to try"))
+            r.log(f"{names[0]} cannot run on this machine ({e}); "
+                  + ("trying the next build" if names is not candidates[-1] else "no build left to try"))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
     else:
@@ -631,7 +632,10 @@ def cuda_architectures(compute_caps: str) -> str | None:
 
 # What llama.cpp's model loader needs from the host C++ library. Real: Ubuntu 22.04's g++ 11.4 fails on this exact construct
 # ("use of deleted function make_error_condition") while a conda GCC 12 compiles it.
-_CXX_PROBE = "#include <future>\n#include <system_error>\nint f() { return 1; }\nint main() { auto x = std::async(std::launch::async, f); return x.get() - 1; }\n"
+_CXX_PROBE = (
+    "#include <future>\n#include <system_error>\nint f() { return 1; }\n"
+    "int main() { auto x = std::async(std::launch::async, f); return x.get() - 1; }\n"
+)
 
 
 def _cxx_works(cxx: str) -> bool:
@@ -697,7 +701,8 @@ def build_llamacpp(r: Runner) -> str:
         r.log("no CUDA compiler found (set CUDACXX): building llama.cpp for the CPU only")
     # A conda `ld` searches neither the CUDA toolkit nor its own prefix for the libraries a *shared* library needs in turn
     # (libggml-cuda.so -> libcudart.so.13, libggml-cpu.so -> libgomp.so.1): the tools would not link without these.
-    libdirs = [d for d in ([nvcc.parent.parent / "lib64"] if nvcc else []) + ([Path(host[1]).parent.parent / "lib"] if host else []) if d.is_dir()]
+    candidate_dirs = ([nvcc.parent.parent / "lib64"] if nvcc else []) + ([Path(host[1]).parent.parent / "lib"] if host else [])
+    libdirs = [d for d in candidate_dirs if d.is_dir()]
     if libdirs:
         flag = "-Wl,-rpath-link," + ":".join(str(d) for d in libdirs)
         args += [f"-DCMAKE_EXE_LINKER_FLAGS={flag}", f"-DCMAKE_SHARED_LINKER_FLAGS={flag}"]

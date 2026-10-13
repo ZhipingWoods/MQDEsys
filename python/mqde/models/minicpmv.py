@@ -12,7 +12,7 @@ The job needs four things from a VLM, and this is all it asks of one (a Qwen3.5-
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -26,7 +26,8 @@ IMAGE_SIZE = (448, 448)
 class MiniCPMV:
     family_name = "minicpmv"
 
-    def __init__(self, path: str | Path, device: str = "cuda", dtype: torch.dtype = torch.bfloat16, trust_remote_code: bool = False) -> None:
+    def __init__(self, path: str | Path, device: str = "cuda", dtype: torch.dtype = torch.bfloat16,
+                 trust_remote_code: bool = False) -> None:
         from transformers import AutoModelForImageTextToText, AutoProcessor
 
         self.path = str(path)
@@ -35,7 +36,9 @@ class MiniCPMV:
         # transformers architecture and needs none.
         self.processor = AutoProcessor.from_pretrained(self.path, trust_remote_code=trust_remote_code)
         self.tokenizer = self.processor.tokenizer
-        self.model = AutoModelForImageTextToText.from_pretrained(self.path, trust_remote_code=trust_remote_code, dtype=dtype)
+        # Any: the HF stubs reject both `.to(device)` and `generate(**inputs)` on this class
+        self.model: Any = cast(
+            Any, AutoModelForImageTextToText.from_pretrained(self.path, trust_remote_code=trust_remote_code, dtype=dtype))
         self.model.to(self.device).eval()
         self.qmodel = QuantModel(self.model, QuantModel.load_family(self.family_name))
         eos = self.model.generation_config.eos_token_id

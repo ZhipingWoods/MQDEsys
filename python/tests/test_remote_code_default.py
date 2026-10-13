@@ -7,6 +7,7 @@ from __future__ import annotations
 import sys
 import types
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 import torch
@@ -35,7 +36,7 @@ def seen(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict]]:
         tokenizer = types.SimpleNamespace(eos_token_id=1)
 
         @classmethod
-        def from_pretrained(cls, path: str, **kw: object) -> "Proc":
+        def from_pretrained(cls, path: str, **kw: object) -> Proc:
             calls.append(("processor", kw))
             return cls()
 
@@ -51,7 +52,7 @@ def seen(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict]]:
     monkeypatch.setitem(sys.modules, "transformers", fake)
 
     class FakeQuantModel:
-        units: list = []
+        units: ClassVar[list] = []
 
         def __init__(self, model: object, family: object) -> None:
             pass

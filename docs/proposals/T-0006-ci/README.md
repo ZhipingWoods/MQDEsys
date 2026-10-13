@@ -29,4 +29,20 @@
 
 ## 4. 实测（4090，干净 conda 环境）
 
-*待填：见下方。*
+环境：4090 服务器，按 `environment.ci.yml` 新建的 `mqde-ci`（Python 3.11，GCC 12，CPU 版 torch，无 GPU 依赖），`BUILD_DIR=build/ci bash scripts/check_all.sh`。
+
+**第一次在干净环境跑门禁：不通过**（开发环境 `mqde` 里一直是绿的）。原因都是"开发环境碰巧掩盖的"：
+
+| 项 | 现象 | 处理 |
+|---|---|---|
+| clang-format | 23 个 C++ 文件、555 处不合格式 | 用固定版本重排 |
+| 构建 | `-O3` 下 GCC 12 的 `-Wformat-truncation`（`hal_loader.c`） | 检查 `snprintf` 返回值并标注截断 |
+| ruff | 146 处（新版规则） | 修复；`vlm_job.py` 加 B023 的单文件豁免（闭包只在循环内同步调用） |
+| mypy | 13 处（`minicpmv.py` 的 HF 桩类型等） | 修复 |
+| pytest | 19 个失败：CPU 版 torch 上 `get_device_name` 抛错；GGUF 测试需要 pyarrow / wikitext 数据集 | 新增 `pipeline/envinfo.device_name`（不抛错）；`test_deploy_job` 桩掉 `wikitext_text`；环境文件加 `pyarrow` |
+
+修复后：C++ 344 项 ctest 通过，pytest 583 通过 / 18 跳过，mypy 55 个文件无问题，前端构建通过；clang-tidy 仍是 SKIP（该工具链的系统头文件它解析不了）。工具版本已在环境文件里固定：clang-format 23.1.2、ruff 0.16.8、mypy 2.3.1（clang-format 23.1.3、ruff 0.17.0 也各自验证过）。torch / transformers 在干净环境里是 2.14.1+cpu / 5.19.0，开发环境是 2.11 / 5.7.0，测试两边都过。
+
+顺带的两处小的工具链改动，属 L2，评审时请看：`cpp/CMakeLists.txt`（`modelspec` 的 include 目录）、`python/pyproject.toml`（上面那条 B023 豁免）。
+
+**仍未验证**：见第 3 节（GitHub 专属语法、Chrome、冷/热构建时间）；`ci.proposal.yml` 里的 e2e 步骤没有在干净环境里跑过（那一步需要服务 + Chrome）。

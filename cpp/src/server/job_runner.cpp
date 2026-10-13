@@ -64,7 +64,7 @@ std::string merged_state(const std::string& from_events, const std::optional<Job
 }
 
 JobRunner::JobRunner(fs::path runs_dir, fs::path repo_root, std::string python, std::vector<int> gpus,
-                      int max_attempts, double base_backoff_s)
+                     int max_attempts, double base_backoff_s)
     : runs_(std::move(runs_dir)),
       repo_(std::move(repo_root)),
       python_(std::move(python)),
@@ -98,13 +98,19 @@ std::string JobRunner::submit(const Json& job) {
   proc.state = "QUEUED";
   proc.submitted_at = now_s();
   proc.max_attempts = max_attempts_;
-  if (const auto& qd = job.value("/quant_device"_json_pointer, Json()); qd.is_string()) proc.quant_device = qd.get<std::string>();
-  if (const auto& ed = job.value("/evaluation/device"_json_pointer, Json()); ed.is_string()) proc.eval_device = ed.get<std::string>();
-  const bool wants_gpu = (proc.quant_device && *proc.quant_device == "gpu") || (proc.eval_device && *proc.eval_device == "gpu");
+  if (const auto& qd = job.value("/quant_device"_json_pointer, Json()); qd.is_string())
+    proc.quant_device = qd.get<std::string>();
+  if (const auto& ed = job.value("/evaluation/device"_json_pointer, Json()); ed.is_string())
+    proc.eval_device = ed.get<std::string>();
+  const bool wants_gpu =
+      (proc.quant_device && *proc.quant_device == "gpu") || (proc.eval_device && *proc.eval_device == "gpu");
   proc.cpu = job.value("/deploy/device"_json_pointer, std::string()) == "cpu" && !wants_gpu;
-  if (job.contains("artifact")) proc.module = "mqde.pipeline.deploy_job";  // serves an existing export, no quantization
-  else if (const auto type = job.value("/model/type"_json_pointer, std::string()); type == "llm") proc.module = "mqde.pipeline.llm_job";
-  else if (type == "vlm") proc.module = "mqde.pipeline.vlm_job";
+  if (job.contains("artifact"))
+    proc.module = "mqde.pipeline.deploy_job";  // serves an existing export, no quantization
+  else if (const auto type = job.value("/model/type"_json_pointer, std::string()); type == "llm")
+    proc.module = "mqde.pipeline.llm_job";
+  else if (type == "vlm")
+    proc.module = "mqde.pipeline.vlm_job";
   {
     std::lock_guard lk(mu_);
     jobs_[id] = proc;
@@ -179,9 +185,11 @@ void JobRunner::launch(JobProc& j, int gpu) {
     // always has: the one slot this launch was actually given, or "cpu" if none was (which wants_gpu at
     // submit() time should have prevented, but a literal real device string -- a direct, non-server
     // invocation's job.yaml -- is passed through unchanged either way).
-    auto resolve = [&](const std::string& sym) { return sym == "gpu" ? std::string(gpu >= 0 ? "cuda:0" : "cpu") : sym; };
-    std::vector<std::string> args = {python_, "-m", j.module, job_yaml, "--job-id", j.id, "--device",
-                                      gpu >= 0 ? "cuda:0" : "cpu"};
+    auto resolve = [&](const std::string& sym) {
+      return sym == "gpu" ? std::string(gpu >= 0 ? "cuda:0" : "cpu") : sym;
+    };
+    std::vector<std::string> args = {python_,    "-m", j.module,   job_yaml,
+                                     "--job-id", j.id, "--device", gpu >= 0 ? "cuda:0" : "cpu"};
     if (j.quant_device) {
       args.emplace_back("--quant-device");
       args.push_back(resolve(*j.quant_device));

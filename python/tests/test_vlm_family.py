@@ -23,7 +23,8 @@ class Tiny(nn.Module):
         layers = nn.ModuleList([nn.ModuleDict({"mlp": nn.ModuleDict({"gate_proj": lin(), "down_proj": lin()}),
                                                "linear_attn": nn.ModuleDict({"in_proj_qkv": lin(), "in_proj_a": lin(), "out_proj": lin()})})
                                 for _ in range(3)])
-        self.model = nn.ModuleDict({"vision_tower": tower, "merger": nn.ModuleDict({"mlp": nn.ModuleList([nn.ModuleDict({"linear_1": lin(), "linear_2": lin()})])}),
+        merger = nn.ModuleDict({"mlp": nn.ModuleList([nn.ModuleDict({"linear_1": lin(), "linear_2": lin()})])})
+        self.model = nn.ModuleDict({"vision_tower": tower, "merger": merger,
                                     "language_model": nn.ModuleDict({"embed_tokens": nn.Embedding(10, 8), "layers": layers})})
         self.lm_head = lin()
 

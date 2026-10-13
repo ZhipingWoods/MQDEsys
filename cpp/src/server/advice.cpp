@@ -83,7 +83,8 @@ std::map<std::string, Measured> measured_for(const fs::path& runs_dir, const std
     const auto path = rep.value("/spec/model_path"_json_pointer, std::string());
     if (path.empty() || fs::weakly_canonical(path, ec).string() != want) continue;
     const auto k = rep.value("kind", std::string());
-    const auto kind = k == "llm" || k == "vlm" ? k : std::string("vla");  // old VLA reports say kind "JobReport"
+    const auto kind =
+        k == "llm" || k == "vlm" ? k : std::string("vla");  // old VLA reports say kind "JobReport"
     const auto recs = rep.find("recipes");
     if (recs == rep.end() || !recs->is_object()) continue;
     for (const auto& [name, rc] : recs->items()) {

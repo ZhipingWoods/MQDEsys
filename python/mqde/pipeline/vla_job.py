@@ -42,6 +42,7 @@ import yaml
 from mqde import core
 from mqde.data.vla import load_split
 from mqde.models.minicpm_vla import MiniCPMVLA, VLASample
+from mqde.pipeline.envinfo import device_name
 from mqde.pipeline.events import EventSink
 from mqde.quant.engine import FakeQuantEngine, RecipeSpec, compare
 
@@ -181,7 +182,7 @@ class VLAJob:
             "git_sha": _git_sha(),
             "torch": torch.__version__,
             "cuda": torch.version.cuda,
-            "device_name": torch.cuda.get_device_name(torch.device(spec.device)) if torch.cuda.is_available() else "cpu",
+            "device_name": device_name(spec.device),
             "host": platform.node(),
             "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
             "mqde_core": core.version(),

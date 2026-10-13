@@ -62,8 +62,9 @@ TEST(hub_catalog_refresh, status_reports_the_configured_interval_and_a_successfu
   const auto path = fresh_catalog_path("status_ok");
   CatalogRefresher r(path, std::chrono::milliseconds(15),
                      [](Catalog base) -> Result<Catalog> { return base; });
-  EXPECT_EQ(r.status().interval_s, 0) << "sub-second intervals round down to 0, which is fine: this test "
-                                      "only checks the field is populated from the constructor, not rounding";
+  EXPECT_EQ(r.status().interval_s, 0)
+      << "sub-second intervals round down to 0, which is fine: this test "
+         "only checks the field is populated from the constructor, not rounding";
   ASSERT_TRUE(wait_until([&] { return !r.status().last_refresh_at.empty(); }));
   EXPECT_TRUE(r.status().last_refresh_ok);
 }

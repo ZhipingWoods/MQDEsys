@@ -164,9 +164,9 @@ struct DlStub {
   std::thread th;
   int port = 0;
   std::string blob = pattern(3 * 1024 * 1024 + 123);
-  std::string etag;                 // sent as X-Linked-ETag when not empty
-  bool honor_range = true;          // false: always answer 200 with the full body
-  std::atomic<int> drop_after{-1};  // >= 0: send this many bytes then cut the connection (once)
+  std::string etag;                        // sent as X-Linked-ETag when not empty
+  bool honor_range = true;                 // false: always answer 200 with the full body
+  std::atomic<int> drop_after{-1};         // >= 0: send this many bytes then cut the connection (once)
   std::atomic<int> always_drop_after{-1};  // like drop_after, but every request, not just the first
   std::atomic<int> requests{0};
   std::atomic<long long> first_range{-1};
@@ -184,9 +184,9 @@ struct DlStub {
       const bool is_probe = req.ranges.size() == 1 && req.ranges[0].first == 0 && req.ranges[0].second == 0;
       const int one_shot_cut = is_probe ? -1 : drop_after.exchange(-1);
       const int persistent_cut = always_drop_after.load();
-      const int cut = one_shot_cut >= 0           ? one_shot_cut
-                     : persistent_cut >= 0 && !is_probe ? persistent_cut
-                                                        : -1;
+      const int cut = one_shot_cut >= 0                  ? one_shot_cut
+                      : persistent_cut >= 0 && !is_probe ? persistent_cut
+                                                         : -1;
       auto delivered = std::make_shared<size_t>(0);
       // httplib turns this into 200 or 206 and calls the provider with absolute offsets inside the requested
       // range
@@ -352,15 +352,16 @@ TEST(hub_download_chunked, reassembles_the_exact_bytes_from_several_concurrent_r
   DlStub s;
   const auto d = tmpdir("chunked_ok");
   std::atomic<uint64_t> last_done{0}, last_total{0};
-  auto n = download_file_chunked(s.opts(), "org/m", "w.bin", d / "w.bin", 4,
-                                 [&](uint64_t cur, uint64_t total) {
-                                   last_done = cur;
-                                   last_total = total;
-                                   return true;
-                                 });
+  auto n =
+      download_file_chunked(s.opts(), "org/m", "w.bin", d / "w.bin", 4, [&](uint64_t cur, uint64_t total) {
+        last_done = cur;
+        last_total = total;
+        return true;
+      });
   ASSERT_TRUE(n) << n.error().message;
   EXPECT_EQ(*n, s.blob.size());
-  EXPECT_EQ(slurp(d / "w.bin"), s.blob) << "every byte must land at the right offset, not just the right count";
+  EXPECT_EQ(slurp(d / "w.bin"), s.blob)
+      << "every byte must land at the right offset, not just the right count";
   EXPECT_FALSE(std::filesystem::exists(d / "w.bin.part"));
   EXPECT_EQ(last_total.load(), s.blob.size());
   EXPECT_EQ(last_done.load(), s.blob.size()) << "progress must reach the full size, summed across chunks";
@@ -404,15 +405,17 @@ TEST(hub_download_chunked, a_one_shot_connection_drop_on_one_chunk_is_retried_an
   auto r = download_file_chunked(s.opts(), "org/m", "w.bin", d / "w.bin", 4);
   ASSERT_TRUE(r) << r.error().message;
   EXPECT_EQ(slurp(d / "w.bin"), s.blob) << "the cut chunk's own retry must recover it, like a single-stream "
-                                       "download recovers from one dropped connection";
+                                           "download recovers from one dropped connection";
 }
 
 TEST(hub_download_chunked, a_persistent_range_failure_fails_the_whole_download_and_removes_the_partial_file) {
   DlStub s;
-  s.always_drop_after = 1000;  // every request for this file is cut short, not just the first -- no retry helps
+  s.always_drop_after =
+      1000;  // every request for this file is cut short, not just the first -- no retry helps
   const auto d = tmpdir("chunked_drop_persistent");
   auto r = download_file_chunked(s.opts(), "org/m", "w.bin", d / "w.bin", 4);
   ASSERT_FALSE(r) << "a chunk that can never complete must not be silently reported as success";
   EXPECT_FALSE(std::filesystem::exists(d / "w.bin"));
-  EXPECT_FALSE(std::filesystem::exists(d / "w.bin.part")) << "the broken partial file must not be left behind";
+  EXPECT_FALSE(std::filesystem::exists(d / "w.bin.part"))
+      << "the broken partial file must not be left behind";
 }

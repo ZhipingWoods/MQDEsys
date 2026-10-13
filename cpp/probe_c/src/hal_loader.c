@@ -49,7 +49,10 @@ static void copy(char* dst, size_t cap, const char* src) {
 static void reject(slot_t* s, const char* fmt, const char* a, const char* b) {
   char msg[1200];
   s->info.status = MQDE_HAL_REJECTED;
-  snprintf(msg, sizeof msg, fmt, a ? a : "", b ? b : "");
+  const int n = snprintf(msg, sizeof msg, fmt, a ? a : "", b ? b : "");
+  /* A long path in the message is cut by snprintf; say so instead of ending mid-word (and the checked return
+   * value is what tells -Wformat-truncation, active at -O3, that the truncation is handled). */
+  if (n < 0 || (size_t)n >= sizeof msg) memcpy(msg + sizeof msg - 4, "...", 4);
   copy(s->info.reason, sizeof s->info.reason, msg);
 }
 

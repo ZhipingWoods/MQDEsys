@@ -32,6 +32,7 @@ from mqde.data.text import calib_batches, eval_ids
 from mqde.eval.logits_probe import capture_reference, compare_to_reference, split_windows
 from mqde.eval.ppl import perplexity
 from mqde.models.hf_llm import HFCausalLM
+from mqde.pipeline.envinfo import device_name
 from mqde.pipeline.events import EventSink
 from mqde.quant import kv as kvq
 from mqde.quant.blockwise import BlockwiseQuantizer, MixedPrecisionPolicy
@@ -390,7 +391,8 @@ class LLMJob:
                 sp = served_perplexity(srv.port, ids.tolist(), s.eval_seq_len, int(cfg.get("ppl_windows", s.eval_windows)),
                                        concurrency=conc)
                 sw = self._sweep(srv.port, cfg, prompt_len, n_predict)
-                lm = (self._lm_eval(srv.port, ckpt, self._serve_dir(ckpt) / f"lm-eval-{ckpt.name}", cfg["lm_eval"], openai_models(srv.port)[0]["id"])
+                lm = (self._lm_eval(srv.port, ckpt, self._serve_dir(ckpt) / f"lm-eval-{ckpt.name}", cfg["lm_eval"],
+                                    openai_models(srv.port)[0]["id"])
                       if cfg.get("lm_eval") else None)
                 props, engine = srv.props(), srv.engine_info()
         except Exception as e:
@@ -402,7 +404,8 @@ class LLMJob:
         good = bool(sm["ok"]) and load.get("ok") == load["spec"]["requests"]
         return {"status": "succeeded" if good else "degraded", "startup_s": srv.startup_s, "args": srv.args, "props": props,
                 "engine": engine, "smoke": sm, "load": load, "served_ppl": sp["ppl"], "served_windows": sp["windows"],
-                "served_vs_real_ppl_pct": (100.0 * (sp["ppl"] / real_ppl - 1.0)) if real_ppl else None, **({"lm_eval": lm} if lm is not None else {}),
+                "served_vs_real_ppl_pct": (100.0 * (sp["ppl"] / real_ppl - 1.0)) if real_ppl else None,
+                **({"lm_eval": lm} if lm is not None else {}),
                 **({"sweep": sw} if sw is not None else {})}
 
     def _sglang_serve(self, ckpt: Path, ids: torch.Tensor, real_ppl: float | None) -> dict[str, Any]:
@@ -446,7 +449,8 @@ class LLMJob:
         good = bool(sm["ok"]) and load.get("ok") == load["spec"]["requests"]
         return {"status": "succeeded" if good else "degraded", "startup_s": srv.startup_s, "args": srv.args, "props": props,
                 "engine": engine, "smoke": sm, "load": load, "served_ppl": sp["ppl"], "served_windows": sp["windows"],
-                "served_vs_real_ppl_pct": (100.0 * (sp["ppl"] / real_ppl - 1.0)) if real_ppl else None, **({"sweep": sw} if sw is not None else {})}
+                "served_vs_real_ppl_pct": (100.0 * (sp["ppl"] / real_ppl - 1.0)) if real_ppl else None,
+                **({"sweep": sw} if sw is not None else {})}
 
     @staticmethod
     def _max_seqs(cfg: dict[str, Any], conc: int) -> int:
@@ -467,7 +471,8 @@ class LLMJob:
 
         levels = [int(c) for c in sc.get("levels", [1, 2, 4, 8, 16])]
         try:
-            out = loadtest.sweep(port, levels, requests_per_level=int(sc.get("requests_per_level", 16)), prompt_len=prompt_len, n_predict=n_predict)
+            out = loadtest.sweep(port, levels, requests_per_level=int(sc.get("requests_per_level", 16)),
+                                 prompt_len=prompt_len, n_predict=n_predict)
         except Exception as e:
             self.ev.log(f"concurrency sweep failed: {e}", level="warning")
             return {"error": f"{type(e).__name__}: {e}"}
@@ -477,7 +482,8 @@ class LLMJob:
             out["max_ttft_p99_ms"] = float(budget)
         for p in out["points"]:
             if p.get("output_tokens_per_s"):
-                self.ev.emit("metric", name=f"sweep.c{p['concurrency']}.tps", value=p["output_tokens_per_s"], msg=f"concurrency {p['concurrency']}")
+                self.ev.emit("metric", name=f"sweep.c{p['concurrency']}.tps", value=p["output_tokens_per_s"],
+                             msg=f"concurrency {p['concurrency']}")
         return out
 
     def _lm_eval_baseline(self) -> dict[str, Any]:
@@ -532,9 +538,6 @@ class LLMJob:
         torch.manual_seed(s.seed)
         # GPTQ's Cholesky/GEMM results depend on the BLAS thread count (bit-level), which its sequential error
         # feedback amplifies (~1% PPL for W4 on Qwen2.5-0.5B): the count is part of the reproducibility key.
-        def device_name(device: str) -> str:
-            return torch.cuda.get_device_name(torch.device(device)) if device.startswith("cuda") and torch.cuda.is_available() else "cpu"
-
         self.report["env"] = {
             "torch": torch.__version__, "torch_threads": torch.get_num_threads(),
             "quant_device": s.quant_device, "eval_device": s.eval_device,
@@ -702,7 +705,8 @@ def main() -> None:
     if a.device is not None:
         spec.device = spec.quant_device = spec.eval_device = a.device
     for k, v in {"model_path": a.model, "algorithm": a.algorithm, "quant_device": a.quant_device, "eval_device": a.eval_device,
-                 "act_static": a.act_static, "eval_windows": a.eval_windows, "calib_samples": a.calib_samples, "kv_method": a.kv_method}.items():
+                 "act_static": a.act_static, "eval_windows": a.eval_windows, "calib_samples": a.calib_samples,
+                 "kv_method": a.kv_method}.items():
         if v is not None:
             setattr(spec, k, v)
     if a.recipes:

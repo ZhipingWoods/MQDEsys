@@ -38,6 +38,7 @@ ignore = [
 # so closing over the loop variable is correct here (B023 cannot see that).
 "mqde/pipeline/llm_job.py" = ["B023"]
 "mqde/pipeline/vla_job.py" = ["B023"]
+"mqde/pipeline/vlm_job.py" = ["B023"]
 
 [tool.mypy]
 python_version = "3.10"

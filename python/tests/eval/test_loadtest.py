@@ -98,7 +98,8 @@ def test_sweep_runs_each_level_ascending_and_reports_per_level_percentiles(tmp_p
         out = loadtest.sweep(srv.port, [4, 1, 2], requests_per_level=4, prompt_len=16, n_predict=4)
     assert [p["concurrency"] for p in out["points"]] == [1, 2, 4], "ascending, whatever order was asked for"
     for p in out["points"]:
-        assert p["ok"] == max(4, 2 * p["concurrency"]) and p["failed"] == 0 and p["ttft_ms"]["p99"] >= p["ttft_ms"]["p50"] > 0 and p["tpot_ms"]["p50"] > 0
+        assert p["ok"] == max(4, 2 * p["concurrency"]) and p["failed"] == 0
+        assert p["ttft_ms"]["p99"] >= p["ttft_ms"]["p50"] > 0 and p["tpot_ms"]["p50"] > 0
         assert p["itl_ms"]["p99"] >= p["itl_ms"]["p50"] > 0 and p["spec"]["concurrency"] == p["concurrency"]
     tps = [p["output_tokens_per_s"] for p in out["points"]]
     assert tps[2] > tps[0] * 1.5, "the mock's latency does not depend on load: more workers, more tokens per second"
@@ -139,7 +140,9 @@ def test_saturation_ignores_levels_with_failures_and_handles_degenerate_input() 
     assert never["concurrency"] == 4 and never["reason"] == "not-reached", "still scaling at the top of the range"
 
 
-def test_peak_is_the_best_throughput_not_the_highest_concurrency_and_a_dead_level_does_not_break_it(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_peak_is_the_best_throughput_not_the_highest_concurrency_and_a_dead_level_does_not_break_it(
+        monkeypatch: pytest.MonkeyPatch
+) -> None:
     script = {1: {"output_tokens_per_s": 100.0, "ok": 4, "failed": 0}, 2: {"output_tokens_per_s": 300.0, "ok": 4, "failed": 0},
               4: {"output_tokens_per_s": 250.0, "ok": 8, "failed": 0}, 8: {"ok": 0, "failed": 16}}  # overloaded: nothing finished
 

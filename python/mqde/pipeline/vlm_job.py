@@ -38,6 +38,7 @@ import yaml
 
 from mqde.data.vlm import VLMSample, load_split
 from mqde.eval.logits_probe import capture_sample_reference, compare_to_sample_reference
+from mqde.pipeline.envinfo import device_name
 from mqde.pipeline.events import EventSink
 from mqde.quant.blockwise import MixedPrecisionPolicy
 from mqde.quant.engine import FakeQuantEngine, RecipeSpec
@@ -179,7 +180,7 @@ class VLMJob:
         self.report["env"] = {
             "git_sha": _git_sha(), "torch": torch.__version__, "cuda": torch.version.cuda, "host": platform.node(),
             "device": s.device, "hardware": s.hardware, "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
-            "device_name": torch.cuda.get_device_name(torch.device(s.device)) if s.device.startswith("cuda") and torch.cuda.is_available() else "cpu",
+            "device_name": device_name(s.device),
         }
         try:
             self._run()
@@ -261,7 +262,8 @@ class VLMJob:
         def evaluate(with_generation: bool) -> dict[str, Any]:
             scorer = _Scorer(ad, eval_inputs, answers)
             probe = compare_to_sample_reference(scorer, ref)
-            out: dict[str, Any] = {**{k: probe[k] for k in ("kl", "top1_agreement", "ref_top1_prob_drop", "positions")}, "answer_ppl": scorer.ppl()}
+            out: dict[str, Any] = {**{k: probe[k] for k in ("kl", "top1_agreement", "ref_top1_prob_drop", "positions")},
+                                   "answer_ppl": scorer.ppl()}
             if with_generation:
                 gens = [ad.generate(inp, s.max_new_tokens) for inp in eval_inputs]
                 pre = [next((i for i, (x, y) in enumerate(zip(g, a, strict=False)) if x != y), min(len(g), len(a))) / max(1, len(a))
@@ -271,7 +273,8 @@ class VLMJob:
                 out.update(generation_exact_match=sum(g == a for g, a in zip(gens, answers, strict=True)) / len(answers),
                            generation_prefix_match=sum(pre) / len(pre),
                            gt_accuracy=(sum(answer_matches(t, x.answer or "") for x, t in gt) / len(gt)) if gt else None,
-                           examples=[{"question": x.question, "answer": t, "truth": x.answer} for x, t in zip(evals, texts, strict=True)][:8])
+                           examples=[{"question": x.question, "answer": t, "truth": x.answer}
+                                     for x, t in zip(evals, texts, strict=True)][:8])
             return out
 
         self.report["recipes"] = {}
@@ -281,7 +284,11 @@ class VLMJob:
             algo = recipe.default_algorithm if s.algorithm in ("", "recipe") else s.algorithm
             rep: dict[str, Any] = {"recipe": recipe.name, "weight": recipe.weight.to_dict(), "act": recipe.act.to_dict(),
                                    "maturity": recipe.maturity, "algorithm": algo}
-            engine = FakeQuantEngine(ad.qmodel, recipe, progress=lambda e: self.ev.emit("trace", **e) if e["kind"] == "layer" else None, algorithm=algo)
+            def on_layer(e: dict[str, Any]) -> None:
+                if e["kind"] == "layer":
+                    self.ev.emit("trace", **e)
+
+            engine = FakeQuantEngine(ad.qmodel, recipe, progress=on_layer, algorithm=algo)
 
             def usable(mods: list[str]) -> list[Any]:
                 return [u for u in engine.select_units(mods) if not policy.lookup(u.name, u.block).skip]
@@ -298,7 +305,8 @@ class VLMJob:
                         m = evaluate(False)
                         engine.restore()
                         engine.traces.clear()
-                        rows.append({"modality": mod, "units": len(units), "kl": m["kl"], "top1_agreement": m["top1_agreement"], "answer_ppl": m["answer_ppl"]})
+                        rows.append({"modality": mod, "units": len(units), "kl": m["kl"],
+                                     "top1_agreement": m["top1_agreement"], "answer_ppl": m["answer_ppl"]})
                         self.ev.emit("metric", name=f"{recipe.name}.attribution.{mod}.kl", value=m["kl"], msg=f"{recipe.name} only-{mod}")
                     return rows
 

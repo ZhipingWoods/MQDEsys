@@ -1,5 +1,5 @@
-// GGUF header reader (T-R05): written against byte-exact files built here, and the same parser is checked against real
-// llama.cpp output on the dev machine (see docs/TASKS.md).
+// GGUF header reader (T-R05): written against byte-exact files built here, and the same parser is checked
+// against real llama.cpp output on the dev machine (see docs/TASKS.md).
 #include <gtest/gtest.h>
 #include <unistd.h>
 
@@ -17,19 +17,34 @@ namespace {
 
 struct W {  // little-endian byte writer
   std::string b;
-  template <class T> W& n(T v) { b.append(reinterpret_cast<const char*>(&v), sizeof v); return *this; }
-  W& s(const std::string& x) { n<uint64_t>(x.size()); b += x; return *this; }
-  W& raw(const std::string& x) { b += x; return *this; }
+  template <class T>
+  W& n(T v) {
+    b.append(reinterpret_cast<const char*>(&v), sizeof v);
+    return *this;
+  }
+  W& s(const std::string& x) {
+    n<uint64_t>(x.size());
+    b += x;
+    return *this;
+  }
+  W& raw(const std::string& x) {
+    b += x;
+    return *this;
+  }
 };
 
 enum VT : uint32_t { U8, I8, U16, I16, U32, I32, F32, BOOL, STR, ARR, U64, I64, F64 };
 enum TY : uint32_t { T_F32 = 0, T_F16 = 1, T_Q4_0 = 2, T_Q8_0 = 8, T_Q4_K = 12, T_BF16 = 30 };
 
-struct T { std::string name; uint32_t type; std::vector<uint64_t> ne; };
+struct T {
+  std::string name;
+  uint32_t type;
+  std::vector<uint64_t> ne;
+};
 
 // kv: already-encoded "key, type, value" blobs
-std::string build(uint32_t version, const std::vector<std::string>& kv, const std::vector<T>& ts, uint64_t align = 32, bool write_data = true,
-                  const std::vector<uint64_t>& nbytes = {}) {
+std::string build(uint32_t version, const std::vector<std::string>& kv, const std::vector<T>& ts,
+                  uint64_t align = 32, bool write_data = true, const std::vector<uint64_t>& nbytes = {}) {
   W h;
   h.raw("GGUF").n<uint32_t>(version).n<uint64_t>(ts.size()).n<uint64_t>(kv.size());
   for (const auto& e : kv) h.raw(e);
@@ -45,23 +60,32 @@ std::string build(uint32_t version, const std::vector<std::string>& kv, const st
   return h.b;
 }
 std::string kv_str(const std::string& k, const std::string& v) { return W().s(k).n<uint32_t>(STR).s(v).b; }
-template <class V> std::string kv_n(const std::string& k, uint32_t t, V v) { return W().s(k).n<uint32_t>(t).n<V>(v).b; }
+template <class V>
+std::string kv_n(const std::string& k, uint32_t t, V v) {
+  return W().s(k).n<uint32_t>(t).n<V>(v).b;
+}
 
 fs::path write_file(const std::string& bytes, const char* tag) {
-  const auto p = fs::temp_directory_path() / (std::string("mqde_gguf_") + tag + "_" + std::to_string(::getpid()) + ".gguf");
+  const auto p = fs::temp_directory_path() /
+                 (std::string("mqde_gguf_") + tag + "_" + std::to_string(::getpid()) + ".gguf");
   std::ofstream(p, std::ios::binary) << bytes;
   return p;
 }
 
 // the five tensors of the sample model with their exact byte sizes
-const std::vector<T> kTensors = {{"token_embd.weight", T_F16, {8, 4}}, {"blk.0.attn_q.weight", T_Q4_K, {256, 2}},
-                                  {"blk.0.ffn_down.weight", T_Q8_0, {64, 3}}, {"blk.1.attn_norm.weight", T_F32, {8}},
-                                  {"output_norm.weight", T_F32, {8}}};
+const std::vector<T> kTensors = {{"token_embd.weight", T_F16, {8, 4}},
+                                 {"blk.0.attn_q.weight", T_Q4_K, {256, 2}},
+                                 {"blk.0.ffn_down.weight", T_Q8_0, {64, 3}},
+                                 {"blk.1.attn_norm.weight", T_F32, {8}},
+                                 {"output_norm.weight", T_F32, {8}}};
 const std::vector<uint64_t> kBytes = {64, 288, 204, 32, 32};
 
 std::string sample(uint64_t align = 64, uint32_t version = 3) {
-  return build(version, {kv_str("general.architecture", "llama"), kv_str("general.name", "tiny"), kv_n<uint32_t>("general.alignment", U32, static_cast<uint32_t>(align)),
-                          kv_n<uint32_t>("llama.block_count", U32, 2)}, kTensors, align, true, kBytes);
+  return build(version,
+               {kv_str("general.architecture", "llama"), kv_str("general.name", "tiny"),
+                kv_n<uint32_t>("general.alignment", U32, static_cast<uint32_t>(align)),
+                kv_n<uint32_t>("llama.block_count", U32, 2)},
+               kTensors, align, true, kBytes);
 }
 
 }  // namespace
@@ -75,7 +99,8 @@ TEST(gguf_read, header_alignment_and_the_data_section_start) {
   EXPECT_EQ(g->data_offset % 64, 0u);
   EXPECT_EQ(g->file_bytes, fs::file_size(p));
   EXPECT_EQ(g->tensors.size(), 5u);
-  EXPECT_EQ(g->file_bytes - g->data_offset, 64u + 288 + 204 + 32 + 32) << "the payload is exactly the tensors";
+  EXPECT_EQ(g->file_bytes - g->data_offset, 64u + 288 + 204 + 32 + 32)
+      << "the payload is exactly the tensors";
   fs::remove(p);
 }
 
@@ -97,7 +122,8 @@ TEST(gguf_read, tensors_get_row_major_shapes_exact_sizes_and_absolute_offsets) {
   ASSERT_TRUE(g);
   const auto& t = g->tensors;
   EXPECT_EQ(t[0].name, "token_embd.weight");
-  EXPECT_EQ(t[0].shape, (std::vector<int64_t>{4, 8})) << "GGUF stores ne = [fastest, ...]; torch order is the reverse";
+  EXPECT_EQ(t[0].shape, (std::vector<int64_t>{4, 8}))
+      << "GGUF stores ne = [fastest, ...]; torch order is the reverse";
   EXPECT_EQ(t[0].type, "F16");
   EXPECT_EQ(t[0].numel, 32);
   EXPECT_EQ(t[0].nbytes, 64u);
@@ -113,18 +139,28 @@ TEST(gguf_read, tensors_get_row_major_shapes_exact_sizes_and_absolute_offsets) {
 }
 
 TEST(gguf_read, every_block_size_matches_gguf_py) {
-  struct C { uint32_t id; const char* name; int64_t blck; uint64_t bytes; };
+  struct C {
+    uint32_t id;
+    const char* name;
+    int64_t blck;
+    uint64_t bytes;
+  };
   // GGML_QUANT_SIZES of gguf-py (QK_K = 256), id -> (elements per block, bytes per block)
-  const std::vector<C> cases = {{0, "F32", 1, 4}, {1, "F16", 1, 2}, {2, "Q4_0", 32, 18}, {3, "Q4_1", 32, 20}, {6, "Q5_0", 32, 22}, {7, "Q5_1", 32, 24},
-                                {8, "Q8_0", 32, 34}, {9, "Q8_1", 32, 36}, {10, "Q2_K", 256, 84}, {11, "Q3_K", 256, 110}, {12, "Q4_K", 256, 144},
-                                {13, "Q5_K", 256, 176}, {14, "Q6_K", 256, 210}, {15, "Q8_K", 256, 292}, {16, "IQ2_XXS", 256, 66}, {17, "IQ2_XS", 256, 74},
-                                {18, "IQ3_XXS", 256, 98}, {19, "IQ1_S", 256, 50}, {20, "IQ4_NL", 32, 18}, {21, "IQ3_S", 256, 110}, {22, "IQ2_S", 256, 82},
-                                {23, "IQ4_XS", 256, 136}, {24, "I8", 1, 1}, {25, "I16", 1, 2}, {26, "I32", 1, 4}, {27, "I64", 1, 8}, {28, "F64", 1, 8},
-                                {29, "IQ1_M", 256, 56}, {30, "BF16", 1, 2}, {34, "TQ1_0", 256, 54}, {35, "TQ2_0", 256, 66}, {39, "MXFP4", 32, 17},
-                                {40, "NVFP4", 64, 36}, {41, "Q1_0", 128, 18}, {42, "Q2_0", 64, 18}};
+  const std::vector<C> cases = {
+      {0, "F32", 1, 4},         {1, "F16", 1, 2},         {2, "Q4_0", 32, 18},      {3, "Q4_1", 32, 20},
+      {6, "Q5_0", 32, 22},      {7, "Q5_1", 32, 24},      {8, "Q8_0", 32, 34},      {9, "Q8_1", 32, 36},
+      {10, "Q2_K", 256, 84},    {11, "Q3_K", 256, 110},   {12, "Q4_K", 256, 144},   {13, "Q5_K", 256, 176},
+      {14, "Q6_K", 256, 210},   {15, "Q8_K", 256, 292},   {16, "IQ2_XXS", 256, 66}, {17, "IQ2_XS", 256, 74},
+      {18, "IQ3_XXS", 256, 98}, {19, "IQ1_S", 256, 50},   {20, "IQ4_NL", 32, 18},   {21, "IQ3_S", 256, 110},
+      {22, "IQ2_S", 256, 82},   {23, "IQ4_XS", 256, 136}, {24, "I8", 1, 1},         {25, "I16", 1, 2},
+      {26, "I32", 1, 4},        {27, "I64", 1, 8},        {28, "F64", 1, 8},        {29, "IQ1_M", 256, 56},
+      {30, "BF16", 1, 2},       {34, "TQ1_0", 256, 54},   {35, "TQ2_0", 256, 66},   {39, "MXFP4", 32, 17},
+      {40, "NVFP4", 64, 36},    {41, "Q1_0", 128, 18},    {42, "Q2_0", 64, 18}};
   for (const auto& c : cases) {
-    const std::vector<T> ts = {{"w", c.id, {static_cast<uint64_t>(c.blck * 3), 2}}};  // 3 blocks per row, 2 rows
-    const auto p = write_file(build(3, {kv_str("general.architecture", "x")}, ts, 32, true, {6 * c.bytes}), "bs");
+    const std::vector<T> ts = {
+        {"w", c.id, {static_cast<uint64_t>(c.blck * 3), 2}}};  // 3 blocks per row, 2 rows
+    const auto p =
+        write_file(build(3, {kv_str("general.architecture", "x")}, ts, 32, true, {6 * c.bytes}), "bs");
     auto g = read_gguf(p);
     ASSERT_TRUE(g) << c.name << ": " << g.error().message;
     EXPECT_EQ(g->tensors[0].type, c.name);
@@ -134,18 +170,33 @@ TEST(gguf_read, every_block_size_matches_gguf_py) {
 }
 
 TEST(gguf_read, scalar_metadata_of_every_type_and_summarised_arrays) {
-  std::vector<std::string> kv = {kv_str("general.architecture", "llama"), kv_n<uint8_t>("m.u8", U8, 200), kv_n<int8_t>("m.i8", I8, -5),
-                                  kv_n<uint16_t>("m.u16", U16, 65000), kv_n<int16_t>("m.i16", I16, -300), kv_n<uint32_t>("m.u32", U32, 4000000000u),
-                                  kv_n<int32_t>("m.i32", I32, -7), kv_n<float>("m.f32", F32, 0.5f), kv_n<uint8_t>("m.bool", BOOL, 1),
-                                  kv_n<uint64_t>("m.u64", U64, 1ull << 40), kv_n<int64_t>("m.i64", I64, -(1ll << 40)), kv_n<double>("m.f64", F64, 2.25)};
+  std::vector<std::string> kv = {kv_str("general.architecture", "llama"),
+                                 kv_n<uint8_t>("m.u8", U8, 200),
+                                 kv_n<int8_t>("m.i8", I8, -5),
+                                 kv_n<uint16_t>("m.u16", U16, 65000),
+                                 kv_n<int16_t>("m.i16", I16, -300),
+                                 kv_n<uint32_t>("m.u32", U32, 4000000000u),
+                                 kv_n<int32_t>("m.i32", I32, -7),
+                                 kv_n<float>("m.f32", F32, 0.5f),
+                                 kv_n<uint8_t>("m.bool", BOOL, 1),
+                                 kv_n<uint64_t>("m.u64", U64, 1ull << 40),
+                                 kv_n<int64_t>("m.i64", I64, -(1ll << 40)),
+                                 kv_n<double>("m.f64", F64, 2.25)};
   W sa;  // string array of 3
-  sa.s("tokenizer.ggml.tokens").n<uint32_t>(ARR).n<uint32_t>(STR).n<uint64_t>(3).s("<s>").s("hello").s("</s>");
+  sa.s("tokenizer.ggml.tokens")
+      .n<uint32_t>(ARR)
+      .n<uint32_t>(STR)
+      .n<uint64_t>(3)
+      .s("<s>")
+      .s("hello")
+      .s("</s>");
   W fa;  // float array of 20
   fa.s("tokenizer.ggml.scores").n<uint32_t>(ARR).n<uint32_t>(F32).n<uint64_t>(20);
   for (int i = 0; i < 20; ++i) fa.n<float>(static_cast<float>(i));
   kv.push_back(sa.b);
   kv.push_back(fa.b);
-  kv.push_back(kv_n<uint32_t>("after", U32, 99));  // a key after the arrays proves they were skipped correctly
+  kv.push_back(
+      kv_n<uint32_t>("after", U32, 99));  // a key after the arrays proves they were skipped correctly
   const auto p = write_file(build(3, kv, kTensors, 32, true, kBytes), "kv");
   auto g = read_gguf(p);
   ASSERT_TRUE(g) << g.error().message;
@@ -215,7 +266,8 @@ TEST(gguf_read, a_file_that_cannot_be_a_valid_gguf_is_an_error_with_a_reason) {
     EXPECT_NE(err(bad, "type").find("unknown tensor type 99"), std::string::npos);
   }
   {  // too many dimensions
-    const auto bad = build(3, {kv_str("general.architecture", "x")}, {{"w", T_F32, {1, 1, 1, 1, 1, 1, 1, 1, 1}}}, 32, false);
+    const auto bad = build(3, {kv_str("general.architecture", "x")},
+                           {{"w", T_F32, {1, 1, 1, 1, 1, 1, 1, 1, 1}}}, 32, false);
     EXPECT_NE(err(bad, "dims").find("dimensions"), std::string::npos);
   }
   {  // a string length that runs past the file
@@ -279,7 +331,10 @@ TEST(gguf_read, a_long_string_array_is_walked_to_its_end_not_just_its_head) {
   W sa;  // 12 strings: only 8 are kept, but all 12 must be stepped over
   sa.s("tokenizer.ggml.tokens").n<uint32_t>(ARR).n<uint32_t>(STR).n<uint64_t>(12);
   for (int i = 0; i < 12; ++i) sa.s("token-" + std::to_string(i) + std::string(50 * i, 'x'));
-  const auto p = write_file(build(3, {kv_str("general.architecture", "llama"), sa.b, kv_n<uint32_t>("after", U32, 7)}, kTensors, 32, true, kBytes), "longarr");
+  const auto p =
+      write_file(build(3, {kv_str("general.architecture", "llama"), sa.b, kv_n<uint32_t>("after", U32, 7)},
+                       kTensors, 32, true, kBytes),
+                 "longarr");
   auto g = read_gguf(p);
   ASSERT_TRUE(g) << g.error().message;
   EXPECT_EQ(g->metadata["tokenizer.ggml.tokens"]["length"], 12);
@@ -291,8 +346,11 @@ TEST(gguf_read, a_long_string_array_is_walked_to_its_end_not_just_its_head) {
 
 TEST(gguf_summary, only_names_that_start_with_blk_are_text_blocks) {
   // an mmproj file keeps its vision tower under v.blk.N: that is not decoder block N
-  const std::vector<T> ts = {{"blk.0.attn_q.weight", T_F32, {8}}, {"v.blk.0.attn_q.weight", T_F32, {8}}, {"mm.blk.3.weight", T_F32, {8}}};
-  const auto p = write_file(build(3, {kv_str("general.architecture", "clip")}, ts, 32, true, {32, 32, 32}), "mmproj");
+  const std::vector<T> ts = {{"blk.0.attn_q.weight", T_F32, {8}},
+                             {"v.blk.0.attn_q.weight", T_F32, {8}},
+                             {"mm.blk.3.weight", T_F32, {8}}};
+  const auto p =
+      write_file(build(3, {kv_str("general.architecture", "clip")}, ts, 32, true, {32, 32, 32}), "mmproj");
   auto g = read_gguf(p);
   ASSERT_TRUE(g);
   const auto s = gguf_summary(*g);
@@ -304,7 +362,10 @@ TEST(gguf_summary, only_names_that_start_with_blk_are_text_blocks) {
 
 TEST(gguf_read, an_alignment_that_is_not_a_power_of_two_is_refused) {
   for (uint32_t a : {0u, 48u, 100u}) {
-    const auto p = write_file(build(3, {kv_str("general.architecture", "x"), kv_n<uint32_t>("general.alignment", U32, a)}, {}, 32, false), "align");
+    const auto p = write_file(
+        build(3, {kv_str("general.architecture", "x"), kv_n<uint32_t>("general.alignment", U32, a)}, {}, 32,
+              false),
+        "align");
     auto g = read_gguf(p);
     EXPECT_FALSE(g) << a;
     if (!g) {
@@ -312,7 +373,10 @@ TEST(gguf_read, an_alignment_that_is_not_a_power_of_two_is_refused) {
     }
     fs::remove(p);
   }
-  const auto p = write_file(build(3, {kv_str("general.architecture", "x"), kv_n<uint32_t>("general.alignment", U32, 128)}, {}, 128, false), "align128");
+  const auto p = write_file(
+      build(3, {kv_str("general.architecture", "x"), kv_n<uint32_t>("general.alignment", U32, 128)}, {}, 128,
+            false),
+      "align128");
   EXPECT_TRUE(read_gguf(p)) << "128 is fine";
   fs::remove(p);
 }

@@ -12,8 +12,8 @@
 #include <httplib.h>
 
 #include "advice.h"
-#include "gguf.h"
 #include "backend_envs.h"
+#include "gguf.h"
 #include "job_runner.h"
 #include "mqde/common/log.h"
 #include "mqde/estimator/estimator.h"
@@ -128,12 +128,14 @@ Result<void> serve(const ServerOptions& o) {
   httplib::Server svr;
   JobRunner runner(o.runs_dir, o.repo_root, o.python, o.gpus);
 
-  // Install / update of the vLLM, SGLang and llama.cpp environments (scripts/setup_backend.py). The script is stdlib-only
-  // Python run by the executor's interpreter; MQDE_SETUP_BACKEND_BIN replaces the whole command (tests use a fake).
-  // Logs live outside runs_dir: every directory there is listed as a job.
+  // Install / update of the vLLM, SGLang and llama.cpp environments (scripts/setup_backend.py). The script is
+  // stdlib-only Python run by the executor's interpreter; MQDE_SETUP_BACKEND_BIN replaces the whole command
+  // (tests use a fake). Logs live outside runs_dir: every directory there is listed as a job.
   std::vector<std::string> setup_cmd;
-  if (const char* b = std::getenv("MQDE_SETUP_BACKEND_BIN"); b && *b) setup_cmd = {b};
-  else setup_cmd = {o.python, (o.repo_root / "scripts" / "setup_backend.py").string()};
+  if (const char* b = std::getenv("MQDE_SETUP_BACKEND_BIN"); b && *b)
+    setup_cmd = {b};
+  else
+    setup_cmd = {o.python, (o.repo_root / "scripts" / "setup_backend.py").string()};
   BackendEnvs backend_envs(setup_cmd, o.repo_root / "build" / "backend-installs");
 
   // T-1303: background HF catalog refresh. refresh_fn wraps the same hub::update_catalog the CLI's
@@ -519,8 +521,11 @@ Result<void> serve(const ServerOptions& o) {
       if (auto m = measured.find(rec.recipe); m != measured.end()) {
         j["risk"] = risk_name(m->second.risk);
         j["risk_source"] = "measured";
-        j["measured"] = {{"job_id", m->second.job_id}, {"kind", m->second.kind}, {"algorithm", m->second.algorithm},
-                         {"metric", m->second.metric}, {"value", m->second.value}};
+        j["measured"] = {{"job_id", m->second.job_id},
+                         {"kind", m->second.kind},
+                         {"algorithm", m->second.algorithm},
+                         {"metric", m->second.metric},
+                         {"value", m->second.value}};
       } else {
         auto rc = recipes.find(rec.recipe);
         j["risk"] = risk_name(rc != recipes.end() ? prior_risk(rc->second) : Risk::kMedium);
@@ -532,8 +537,11 @@ Result<void> serve(const ServerOptions& o) {
     if (static_cast<int>(all.size()) > top_k) all.resize(static_cast<size_t>(top_k));
     Json top = Json::array();
     for (auto& j : all) top.push_back(std::move(j));
-    send_json(res, {{"top", top}, {"excluded", r.excluded}, {"considered", static_cast<int>(r.top.size()) + r.excluded},
-                    {"objective", objective}, {"measured_jobs", static_cast<int>(measured.size())}});
+    send_json(res, {{"top", top},
+                    {"excluded", r.excluded},
+                    {"considered", static_cast<int>(r.top.size()) + r.excluded},
+                    {"objective", objective},
+                    {"measured_jobs", static_cast<int>(measured.size())}});
   });
 
   // Which export format a chosen (recipe, backend) pair should default to (T-1304): query params
@@ -584,8 +592,8 @@ Result<void> serve(const ServerOptions& o) {
     }
     send_json(res, arr);
   });
-  // GGUF files (T-R05): listed from the allowed roots (two levels deep: a root, or a model directory inside it), and
-  // read header-only. The tensor payload is never touched.
+  // GGUF files (T-R05): listed from the allowed roots (two levels deep: a root, or a model directory inside
+  // it), and read header-only. The tensor payload is never touched.
   auto is_gguf = [](const fs::path& p) {
     auto ext = p.extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
@@ -596,7 +604,8 @@ Result<void> serve(const ServerOptions& o) {
     for (const auto& r : o.allowed_roots) {
       std::error_code ec;
       for (const auto& e : fs::directory_iterator(r, ec)) {
-        if (e.is_regular_file(ec) && is_gguf(e.path())) found.push_back(e.path());
+        if (e.is_regular_file(ec) && is_gguf(e.path()))
+          found.push_back(e.path());
         else if (e.is_directory(ec))
           for (const auto& f : fs::directory_iterator(e.path(), ec))
             if (f.is_regular_file(ec) && is_gguf(f.path())) found.push_back(f.path());
@@ -608,7 +617,9 @@ Result<void> serve(const ServerOptions& o) {
     for (const auto& p : found) {
       if (arr.size() >= 500) break;
       std::error_code ec;
-      arr.push_back({{"path", p.string()}, {"name", p.filename().string()}, {"dir", p.parent_path().filename().string()},
+      arr.push_back({{"path", p.string()},
+                     {"name", p.filename().string()},
+                     {"dir", p.parent_path().filename().string()},
                      {"bytes", fs::file_size(p, ec)}});
     }
     send_json(res, arr);
@@ -617,8 +628,10 @@ Result<void> serve(const ServerOptions& o) {
     auto body = parse_body(req, res);
     if (!body) return;
     const auto path = body->value("path", "");
-    if (!path_allowed(o.allowed_roots, path)) return send_error(res, 403, "forbidden", "path is outside allowed roots");
-    if (!is_gguf(path) || !fs::is_regular_file(path)) return send_error(res, 400, "invalid_argument", "path must be an existing .gguf file");
+    if (!path_allowed(o.allowed_roots, path))
+      return send_error(res, 403, "forbidden", "path is outside allowed roots");
+    if (!is_gguf(path) || !fs::is_regular_file(path))
+      return send_error(res, 400, "invalid_argument", "path must be an existing .gguf file");
     auto g = modelspec::read_gguf(path);
     if (!g) return send_error(res, g.error());
     Json out = modelspec::gguf_summary(*g, body->value("tensors", true));
@@ -1024,12 +1037,12 @@ Result<void> serve(const ServerOptions& o) {
     for (const auto& e : c.entries) demoted += e.demoted;
     const auto rs = catalog_refresher.status();
     send_json(res, {{"updated_at", c.updated_at},
-                   {"total", c.entries.size()},
-                   {"demoted", demoted},
-                   {"models", arr},
-                   {"refresh_interval_s", rs.interval_s},
-                   {"last_refresh_ok", rs.last_refresh_ok},
-                   {"last_refresh_at", rs.last_refresh_at}});
+                    {"total", c.entries.size()},
+                    {"demoted", demoted},
+                    {"models", arr},
+                    {"refresh_interval_s", rs.interval_s},
+                    {"last_refresh_ok", rs.last_refresh_ok},
+                    {"last_refresh_at", rs.last_refresh_at}});
   });
 
   // Live Hub search (llmfit hf-search). Needs network; the token (if any) comes from HF_TOKEN.
@@ -1167,12 +1180,14 @@ Result<void> serve(const ServerOptions& o) {
            });
 
   // ---------------- inference backend environments ----------------
-  // GET  /api/v1/backend-envs[?check=1]   installed version / location per backend; check=1 also asks for the newest
-  // POST /api/v1/backend-envs/<id>/install  {"version": "x"} (optional) -> {"install_id"}; one install at a time
-  // GET  /api/v1/backend-envs/install/<install_id>  state, exit code and the last 200 log lines
+  // GET  /api/v1/backend-envs[?check=1]   installed version / location per backend; check=1 also asks for the
+  // newest POST /api/v1/backend-envs/<id>/install  {"version": "x"} (optional) -> {"install_id"}; one install
+  // at a time GET  /api/v1/backend-envs/install/<install_id>  state, exit code and the last 200 log lines
   auto envs_error = [](httplib::Response& res, const Error& e) {
-    const int status = e.code == Errc::kInvalidArgument ? 400 : e.code == Errc::kResourceExhausted ? 409
-                       : e.code == Errc::kNotFound ? 404 : 502;
+    const int status = e.code == Errc::kInvalidArgument     ? 400
+                       : e.code == Errc::kResourceExhausted ? 409
+                       : e.code == Errc::kNotFound          ? 404
+                                                            : 502;
     send_error(res, status, errc_name(e.code), e.message);
   };
   svr.Get("/api/v1/backend-envs", [&](const httplib::Request& req, httplib::Response& res) {
@@ -1182,25 +1197,28 @@ Result<void> serve(const ServerOptions& o) {
     const auto cur = backend_envs.current_install();
     send_json(res, {{"backends", *st}, {"checked", check}, {"installing", cur ? *cur : Json(nullptr)}});
   });
-  svr.Post(R"(/api/v1/backend-envs/([a-z]+)/install)", [&](const httplib::Request& req, httplib::Response& res) {
-    std::string version;
-    if (!req.body.empty()) {
-      auto body = parse_body(req, res);
-      if (!body) return;
-      if (body->contains("version")) {
-        if (!(*body)["version"].is_string()) return send_error(res, 400, "invalid_argument", "version must be a string");
-        version = (*body)["version"].get<std::string>();
-      }
-    }
-    auto id = backend_envs.start_install(req.matches[1], version);
-    if (!id) return envs_error(res, id.error());
-    send_json(res, {{"install_id", *id}}, 202);
-  });
-  svr.Get(R"(/api/v1/backend-envs/install/([0-9a-f]+))", [&](const httplib::Request& req, httplib::Response& res) {
-    auto st = backend_envs.install_status(req.matches[1]);
-    if (!st) return send_error(res, 404, "not_found", "no such install");
-    send_json(res, *st);
-  });
+  svr.Post(R"(/api/v1/backend-envs/([a-z]+)/install)",
+           [&](const httplib::Request& req, httplib::Response& res) {
+             std::string version;
+             if (!req.body.empty()) {
+               auto body = parse_body(req, res);
+               if (!body) return;
+               if (body->contains("version")) {
+                 if (!(*body)["version"].is_string())
+                   return send_error(res, 400, "invalid_argument", "version must be a string");
+                 version = (*body)["version"].get<std::string>();
+               }
+             }
+             auto id = backend_envs.start_install(req.matches[1], version);
+             if (!id) return envs_error(res, id.error());
+             send_json(res, {{"install_id", *id}}, 202);
+           });
+  svr.Get(R"(/api/v1/backend-envs/install/([0-9a-f]+))",
+          [&](const httplib::Request& req, httplib::Response& res) {
+            auto st = backend_envs.install_status(req.matches[1]);
+            if (!st) return send_error(res, 404, "not_found", "no such install");
+            send_json(res, *st);
+          });
 
   // ---------------- jobs ----------------
   svr.Post("/api/v1/jobs", [&](const httplib::Request& req, httplib::Response& res) {
@@ -1232,7 +1250,8 @@ Result<void> serve(const ServerOptions& o) {
                       "application/json");
       return;
     }
-    // validate_jobspec checked the artifact's id is a plain job id; only the server knows whether that job exists
+    // validate_jobspec checked the artifact's id is a plain job id; only the server knows whether that job
+    // exists
     if (job.contains("artifact") && job["artifact"].is_object()) {
       const auto pj = job["artifact"].value("job", std::string());
       if (!fs::is_regular_file(o.runs_dir / pj / "report.json"))
@@ -1269,7 +1288,9 @@ Result<void> serve(const ServerOptions& o) {
       const Json jy = spec_yaml ? *spec_yaml : Json::object();
       // report.kind is written by llm_job; job.yaml carries model.type for server-submitted jobs; else VLA
       const auto rep_kind = rep.is_object() ? rep.value("kind", "") : std::string();
-      j["kind"] = rep_kind == "llm" || rep_kind == "vlm" || rep_kind == "llm_deploy" ? rep_kind : jy.value("/model/type"_json_pointer, std::string("vla"));
+      j["kind"] = rep_kind == "llm" || rep_kind == "vlm" || rep_kind == "llm_deploy"
+                      ? rep_kind
+                      : jy.value("/model/type"_json_pointer, std::string("vla"));
       j["device"] =
           jy.value("/deploy/device"_json_pointer,
                    rep.is_object() ? rep.value("/spec/device"_json_pointer, std::string()) : std::string());
@@ -1288,7 +1309,8 @@ Result<void> serve(const ServerOptions& o) {
         j["recipes"] = jy.value("/quant/recipe"_json_pointer, Json::array());
         j["model"] = jy.value("/model/path"_json_pointer, "");
       }
-      if (const auto pj = jy.value("/metadata/parent_job"_json_pointer, std::string()); !pj.empty()) j["parent_job"] = pj;
+      if (const auto pj = jy.value("/metadata/parent_job"_json_pointer, std::string()); !pj.empty())
+        j["parent_job"] = pj;
       arr.push_back(j);
     }
     std::sort(arr.begin(), arr.end(), [](const Json& a, const Json& b) { return a["job_id"] > b["job_id"]; });

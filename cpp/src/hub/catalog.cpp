@@ -499,7 +499,8 @@ CatalogRefresher::Status CatalogRefresher::status() const {
 void CatalogRefresher::loop() {
   std::unique_lock lk(mu_);
   while (!stop_) {
-    if (cv_.wait_for(lk, interval_, [this] { return stop_; })) break;  // woken by the destructor, not a timeout
+    if (cv_.wait_for(lk, interval_, [this] { return stop_; }))
+      break;  // woken by the destructor, not a timeout
     lk.unlock();
     Catalog base;
     if (auto c = load_catalog(catalog_path_)) base = std::move(*c);

@@ -5,22 +5,30 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
-import torch
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 from vlm_fakes import FakeAdapter
 
-from mqde.pipeline import vlm_job
 from mqde.pipeline.vlm_job import VLMJob, VLMJobSpec, answer_matches
 
 
 def spec(tmp_path: Path, **kw: object) -> VLMJobSpec:
-    base = {"name": "tiny-vlm", "model_path": "<tiny>", "recipes": ["w4a16"], "algorithm": "rtn", "calib_samples": 4,
-            "eval_samples": 6, "max_new_tokens": 4, "device": "cpu", "output_dir": str(tmp_path)}
+    base = {
+        "name": "tiny-vlm",
+        "model_path": "<tiny>",
+        "recipes": ["w4a16"],
+        "algorithm": "rtn",
+        "calib_samples": 4,
+        "eval_samples": 6,
+        "max_new_tokens": 4,
+        "device": "cpu",
+        "output_dir": str(tmp_path),
+    }
     return VLMJobSpec(**{**base, **kw})  # type: ignore[arg-type]
 
 
@@ -133,8 +141,8 @@ def test_a_group_size_override_leaves_per_channel_recipes_alone(tmp_path: Path) 
 class Scripted(FakeAdapter):
     """Reference answers [5,6,7,8] for every sample; the quantized model then 'answers' with a scripted list per sample."""
 
-    REF = [5, 6, 7, 8]
-    QUANT = [[5, 6, 7, 8], [5, 6, 9, 9], [9, 6, 7, 8], [5, 6, 7], [5, 6, 7, 8, 9], [5, 6, 7, 9]]
+    REF: ClassVar[list[int]] = [5, 6, 7, 8]
+    QUANT: ClassVar[list[list[int]]] = [[5, 6, 7, 8], [5, 6, 9, 9], [9, 6, 7, 8], [5, 6, 7], [5, 6, 7, 8, 9], [5, 6, 7, 9]]
 
     def __init__(self) -> None:
         super().__init__()
@@ -159,7 +167,9 @@ def test_skip_rules_keep_the_matching_layers_unquantized(tmp_path: Path) -> None
     assert not [n for n in names if "language_model.layers.0." in n or n.startswith("model.merger.")]
     assert any("language_model.layers.1." in n for n in names) and any("vision_tower" in n for n in names)
     r = rep["recipes"]["W4A16"]
-    assert sorted(r["skipped"]) == sorted(u.name for u in FakeAdapter().qmodel.units if "language_model.layers.0." in u.name or u.name.startswith("model.merger."))
+    assert sorted(r["skipped"]) == sorted(
+        u.name for u in FakeAdapter().qmodel.units if "language_model.layers.0." in u.name or u.name.startswith("model.merger.")
+    )
     full, _ = run(tmp_path / "full", attribution=False)
     assert r["summary"]["kl"] < full["recipes"]["W4A16"]["summary"]["kl"], "leaving layers in FP can only move the distribution less"
 
@@ -184,43 +194,88 @@ def test_a_bit_width_rule_is_refused_rather_than_silently_ignored(tmp_path: Path
 
 
 def test_every_recipe_summary_carries_a_skip_suggestion_in_the_job_rule_format() -> None:
-    layers = [{"name": f"model.language_model.layers.{i}.mlp.up_proj", "component": "language", "shape": [256, 128], "act_kurtosis": 1.0,
-               "out_sqnr_db": 27.0 if i == 5 else 38.0 + 0.1 * (i % 4)} for i in range(24)]
+    layers = [
+        {
+            "name": f"model.language_model.layers.{i}.mlp.up_proj",
+            "component": "language",
+            "shape": [256, 128],
+            "act_kurtosis": 1.0,
+            "out_sqnr_db": 27.0 if i == 5 else 38.0 + 0.1 * (i % 4),
+        }
+        for i in range(24)
+    ]
     s = VLMJob._summarize({"layers": layers, "weight": {"bits": 4}, "eval": {}}, None)
     assert s["suggestion"]["rules"] == [{"match": r"^model\.language_model\.layers\.5\.mlp\.up_proj$", "skip": True}]
     assert s["suggestion"]["extra_weight_bytes"] == 256 * 128 * 12 // 8
 
 
 def test_the_suggestion_costs_bytes_at_the_recipes_bit_width_and_assumes_4_when_it_is_missing() -> None:
-    layers = [{"name": f"model.language_model.layers.{i}.mlp.up_proj", "component": "language", "shape": [256, 128], "act_kurtosis": 1.0,
-               "out_sqnr_db": 27.0 if i == 5 else 38.0 + 0.1 * (i % 4)} for i in range(24)]
-    got = {b: VLMJob._summarize({"layers": layers, "weight": {"bits": b} if b else {}, "eval": {}}, None)["suggestion"]["extra_weight_bytes"] for b in (8, 4, None)}
+    layers = [
+        {
+            "name": f"model.language_model.layers.{i}.mlp.up_proj",
+            "component": "language",
+            "shape": [256, 128],
+            "act_kurtosis": 1.0,
+            "out_sqnr_db": 27.0 if i == 5 else 38.0 + 0.1 * (i % 4),
+        }
+        for i in range(24)
+    ]
+    got = {
+        b: VLMJob._summarize({"layers": layers, "weight": {"bits": b} if b else {}, "eval": {}}, None)["suggestion"]["extra_weight_bytes"]
+        for b in (8, 4, None)
+    }
     assert got == {8: 256 * 128, 4: 256 * 128 * 12 // 8, None: 256 * 128 * 12 // 8}
 
 
 def test_from_yaml_reads_mixed_precision(tmp_path: Path) -> None:
     p = tmp_path / "j.yaml"
-    p.write_text(yaml.safe_dump({"model": {"path": "/m"}, "quant": {"recipe": "w4a16", "mixed_precision": {"rules": [{"match": "x", "skip": True}]}}}))
+    p.write_text(
+        yaml.safe_dump(
+            {"model": {"path": "/m"}, "quant": {"recipe": "w4a16", "mixed_precision": {"rules": [{"match": "x", "skip": True}]}}}
+        )
+    )
     assert VLMJobSpec.from_yaml(p).mixed_precision == {"rules": [{"match": "x", "skip": True}]}
 
 
-@pytest.mark.parametrize(("text", "gt", "ok"), [("The color is red.", "red", True), ("RED", "red", True), ("blue", "red", False),
-                                                ("3", "3", True), ("There are 33 shapes", "3", False), ("yes, there is", "yes", True),
-                                                ("", "yes", False), ("no", "yes", False),
-                                                # the model counts in words as often as in digits
-                                                ("There are three shapes.", "3", True), ("Two shapes", "2", True), ("There are three shapes.", "2", False),
-                                                ("one two three", "4", False), ("a third", "3", False), ("There are 3 shapes", "three", True)])
+@pytest.mark.parametrize(
+    ("text", "gt", "ok"),
+    [
+        ("The color is red.", "red", True),
+        ("RED", "red", True),
+        ("blue", "red", False),
+        ("3", "3", True),
+        ("There are 33 shapes", "3", False),
+        ("yes, there is", "yes", True),
+        ("", "yes", False),
+        ("no", "yes", False),
+        # the model counts in words as often as in digits
+        ("There are three shapes.", "3", True),
+        ("Two shapes", "2", True),
+        ("There are three shapes.", "2", False),
+        ("one two three", "4", False),
+        ("a third", "3", False),
+        ("There are 3 shapes", "three", True),
+    ],
+)
 def test_answer_matching_is_a_whole_word_case_insensitive_containment(text: str, gt: str, ok: bool) -> None:
     assert answer_matches(text, gt) is ok
 
 
 def test_from_yaml_reads_the_wizards_job_shape(tmp_path: Path) -> None:
     p = tmp_path / "j.yaml"
-    p.write_text(yaml.safe_dump({"metadata": {"name": "n"}, "model": {"path": "/m", "type": "vlm"},
-                                 "quant": {"recipe": ["w4a16", "w8a16"], "algorithm": "gptq", "group_size": 64, "also_quantize": []},
-                                 "calibration": {"dataset": "synthetic", "n_samples": 8},
-                                 "evaluation": {"dataset": "synthetic", "n_samples": 10, "max_new_tokens": 12, "attribution": False, "skip": True},
-                                 "deploy": {"hardware": "nvidia/rtx4090", "device": "cuda:1"}, "output_dir": "out"}))
+    p.write_text(
+        yaml.safe_dump(
+            {
+                "metadata": {"name": "n"},
+                "model": {"path": "/m", "type": "vlm"},
+                "quant": {"recipe": ["w4a16", "w8a16"], "algorithm": "gptq", "group_size": 64, "also_quantize": []},
+                "calibration": {"dataset": "synthetic", "n_samples": 8},
+                "evaluation": {"dataset": "synthetic", "n_samples": 10, "max_new_tokens": 12, "attribution": False, "skip": True},
+                "deploy": {"hardware": "nvidia/rtx4090", "device": "cuda:1"},
+                "output_dir": "out",
+            }
+        )
+    )
     s = VLMJobSpec.from_yaml(p)
     assert (s.name, s.model_path, s.recipes, s.algorithm, s.group_size_override) == ("n", "/m", ["w4a16", "w8a16"], "gptq", 64)
     assert (s.calib_samples, s.eval_samples, s.max_new_tokens, s.attribution, s.quantize_only) == (8, 10, 12, False, True)
@@ -231,4 +286,11 @@ def test_defaults_are_the_ones_the_wizard_sends_when_nothing_is_touched(tmp_path
     p = tmp_path / "j.yaml"
     p.write_text(yaml.safe_dump({"model": {"path": "/m"}, "quant": {"recipe": ["w4a16"]}}))
     s = VLMJobSpec.from_yaml(p)
-    assert (s.calib_source, s.eval_source, s.attribution, s.quantize_only, s.group_size_override, s.max_new_tokens) == ("synthetic", "synthetic", True, False, None, 24)
+    assert (s.calib_source, s.eval_source, s.attribution, s.quantize_only, s.group_size_override, s.max_new_tokens) == (
+        "synthetic",
+        "synthetic",
+        True,
+        False,
+        None,
+        24,
+    )

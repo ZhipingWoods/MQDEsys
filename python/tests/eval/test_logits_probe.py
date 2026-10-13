@@ -151,7 +151,7 @@ def test_progress_callback() -> None:
 
 
 # ---------------------------------------------------------------- per-sample (variable length) probe: VLM image+text inputs
-from mqde.eval.logits_probe import capture_sample_reference, compare_to_sample_reference  # noqa: E402
+from mqde.eval.logits_probe import capture_sample_reference, compare_to_sample_reference
 
 
 class Samples:

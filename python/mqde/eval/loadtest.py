@@ -280,7 +280,7 @@ def saturation(points: list[dict[str, Any]], *, min_gain_pct: float = 10.0, max_
         return None
     if len(ok) == 1:
         return {"concurrency": ok[0]["concurrency"], "reason": "single-level", "next_gain_pct": None}
-    for a, b in zip(ok, ok[1:], strict=False):
+    for a, b in itertools.pairwise(ok):
         gain = 100.0 * (b["output_tokens_per_s"] / a["output_tokens_per_s"] - 1.0)
         if max_ttft_p99_ms is not None and (b.get("ttft_ms") or {}).get("p99", 0.0) > max_ttft_p99_ms:
             return {"concurrency": a["concurrency"], "reason": "ttft", "next_gain_pct": gain}

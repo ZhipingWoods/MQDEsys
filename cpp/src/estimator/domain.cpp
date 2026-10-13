@@ -24,15 +24,17 @@ Result<Domain> load_domain(std::string_view id_or_path) {
   d.order = get_or<int>(j, "order", d.order);
   d.pipeline_status = get_or<std::string>(j, "pipeline_status", "ui_only_pending_backend");
   if (d.pipeline_status != "implemented" && d.pipeline_status != "ui_only_pending_backend")
-    return make_error(Errc::kInvalidArgument,
-                      "domain '{}': pipeline_status must be 'implemented' or 'ui_only_pending_backend', got '{}'",
-                      d.id, d.pipeline_status);
+    return make_error(
+        Errc::kInvalidArgument,
+        "domain '{}': pipeline_status must be 'implemented' or 'ui_only_pending_backend', got '{}'", d.id,
+        d.pipeline_status);
   return d;
 }
 
 Result<std::vector<Domain>> list_domains_in(const fs::path& dir) {
   std::error_code ec;
-  if (!fs::is_directory(dir, ec)) return make_error(Errc::kNotFound, "domains directory '{}' missing", dir.string());
+  if (!fs::is_directory(dir, ec))
+    return make_error(Errc::kNotFound, "domains directory '{}' missing", dir.string());
   std::vector<Domain> out;
   for (const auto& e : fs::directory_iterator(dir)) {
     if (e.path().extension() != ".yaml") continue;

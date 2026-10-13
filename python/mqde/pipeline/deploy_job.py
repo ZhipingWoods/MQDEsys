@@ -25,6 +25,7 @@ import yaml
 
 from mqde.backend.llamacpp import bench, perplexity
 from mqde.data.text import eval_ids, wikitext_text
+from mqde.pipeline.envinfo import device_name
 from mqde.pipeline.events import EventSink
 from mqde.pipeline.llm_job import LLMJob
 
@@ -84,8 +85,10 @@ class DeployJobSpec:
 
 
 class DeployJob(LLMJob):
-    def __init__(self, spec: DeployJobSpec, job_id: str | None = None) -> None:  # noqa: D107 -- LLMJob's serving stages, its own run()
-        self.spec = spec  # type: ignore[assignment]
+    spec: DeployJobSpec  # type: ignore[assignment]  # narrower than LLMJob's: this job has an artifact and no recipes
+
+    def __init__(self, spec: DeployJobSpec, job_id: str | None = None) -> None:
+        self.spec = spec
         self.job_id = job_id or time.strftime("%Y%m%d-%H%M%S-") + __import__("uuid").uuid4().hex[:6]
         self.out = Path(spec.output_dir) / self.job_id
         self.out.mkdir(parents=True, exist_ok=True)
@@ -139,7 +142,7 @@ class DeployJob(LLMJob):
             path = parent / "export" / "gguf" / f"model-{ty}.gguf"
             if res is None or not path.is_file():
                 raise ValueError(f"artifact: job {job} has no GGUF {ty} (llama.cpp types it produced: "
-                                 f"{sorted(((rep.get('llamacpp') or {}).get('results') or {}))})")
+                                 f"{sorted((rep.get('llamacpp') or {}).get('results') or {})})")
             out.update(type=ty, path=str(path), bytes=path.stat().st_size, parent_ppl=res.get("ppl"))
         else:
             if not RECIPE.fullmatch(recipe):
@@ -167,16 +170,18 @@ class DeployJob(LLMJob):
     def _run(self) -> None:
         s = self.spec
         self.report["env"] = {"torch": torch.__version__, "device": s.device, "hardware": s.hardware,
-                              "device_name": torch.cuda.get_device_name(0) if s.device.startswith("cuda") and torch.cuda.is_available() else "cpu"}
+                              "device_name": device_name(s.device)}
         art = self.report["artifact"] = self._stage("validate", self._resolve, json.dumps(s.artifact))
         # PPL depends on the context length and on which windows are scored: only the same protocol as the parent's makes
         # "served vs the parent's real weights" a like-for-like number (a real run with 256 x 4 against 512 x 40 said +26%)
         pe = art["parent_eval"]
         art["ppl_comparable"] = bool(pe and pe["windows"] == s.eval_windows and pe["seq_len"] == s.eval_seq_len)
         if not art["ppl_comparable"]:
-            art["ppl_note"] = (f"this job scores {s.eval_windows} x {s.eval_seq_len} wikitext-2 windows, the parent {pe['windows']} x {pe['seq_len']}: "
+            art["ppl_note"] = (f"this job scores {s.eval_windows} x {s.eval_seq_len} wikitext-2 windows, "
+                               f"the parent {pe['windows']} x {pe['seq_len']}: "
                                "PPL is not comparable across protocols, so no 'vs parent' difference is given"
-                               if pe else "the parent report did not record its evaluation protocol: PPL against it is not assumed comparable")
+                               if pe else
+                               "the parent report did not record its evaluation protocol: PPL against it is not assumed comparable")
         parent_real = art.get("parent_real_ppl") if art["ppl_comparable"] else None
         tok_dir = s.model_path if art["format"] == "gguf" else art["path"]
         ids = self._stage("eval_prepare", lambda: eval_ids(load_tokenizer(tok_dir)))
@@ -203,7 +208,8 @@ class DeployJob(LLMJob):
         self.ev.emit("metric", name=f"llamacpp.{art['type']}.ppl", value=p["ppl"], msg=f"llama.cpp {art['type']}")
         out = {**p, **{k: v for k, v in b.items() if k.endswith("per_s")}, "backend": b.get("backend"), "gpu_layers": ngl,
                "threads": threads, "parent_ppl": art.get("parent_ppl"),
-               "ppl_vs_parent_pct": 100.0 * (p["ppl"] / art["parent_ppl"] - 1.0) if art.get("parent_ppl") and art.get("ppl_comparable") else None}
+               "ppl_vs_parent_pct": (100.0 * (p["ppl"] / art["parent_ppl"] - 1.0)
+                                     if art.get("parent_ppl") and art.get("ppl_comparable") else None)}
         if s.llamacpp_serve:
             out["serve"] = self._llamacpp_serve(path, art["type"], threads)
         return out
@@ -220,7 +226,8 @@ def main() -> None:
         spec.device = a.device
     job = DeployJob(spec, job_id=a.job_id)
     rep = job.run()
-    print(json.dumps({"job_id": job.job_id, "report": str(job.out / "report.json"), "deploy": {k: v.get("status") for k, v in rep["deploy"].items()}}))
+    print(json.dumps({"job_id": job.job_id, "report": str(job.out / "report.json"),
+                      "deploy": {k: v.get("status") for k, v in rep["deploy"].items()}}))
 
 
 if __name__ == "__main__":

@@ -22,14 +22,25 @@ class TinyVLM(nn.Module):
         torch.manual_seed(0)
         lin = nn.Linear
         blk = lambda a, b: nn.ModuleDict({"fc1": lin(a, b), "fc2": lin(b, a)})  # noqa: E731
-        self.model = nn.ModuleDict({
-            "vision_tower": nn.ModuleDict({"encoder": nn.ModuleDict({"layers": nn.ModuleList([nn.ModuleDict({"mlp": blk(D, D)}) for _ in range(2)])})}),
-            "merger": nn.ModuleDict({"mlp": nn.ModuleList([nn.ModuleDict({"linear_1": lin(D, D)})])}),
-            "language_model": nn.ModuleDict({
-                "embed_tokens": nn.Embedding(V, D),
-                "layers": nn.ModuleList([nn.ModuleDict({"mlp": nn.ModuleDict({"gate_proj": lin(D, 2 * D), "down_proj": lin(2 * D, D)})}) for _ in range(2)]),
-            }),
-        })
+        self.model = nn.ModuleDict(
+            {
+                "vision_tower": nn.ModuleDict(
+                    {"encoder": nn.ModuleDict({"layers": nn.ModuleList([nn.ModuleDict({"mlp": blk(D, D)}) for _ in range(2)])})}
+                ),
+                "merger": nn.ModuleDict({"mlp": nn.ModuleList([nn.ModuleDict({"linear_1": lin(D, D)})])}),
+                "language_model": nn.ModuleDict(
+                    {
+                        "embed_tokens": nn.Embedding(V, D),
+                        "layers": nn.ModuleList(
+                            [
+                                nn.ModuleDict({"mlp": nn.ModuleDict({"gate_proj": lin(D, 2 * D), "down_proj": lin(2 * D, D)})})
+                                for _ in range(2)
+                            ]
+                        ),
+                    }
+                ),
+            }
+        )
         self.lm_head = lin(D, V)
         with torch.no_grad():
             self.lm_head.weight.mul_(6.0)  # peaky next-token distributions: top-1 agreement means something
@@ -79,7 +90,7 @@ class FakeAdapter:
     @torch.inference_mode()
     def answer_logits(self, inputs: dict[str, torch.Tensor], answer: list[int]) -> torch.Tensor:
         ids = torch.cat([inputs["ids"], torch.tensor([answer])], dim=1)
-        return self.model(inputs["feat"], ids)[:, -(len(answer) + 1):]
+        return self.model(inputs["feat"], ids)[:, -(len(answer) + 1) :]
 
     @torch.inference_mode()
     def prompt_forward(self, inputs: dict[str, torch.Tensor]) -> None:

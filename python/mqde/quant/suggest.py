@@ -17,7 +17,8 @@ from typing import Any
 MIN_PER_COMPONENT = 8  # fewer layers than this cannot tell an outlier from noise
 
 
-def suggest_skips(layers: list[dict[str, Any]], bits: int, *, z: float = 3.5, min_gap_db: float = 3.0, max_fraction: float = 0.05) -> dict[str, Any]:
+def suggest_skips(layers: list[dict[str, Any]], bits: int, *, z: float = 3.5, min_gap_db: float = 3.0,
+                  max_fraction: float = 0.05) -> dict[str, Any]:
     by_comp: dict[str, list[dict[str, Any]]] = {}
     for t in layers:
         if t.get("out_sqnr_db") is not None:
@@ -30,7 +31,8 @@ def suggest_skips(layers: list[dict[str, Any]], bits: int, *, z: float = 3.5, mi
         med = statistics.median(vals)
         mad = 1.4826 * statistics.median(abs(v - med) for v in vals)
         thr = min(med - z * mad, med - min_gap_db)
-        flagged += [{"name": t["name"], "component": comp, "out_sqnr_db": t["out_sqnr_db"], "median_db": med, "shape": t["shape"]} for t in ts if t["out_sqnr_db"] < thr]
+        flagged += [{"name": t["name"], "component": comp, "out_sqnr_db": t["out_sqnr_db"], "median_db": med, "shape": t["shape"]}
+                    for t in ts if t["out_sqnr_db"] < thr]
     total = sum(len(ts) for ts in by_comp.values())
     flagged = sorted(flagged, key=lambda x: x["out_sqnr_db"])[: math.ceil(total * max_fraction)]
     return {

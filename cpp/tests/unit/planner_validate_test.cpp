@@ -217,8 +217,9 @@ TEST(planner_check_deploy, awq_and_compressed_tensors_load_on_vllm_with_no_known
   EXPECT_EQ(check_deploy("compressed-tensors", fp8, "vllm", hw4090()).verdict, Verdict::kNative);
 }
 
-// T-0704: every claim below was measured on a real SGLang (0.5.22.dev, 86624f14eb) serving Qwen2.5-0.5B on an RTX 4090,
-// served PPL within 0.05% of the real-weight PPL; the asymmetric-GPTQ failure is SGLang's own error text.
+// T-0704: every claim below was measured on a real SGLang (0.5.22.dev, 86624f14eb) serving Qwen2.5-0.5B on an
+// RTX 4090, served PPL within 0.05% of the real-weight PPL; the asymmetric-GPTQ failure is SGLang's own error
+// text.
 TEST(planner_check_deploy, awq_gptq_and_both_compressed_tensors_kinds_load_on_sglang) {
   estimator::Recipe r;
   r.weight = w_int(4, Granularity::kPerGroup, false);
@@ -385,7 +386,8 @@ TEST(planner_validate_jobspec, an_unknown_domain_id_is_a_problem) {
 
 TEST(planner_validate_jobspec, a_domain_with_no_real_pipeline_is_rejected_with_a_clear_reason) {
   for (const char* id : {"world", "ewm"}) {
-    Json job = {{"domain", id}, {"model", {{"type", "llm"}}}, {"quant", {{"recipe", Json::array({"w4a16"})}}}};
+    Json job = {
+        {"domain", id}, {"model", {{"type", "llm"}}}, {"quant", {{"recipe", Json::array({"w4a16"})}}}};
     auto p = validate_jobspec(job);
     ASSERT_EQ(p.size(), 1u) << id;
     EXPECT_EQ(p[0].field, "/domain") << id;
@@ -394,7 +396,8 @@ TEST(planner_validate_jobspec, a_domain_with_no_real_pipeline_is_rejected_with_a
 }
 
 TEST(planner_validate_jobspec, llm_and_vla_domains_have_a_real_pipeline_and_add_no_problem) {
-  Json llm_job = {{"domain", "llm"}, {"model", {{"type", "llm"}}}, {"quant", {{"recipe", Json::array({"w4a16"})}}}};
+  Json llm_job = {
+      {"domain", "llm"}, {"model", {{"type", "llm"}}}, {"quant", {{"recipe", Json::array({"w4a16"})}}}};
   EXPECT_TRUE(validate_jobspec(llm_job).empty());
   Json vla_job = {{"domain", "vla"},
                   {"model", {{"type", "vla"}}},
@@ -415,7 +418,8 @@ TEST(planner_validate_jobspec, vlm_is_a_real_domain_and_model_type_and_needs_a_g
   EXPECT_EQ(p[0].field, "/deploy/device");
   Json bogus = {{"model", {{"type", "vlmm"}}}, {"quant", {{"recipe", Json::array({"w4a16"})}}}};
   ASSERT_EQ(validate_jobspec(bogus).size(), 1u);
-  EXPECT_NE(validate_jobspec(bogus)[0].message.find("vlm"), std::string::npos) << "the message lists the valid types";
+  EXPECT_NE(validate_jobspec(bogus)[0].message.find("vlm"), std::string::npos)
+      << "the message lists the valid types";
 }
 
 TEST(planner_validate_jobspec, domain_is_entirely_optional_and_omitting_it_adds_no_problem) {
@@ -440,8 +444,8 @@ TEST(planner_validate_jobspec, quantize_only_alone_is_fine_for_llm_and_vla) {
 
 TEST(planner_validate_jobspec, quantize_only_conflicts_with_export_vllm_llamacpp_and_analysis_for_llm) {
   Json base = {{"model", {{"type", "llm"}}},
-              {"quant", {{"recipe", Json::array({"w4a16"})}}},
-              {"evaluation", {{"skip", true}}}};
+               {"quant", {{"recipe", Json::array({"w4a16"})}}},
+               {"evaluation", {{"skip", true}}}};
   Json with_export = base;
   with_export["export"] = {{"formats", Json::array({"awq"})}};
   EXPECT_EQ(validate_jobspec(with_export).size(), 1u);
@@ -466,7 +470,8 @@ TEST(planner_validate_jobspec, quantize_only_conflicts_with_export_vllm_llamacpp
   with_logits_probe["analysis"] = {{"logits_probe", Json::object()}};
   EXPECT_EQ(validate_jobspec(with_logits_probe).size(), 1u);
 
-  for (const auto& j : {with_export, with_vllm, with_sglang, with_llamacpp, with_sensitivity, with_logits_probe}) {
+  for (const auto& j :
+       {with_export, with_vllm, with_sglang, with_llamacpp, with_sensitivity, with_logits_probe}) {
     auto p = validate_jobspec(j);
     ASSERT_EQ(p.size(), 1u);
     EXPECT_EQ(p[0].field, "/evaluation/skip");
@@ -635,7 +640,8 @@ TEST(planner_preferred_export_format, other_backends_are_unaffected_by_the_new_b
   EXPECT_EQ(preferred_export_format(w_int(4), ""), "awq");
 }
 
-// ---- B2 (作业派生): an `artifact` job serves a checkpoint a finished llm job exported, without quantizing ----
+// ---- B2 (作业派生): an `artifact` job serves a checkpoint a finished llm job exported, without quantizing
+// ----
 namespace {
 Json artifact_job(const Json& artifact, const Json& deploy) {
   return {{"model", {{"type", "llm"}}}, {"artifact", artifact}, {"deploy", deploy}};
@@ -648,41 +654,52 @@ std::vector<std::string> fields(const std::vector<Problem>& ps) {
 }  // namespace
 
 TEST(planner_validate_artifact, an_awq_checkpoint_on_sglang_and_a_gguf_on_llamacpp_are_valid) {
-  EXPECT_TRUE(validate_jobspec(artifact_job({{"job", "20261009-225558-b43b47"}, {"recipe", "W4A16"}, {"format", "awq"}},
-                                            {{"device", "gpu"}, {"sglang", Json::object()}})).empty());
+  EXPECT_TRUE(validate_jobspec(
+                  artifact_job({{"job", "20261009-225558-b43b47"}, {"recipe", "W4A16"}, {"format", "awq"}},
+                               {{"device", "gpu"}, {"sglang", Json::object()}}))
+                  .empty());
   EXPECT_TRUE(validate_jobspec(artifact_job({{"job", "j1"}, {"format", "gguf"}, {"type", "q4_k"}},
-                                            {{"device", "cpu"}, {"llamacpp", {{"gpu_layers", 0}}}})).empty())
+                                            {{"device", "cpu"}, {"llamacpp", {{"gpu_layers", 0}}}}))
+                  .empty())
       << "a GGUF on the CPU is a real device change";
 }
 
 TEST(planner_validate_artifact, each_malformed_piece_is_its_own_problem) {
-  auto f = fields(validate_jobspec(artifact_job({{"job", "../x"}, {"format", "safetensors"}}, {{"vllm", Json::object()}})));
+  auto f = fields(validate_jobspec(
+      artifact_job({{"job", "../x"}, {"format", "safetensors"}}, {{"vllm", Json::object()}})));
   EXPECT_NE(std::find(f.begin(), f.end(), "/artifact/job"), f.end());
   EXPECT_NE(std::find(f.begin(), f.end(), "/artifact/format"), f.end());
   f = fields(validate_jobspec(artifact_job({{"job", "j1"}, {"format", "awq"}}, {{"vllm", Json::object()}})));
-  EXPECT_NE(std::find(f.begin(), f.end(), "/artifact/recipe"), f.end()) << "an HF export is named by its recipe";
-  f = fields(validate_jobspec(artifact_job({{"job", "j1"}, {"format", "gguf"}}, {{"llamacpp", Json::object()}})));
+  EXPECT_NE(std::find(f.begin(), f.end(), "/artifact/recipe"), f.end())
+      << "an HF export is named by its recipe";
+  f = fields(
+      validate_jobspec(artifact_job({{"job", "j1"}, {"format", "gguf"}}, {{"llamacpp", Json::object()}})));
   EXPECT_NE(std::find(f.begin(), f.end(), "/artifact/type"), f.end()) << "a GGUF is named by its type";
   f = fields(validate_jobspec(artifact_job("w4a16-awq", {{"vllm", Json::object()}})));
   EXPECT_NE(std::find(f.begin(), f.end(), "/artifact"), f.end());
 }
 
 TEST(planner_validate_artifact, the_backend_must_be_able_to_load_the_format) {
-  auto p = validate_jobspec(artifact_job({{"job", "j1"}, {"format", "gguf"}, {"type", "q4_k"}}, {{"vllm", Json::object()}}));
+  auto p = validate_jobspec(
+      artifact_job({{"job", "j1"}, {"format", "gguf"}, {"type", "q4_k"}}, {{"vllm", Json::object()}}));
   ASSERT_EQ(fields(p), std::vector<std::string>{"/deploy"});
-  p = validate_jobspec(artifact_job({{"job", "j1"}, {"recipe", "W4A16"}, {"format", "awq"}}, {{"llamacpp", Json::object()}}));
+  p = validate_jobspec(
+      artifact_job({{"job", "j1"}, {"recipe", "W4A16"}, {"format", "awq"}}, {{"llamacpp", Json::object()}}));
   ASSERT_EQ(fields(p), std::vector<std::string>{"/deploy"});
-  p = validate_jobspec(artifact_job({{"job", "j1"}, {"recipe", "W4A16"}, {"format", "awq"}}, {{"device", "gpu"}}));
+  p = validate_jobspec(
+      artifact_job({{"job", "j1"}, {"recipe", "W4A16"}, {"format", "awq"}}, {{"device", "gpu"}}));
   ASSERT_EQ(fields(p), std::vector<std::string>{"/deploy"}) << "no serving backend at all";
 }
 
 TEST(planner_validate_artifact, vllm_and_sglang_need_a_gpu) {
-  auto p = validate_jobspec(artifact_job({{"job", "j1"}, {"recipe", "W4A16"}, {"format", "awq"}}, {{"device", "cpu"}, {"vllm", Json::object()}}));
+  auto p = validate_jobspec(artifact_job({{"job", "j1"}, {"recipe", "W4A16"}, {"format", "awq"}},
+                                         {{"device", "cpu"}, {"vllm", Json::object()}}));
   ASSERT_EQ(fields(p), std::vector<std::string>{"/deploy/device"});
 }
 
 TEST(planner_validate_artifact, quantization_side_options_do_not_mix_with_serving_an_existing_export) {
-  auto j = artifact_job({{"job", "j1"}, {"recipe", "W4A16"}, {"format", "awq"}}, {{"device", "gpu"}, {"vllm", Json::object()}});
+  auto j = artifact_job({{"job", "j1"}, {"recipe", "W4A16"}, {"format", "awq"}},
+                        {{"device", "gpu"}, {"vllm", Json::object()}});
   j["export"] = {{"formats", {"gptq"}}};
   j["analysis"] = {{"sensitivity", "block"}};
   j["evaluation"] = {{"skip", true}};
@@ -699,8 +716,11 @@ TEST(planner_validate_artifact, only_llm_jobs_have_exports_to_reuse) {
 }
 
 TEST(planner_validate_artifact, it_quantizes_nothing_so_it_has_no_quant_section_and_needs_no_calibration) {
-  auto j = artifact_job({{"job", "j1"}, {"recipe", "W4A8"}, {"format", "awq"}}, {{"device", "gpu"}, {"sglang", Json::object()}});
+  auto j = artifact_job({{"job", "j1"}, {"recipe", "W4A8"}, {"format", "awq"}},
+                        {{"device", "gpu"}, {"sglang", Json::object()}});
   EXPECT_TRUE(validate_jobspec(j).empty()) << "no quant.recipe, no calibration: fine";
-  j["quant"] = {{"recipe", {"w4a16"}}, {"algorithm", "gptq"}};  // the wizard used to send the parent's, contradicting the artifact
-  EXPECT_EQ(fields(validate_jobspec(j)), std::vector<std::string>{"/quant"}) << "one problem, not a calibration complaint too";
+  j["quant"] = {{"recipe", {"w4a16"}},
+                {"algorithm", "gptq"}};  // the wizard used to send the parent's, contradicting the artifact
+  EXPECT_EQ(fields(validate_jobspec(j)), std::vector<std::string>{"/quant"})
+      << "one problem, not a calibration complaint too";
 }
