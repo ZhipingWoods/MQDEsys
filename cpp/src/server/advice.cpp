@@ -60,7 +60,9 @@ bool finished_ok(const Json& rep) {
   if (rep.contains("verdict")) return rep["verdict"] == "succeeded";
   // llm_job writes no verdict: done = no error and its last stage, "report", succeeded
   if (rep.contains("error")) return false;
-  for (const auto& st : rep.value("stages", Json::array()))
+  const auto it = rep.find("stages");
+  if (it == rep.end() || !it->is_array()) return false;
+  for (const auto& st : *it)
     if (st.value("stage", "") == "report") return st.value("status", "") == "succeeded";
   return false;
 }
@@ -82,8 +84,11 @@ std::map<std::string, Measured> measured_for(const fs::path& runs_dir, const std
     if (path.empty() || fs::weakly_canonical(path, ec).string() != want) continue;
     const auto k = rep.value("kind", std::string());
     const auto kind = k == "llm" || k == "vlm" ? k : std::string("vla");  // old VLA reports say kind "JobReport"
-    for (const auto& [name, rc] : rep.value("recipes", Json::object()).items()) {
-      auto m = measured_from_summary(kind, rc.value("summary", Json::object()));
+    const auto recs = rep.find("recipes");
+    if (recs == rep.end() || !recs->is_object()) continue;
+    for (const auto& [name, rc] : recs->items()) {
+      if (!rc.is_object() || !rc.contains("summary")) continue;
+      auto m = measured_from_summary(kind, rc["summary"]);
       if (!m) continue;
       m->job_id = d.filename().string();  // the id /jobs/<id> serves, whatever the report itself says
       m->algorithm = rc.value("algorithm", "");
