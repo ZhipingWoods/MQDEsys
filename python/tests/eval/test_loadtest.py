@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 
 import mock_backend
 
+from mqde.eval import loadtest
 from mqde.eval.loadtest import LoadSpec, make_prompt, poisson_schedule, run_load
 
 TTFT_MS, TPOT_MS = 100.0, 20.0  # the mock's ground truth
@@ -85,3 +86,68 @@ def test_prompts_have_exact_length_and_unique_prefixes() -> None:
     heads = {tuple(make_prompt(i, 16, 1000)[:4]) for i in range(5000)}
     assert len(heads) == 5000  # no two requests share a prefix, so prefix caching cannot help
     assert make_prompt(3, 100, 1000)[10:] == [1000] * 90
+
+
+# ---- T-R12: concurrency sweep + saturation point ----
+def _pt(c: int, tps: float, ttft99: float = 100.0) -> dict:
+    return {"concurrency": c, "output_tokens_per_s": tps, "ok": 8, "failed": 0, "ttft_ms": {"p50": ttft99 / 2, "p99": ttft99}}
+
+
+def test_sweep_runs_each_level_ascending_and_reports_per_level_percentiles(tmp_path: Path) -> None:
+    with mock_backend.vllm(tmp_path) as srv:
+        out = loadtest.sweep(srv.port, [4, 1, 2], requests_per_level=4, prompt_len=16, n_predict=4)
+    assert [p["concurrency"] for p in out["points"]] == [1, 2, 4], "ascending, whatever order was asked for"
+    for p in out["points"]:
+        assert p["ok"] == max(4, 2 * p["concurrency"]) and p["failed"] == 0 and p["ttft_ms"]["p99"] >= p["ttft_ms"]["p50"] > 0 and p["tpot_ms"]["p50"] > 0
+        assert p["itl_ms"]["p99"] >= p["itl_ms"]["p50"] > 0 and p["spec"]["concurrency"] == p["concurrency"]
+    tps = [p["output_tokens_per_s"] for p in out["points"]]
+    assert tps[2] > tps[0] * 1.5, "the mock's latency does not depend on load: more workers, more tokens per second"
+    assert out["peak"]["concurrency"] == 4 and out["peak"]["output_tokens_per_s"] == tps[2]
+
+
+def test_sweep_requests_scale_with_concurrency_so_every_worker_gets_work(tmp_path: Path) -> None:
+    with mock_backend.vllm(tmp_path) as srv:
+        out = loadtest.sweep(srv.port, [1, 4], requests_per_level=2, prompt_len=16, n_predict=2)
+    assert [p["ok"] for p in out["points"]] == [2, 8], "max(requests_per_level, 2 x concurrency): 4 workers x 2 rounds"
+
+
+def test_sweep_rejects_nonsense_levels() -> None:
+    for bad in ([], [0], [-1, 2], [1, 1]):
+        with pytest.raises(ValueError):
+            loadtest.sweep(1, bad)
+
+
+def test_saturation_is_where_another_doubling_stops_paying() -> None:
+    pts = [_pt(1, 100), _pt(2, 195), _pt(4, 370), _pt(8, 400), _pt(16, 405)]
+    s = loadtest.saturation(pts)
+    assert s["concurrency"] == 4 and s["reason"] == "throughput"
+    assert s["next_gain_pct"] == pytest.approx(100 * (400 / 370 - 1))
+
+
+def test_saturation_also_stops_at_a_latency_blowup() -> None:
+    pts = [_pt(1, 100, 80), _pt(2, 200, 90), _pt(4, 400, 700), _pt(8, 800, 2000)]
+    s = loadtest.saturation(pts, max_ttft_p99_ms=500)
+    assert s["concurrency"] == 2 and s["reason"] == "ttft", "throughput still doubles but TTFT p99 breaks the budget at 4"
+
+
+def test_saturation_ignores_levels_with_failures_and_handles_degenerate_input() -> None:
+    bad = {**_pt(4, 900), "failed": 3}
+    assert loadtest.saturation([_pt(1, 100), _pt(2, 190), bad])["concurrency"] == 2
+    assert loadtest.saturation([_pt(1, 100)]) == {"concurrency": 1, "reason": "single-level", "next_gain_pct": None}
+    assert loadtest.saturation([]) is None
+    never = loadtest.saturation([_pt(1, 100), _pt(2, 200), _pt(4, 400)])
+    assert never["concurrency"] == 4 and never["reason"] == "not-reached", "still scaling at the top of the range"
+
+
+def test_peak_is_the_best_throughput_not_the_highest_concurrency_and_a_dead_level_does_not_break_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    script = {1: {"output_tokens_per_s": 100.0, "ok": 4, "failed": 0}, 2: {"output_tokens_per_s": 300.0, "ok": 4, "failed": 0},
+              4: {"output_tokens_per_s": 250.0, "ok": 8, "failed": 0}, 8: {"ok": 0, "failed": 16}}  # overloaded: nothing finished
+
+    monkeypatch.setattr(loadtest, "run_load", lambda port, spec: dict(script[spec.concurrency]))
+    out = loadtest.sweep(1, [1, 2, 4, 8])
+    assert out["peak"]["concurrency"] == 2 and out["peak"]["output_tokens_per_s"] == 300.0
+    assert out["saturation"]["concurrency"] == 2 and out["saturation"]["reason"] == "throughput", "4 is slower than 2"
+    assert [p["concurrency"] for p in out["points"]] == [1, 2, 4, 8] and out["points"][-1]["failed"] == 16
+    monkeypatch.setattr(loadtest, "run_load", lambda port, spec: {"ok": 0, "failed": 4})
+    dead = loadtest.sweep(1, [1, 2])
+    assert dead["peak"] is None and dead["saturation"] is None, "no level served anything: no peak, no saturation"

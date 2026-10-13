@@ -389,6 +389,7 @@ class LLMJob:
                                                    prompt_len=prompt_len, n_predict=n_predict))
                 sp = served_perplexity(srv.port, ids.tolist(), s.eval_seq_len, int(cfg.get("ppl_windows", s.eval_windows)),
                                        concurrency=conc)
+                sw = self._sweep(srv.port, cfg, prompt_len, n_predict)
                 lm = (self._lm_eval(srv.port, ckpt, self._serve_dir(ckpt) / f"lm-eval-{ckpt.name}", cfg["lm_eval"], openai_models(srv.port)[0]["id"])
                       if cfg.get("lm_eval") else None)
                 props, engine = srv.props(), srv.engine_info()
@@ -401,7 +402,8 @@ class LLMJob:
         good = bool(sm["ok"]) and load.get("ok") == load["spec"]["requests"]
         return {"status": "succeeded" if good else "degraded", "startup_s": srv.startup_s, "args": srv.args, "props": props,
                 "engine": engine, "smoke": sm, "load": load, "served_ppl": sp["ppl"], "served_windows": sp["windows"],
-                "served_vs_real_ppl_pct": 100.0 * (sp["ppl"] / real_ppl - 1.0), **({"lm_eval": lm} if lm is not None else {})}
+                "served_vs_real_ppl_pct": 100.0 * (sp["ppl"] / real_ppl - 1.0), **({"lm_eval": lm} if lm is not None else {}),
+                **({"sweep": sw} if sw is not None else {})}
 
     def _sglang_serve(self, ckpt: Path, ids: torch.Tensor, real_ppl: float) -> dict[str, Any]:
         """S11 + S12 on SGLang: serve the exported checkpoint, smoke it, load it, score it with its own logprobs."""
@@ -433,6 +435,7 @@ class LLMJob:
                                                    prompt_len=prompt_len, n_predict=n_predict))
                 sp = served_perplexity(srv.port, ids.tolist(), s.eval_seq_len, int(cfg.get("ppl_windows", s.eval_windows)),
                                        concurrency=conc, api="sglang")
+                sw = self._sweep(srv.port, cfg, prompt_len, n_predict)
                 props, engine = srv.props(), srv.engine_info()
         except Exception as e:
             self.ev.log(f"SGLang {ckpt.name}: failed: {e}", level="warning")
@@ -443,7 +446,31 @@ class LLMJob:
         good = bool(sm["ok"]) and load.get("ok") == load["spec"]["requests"]
         return {"status": "succeeded" if good else "degraded", "startup_s": srv.startup_s, "args": srv.args, "props": props,
                 "engine": engine, "smoke": sm, "load": load, "served_ppl": sp["ppl"], "served_windows": sp["windows"],
-                "served_vs_real_ppl_pct": 100.0 * (sp["ppl"] / real_ppl - 1.0)}
+                "served_vs_real_ppl_pct": 100.0 * (sp["ppl"] / real_ppl - 1.0), **({"sweep": sw} if sw is not None else {})}
+
+    def _sweep(self, port: int, cfg: dict[str, Any], prompt_len: int, n_predict: int) -> dict[str, Any] | None:
+        """T-R12: the same server under several concurrency levels (``deploy.<backend>.sweep: {levels, requests_per_level,
+        max_ttft_p99_ms}``), with per-level TTFT / TPOT / ITL percentiles and where throughput stops growing. Off unless
+        asked for; a failure here is recorded, not allowed to throw away the PPL and load results already measured."""
+        sc = cfg.get("sweep")
+        if not sc:
+            return None
+        from mqde.eval import loadtest
+
+        levels = [int(c) for c in sc.get("levels", [1, 2, 4, 8, 16])]
+        try:
+            out = loadtest.sweep(port, levels, requests_per_level=int(sc.get("requests_per_level", 16)), prompt_len=prompt_len, n_predict=n_predict)
+        except Exception as e:
+            self.ev.log(f"concurrency sweep failed: {e}", level="warning")
+            return {"error": f"{type(e).__name__}: {e}"}
+        budget = sc.get("max_ttft_p99_ms")
+        if budget is not None:
+            out["saturation"] = loadtest.saturation(out["points"], max_ttft_p99_ms=float(budget))
+            out["max_ttft_p99_ms"] = float(budget)
+        for p in out["points"]:
+            if p.get("output_tokens_per_s"):
+                self.ev.emit("metric", name=f"sweep.c{p['concurrency']}.tps", value=p["output_tokens_per_s"], msg=f"concurrency {p['concurrency']}")
+        return out
 
     def _lm_eval_baseline(self) -> dict[str, Any]:
         """The same lm-eval run against the unquantized model, served by vLLM with the same dtype as the exported checkpoints."""

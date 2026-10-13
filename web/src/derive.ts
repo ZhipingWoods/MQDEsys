@@ -43,6 +43,9 @@ export interface Derived {
   vllmUtil: number;
   useSglang: boolean;
   sglangMem: number;
+  useSweep: boolean;
+  sweepLevels: string;
+  sweepBudget: string;
   useLmEval: boolean;
   lmTasks: string;
   lmLimit: number;
@@ -107,6 +110,9 @@ export function deriveFromJob(job: any, step: DeriveStep, d: Derived): Derived {
     vllmUtil: dep.vllm?.gpu_memory_utilization ?? d.vllmUtil,
     useSglang: !!dep.sglang,
     sglangMem: dep.sglang?.mem_fraction_static ?? d.sglangMem,
+    useSweep: !!(dep.vllm?.sweep ?? dep.sglang?.sweep),
+    sweepLevels: ((dep.vllm?.sweep ?? dep.sglang?.sweep)?.levels ?? d.sweepLevels.split(",")).join(","),
+    sweepBudget: String((dep.vllm?.sweep ?? dep.sglang?.sweep)?.max_ttft_p99_ms ?? ""),
     useLmEval: !!dep.vllm?.lm_eval,
     lmTasks: (dep.vllm?.lm_eval?.tasks ?? d.lmTasks.split(",")).join(","),
     lmLimit: dep.vllm?.lm_eval?.limit ?? d.lmLimit,

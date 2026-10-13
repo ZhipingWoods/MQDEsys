@@ -253,3 +253,37 @@ def run_load(port: int, spec: LoadSpec | None = None, *, on_sample: Callable[[Sa
             out["offered_rate"] = spec.rate
             out["schedule_lag_ms"] = summarize([s.lag for s in samples])
     return out
+
+
+# ---- concurrency sweep (T-R12) ----
+def sweep(port: int, levels: list[int], *, requests_per_level: int = 16, warmup: int = 1, **kw: Any) -> dict[str, Any]:
+    """The same closed-loop load at several concurrency levels (ascending), each with its own TTFT / TPOT / ITL
+    percentiles and throughput, plus the peak and where adding load stops paying (``saturation``). A level sends at least
+    two requests per worker, so every worker runs more than once and the percentiles are not dominated by the ramp-up."""
+    if not levels or any(c < 1 for c in levels) or len(set(levels)) != len(levels):
+        raise ValueError(f"levels must be distinct positive integers, got {levels}")
+    points: list[dict[str, Any]] = []
+    for c in sorted(levels):
+        r = run_load(port, LoadSpec(concurrency=c, requests=max(requests_per_level, 2 * c), warmup=warmup, **kw))
+        points.append({"concurrency": c, **r})
+    good = [p for p in points if p.get("output_tokens_per_s")]
+    return {"points": points, "peak": max(good, key=lambda p: p["output_tokens_per_s"]) if good else None,
+            "saturation": saturation(points)}
+
+
+def saturation(points: list[dict[str, Any]], *, min_gain_pct: float = 10.0, max_ttft_p99_ms: float | None = None) -> dict[str, Any] | None:
+    """The last concurrency worth running: the first level after which the next one gains < ``min_gain_pct`` throughput
+    (reason ``throughput``) or whose TTFT p99 exceeds ``max_ttft_p99_ms`` (``ttft``). ``not-reached`` = still scaling at the
+    top of the range. Levels with failed requests say nothing about capacity and are left out."""
+    ok = sorted((p for p in points if not p.get("failed") and p.get("output_tokens_per_s")), key=lambda p: p["concurrency"])
+    if not ok:
+        return None
+    if len(ok) == 1:
+        return {"concurrency": ok[0]["concurrency"], "reason": "single-level", "next_gain_pct": None}
+    for a, b in zip(ok, ok[1:], strict=False):
+        gain = 100.0 * (b["output_tokens_per_s"] / a["output_tokens_per_s"] - 1.0)
+        if max_ttft_p99_ms is not None and (b.get("ttft_ms") or {}).get("p99", 0.0) > max_ttft_p99_ms:
+            return {"concurrency": a["concurrency"], "reason": "ttft", "next_gain_pct": gain}
+        if gain < min_gain_pct:
+            return {"concurrency": a["concurrency"], "reason": "throughput", "next_gain_pct": gain}
+    return {"concurrency": ok[-1]["concurrency"], "reason": "not-reached", "next_gain_pct": None}

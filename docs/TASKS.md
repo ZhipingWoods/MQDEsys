@@ -767,6 +767,8 @@
 
 - **前端改版（2026-10-13，用户指出巡检只修了细节、页面没有可见变化）**：①**新建作业改成真正的分步向导**——顶部 ①…⑥ 步骤导航（已完成的步显示 ✓ 和一行摘要，可点回），每次只显示一步，上一步/下一步带每步校验（①要有模型路径，③至少一个配方；未实现的领域不能前进），复用父作业产物时自动跳过②③，⑥是摘要表 + JobSpec + 提交；`?step=` 由派生链接直达对应步；"单页显示全部"（`?mode=all`）保留旧的长表单形态，老 e2e 全部改用它。②**首页总览**（`/`，侧栏"总览"）：GPU 池空闲/占用（含显存、占用作业链接）、运行中/排队、24 小时成功/失败、推理后端环境版本，最近 8 个作业（类型、状态、派生自）。③**作业列表**：搜索（作业号/名称/模型/配方）、类型与状态筛选、计数，派生作业显示父作业链接（`/api/v1/jobs` 新增 `parent_job`）。校验：`web/e2e/wizard_steps.mjs` 30/30（4 处 mutation 含 C++ 端全部被抓）；改过 URL 的 6 个老 e2e 与其余全部通过（derive +1：派生链接落在④）。
 
+- **并发扫描（T-R12/R13，2026-10-13）**：`loadtest.sweep(port, levels)`——同一服务按并发档位从低到高各跑一遍闭环压测（每档至少 2×并发个请求，免得 ramp-up 占满样本），每档给吞吐和 TTFT/TPOT/ITL 的 p50/p90/p99，外加峰值；`saturation()`——下一档吞吐涨幅 <10%（`throughput`）或 TTFT p99 超预算（`ttft`）时，前一档就是建议并发，`not-reached` 表示测到的最高档仍在增长，有失败请求的档位不参与判断。接入 `LLMJob._vllm_serve/_sglang_serve`（部署评测作业与普通 LLM 作业共用）：`deploy.vllm|sglang.sweep: {levels, requests_per_level, max_ttft_p99_ms}`，默认关；扫描失败只记 `{error}`，不丢已测的 PPL 与压测结果。前端：向导⑤的"并发扫描"（档位格式校验，非法时不写入、不能提交；派生时沿用），`SweepCard`。**诚实边界**：只在 mock 后端上测过（延迟与负载无关，吞吐线性增长，所以"饱和"靠合成数据测）；还没在真机 vLLM/SGLang 上跑过扫描，不知道 0.5B 模型在 4090 上哪一档饱和。校验：pytest `test_loadtest` +7（13 处 mutation 全被抓，首轮 2 处存活——峰值按吞吐而不是并发选、全失败档位——补脚本化测试后被抓）、`test_deploy_job` +3（8 处 mutation 全被抓，首轮 3 处存活）；`web/e2e/sweep_ui.mjs` 24/24（11 处前端 mutation 被抓，首轮 1 处存活：复用产物模式下 SGLang 的扫描配置）。
+
 #### T-1003 MoE / MLA 支持
 - **依赖**：T-0508, T-0208 **级别**：L1
 - **产出**：MoE 专家线性层枚举与校准（按路由统计专家样本不足时的处理策略）；MLA KV 预估与 KV 量化适配；DeepSeek-V2-Lite 端到端。
@@ -972,8 +974,8 @@
 | T-R09 | 导出 GPTQ v1/v2 / merged 16bit / GGUF | GPTQModel / unsloth | L2 | TODO |
 | T-R10 | 动态量化（按误差自动生成 skip 名单） | unsloth | L1 | PARTIAL (2026-10-13，VLM 作业：`quant/suggest.py` 按逐层输出 SQNR 在各组件内找离群层 → `summary.suggestion` → 前端一键带清单重跑；真机 MiniCPM-V-4.6 W4A16 标出 3 层(+6.8 MiB)，KL 8.8e-4→8.2e-4(−7%)；未做：LLM/VLA 作业接入、bits 型规则) |
 | T-R11 | eval：TaskConfig + registry + Evaluator + Report | evalscope | L2 | TODO |
-| T-R12 | perf：并发扫描 + TTFT/TPOT/ITL 百分位 | evalscope | L1 | TODO |
-| T-R13 | 前端评测页：Reports / Compare / Perf | evalscope | L1 | TODO |
+| T-R12 | perf：并发扫描 + TTFT/TPOT/ITL 百分位 | evalscope | L1 | PARTIAL (2026-10-13，`eval/loadtest.py::sweep/saturation` + vLLM/SGLang 服务阶段 `deploy.<backend>.sweep`；llama-server 未接，未在真机 vLLM 上跑过扫描) |
+| T-R13 | 前端评测页：Reports / Compare / Perf | evalscope | L1 | PARTIAL (2026-10-13，向导里的并发扫描开关 + 部署评测/LLM 作业页的并发曲线卡片(吞吐柱 + TTFT 线 + p50/p99 表 + 饱和点)；Compare 页的跨作业性能对比未做) |
 | T-R14 | hal：Target + Backend 接口 + 插件发现 | FlagTree | L3 | TODO |
 | T-R15 | 后端插件 + 回归基线 | FlagTree | L1 | TODO |
 | T-R28 | 存储估算 | llmfit A.17 | L1 | 暂不做 |

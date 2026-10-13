@@ -278,6 +278,17 @@ export interface LLMExport {
   sglang?: VllmDeploy; // same shape: SGLang's engine info just has no quant_kernel / max_concurrency fields
 }
 
+/** T-R12: one served model under several concurrency levels (eval/loadtest.py sweep()). */
+export interface SweepPoint {
+  concurrency: number; ok: number; failed: number; output_tokens_per_s?: number;
+  ttft_ms?: { p50?: number; p90?: number; p99?: number }; tpot_ms?: { p50?: number; p90?: number; p99?: number };
+  itl_ms?: { p50?: number; p90?: number; p99?: number };
+}
+export interface ConcurrencySweep {
+  points: SweepPoint[]; peak: SweepPoint | null; max_ttft_p99_ms?: number;
+  saturation: { concurrency: number; reason: "throughput" | "ttft" | "single-level" | "not-reached"; next_gain_pct: number | null } | null;
+}
+
 /** S11 + S12 on vLLM or SGLang: serve the exported checkpoint, load-test it, and score it with its own prompt logprobs. */
 export interface VllmDeploy {
   status: "succeeded" | "degraded" | "failed" | "skipped";
@@ -298,6 +309,7 @@ export interface VllmDeploy {
     cuda_graph_s?: number;
   };
   smoke?: { ok: boolean; text?: string };
+  sweep?: ConcurrencySweep | { error: string };
   load?: {
     ok: number;
     failed: number;

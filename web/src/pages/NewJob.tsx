@@ -66,6 +66,12 @@ export default function NewJobPage() {
   // T-0704: SGLang is a second real serving backend, independent of vLLM (both can be on to compare them)
   const [useSglang, setUseSglang] = useState(false);
   const [sglangMem, setSglangMem] = useState(0.3);
+  // T-R12: concurrency sweep of the served model (deploy.vllm|sglang.sweep)
+  const [useSweep, setUseSweep] = useState(false);
+  const [sweepLevels, setSweepLevels] = useState("1,2,4,8,16");
+  const [sweepBudget, setSweepBudget] = useState("");
+  const levelsOk = /^\s*\d+(\s*,\s*\d+)*\s*$/.test(sweepLevels) && new Set(sweepLevels.split(",").map((x) => Number(x))).size === sweepLevels.split(",").length && sweepLevels.split(",").every((x) => Number(x) >= 1);
+  const sweepCfg = useSweep && levelsOk ? { sweep: { levels: sweepLevels.split(",").map((x) => Number(x)), requests_per_level: 16, ...(sweepBudget !== "" && Number(sweepBudget) > 0 ? { max_ttft_p99_ms: Number(sweepBudget) } : {}) } } : {};
   const [useLmEval, setUseLmEval] = useState(false);
   const [lmTasks, setLmTasks] = useState("gsm8k");
   const [lmLimit, setLmLimit] = useState(50);
@@ -196,7 +202,7 @@ export default function NewJobPage() {
         const d = deriveFromJob(det.job, fromStep, {
           domain, name, model, picked, algorithm, groupSizeOverride, action, actStatic, kv, kvMethod, keepEnds, downBits,
           inheritedRules: [], nCalib, seqLen, dataset, nEval, windows, maxNewTokens, attribution, quantizeOnly, quantDevice,
-          evalDevice, hw, deployBackend, useVllm, vllmUtil, useSglang, sglangMem, useLmEval, lmTasks, lmLimit, lmShots, gguf,
+          evalDevice, hw, deployBackend, useVllm, vllmUtil, useSglang, sglangMem, useSweep, sweepLevels, sweepBudget, useLmEval, lmTasks, lmLimit, lmShots, gguf,
           exportFmts, sens, probe, probeExact,
         });
         keepParentDeploy.current = d.deployBackend !== "none";
@@ -208,7 +214,7 @@ export default function NewJobPage() {
         setDataset(d.dataset); setNEval(d.nEval); setWindows(d.windows); setMaxNewTokens(d.maxNewTokens);
         setAttribution(d.attribution); setQuantizeOnly(d.quantizeOnly); setQuantDevice(d.quantDevice); setEvalDevice(d.evalDevice);
         setHw(d.hw); setDeployBackend(d.deployBackend); setUseVllm(d.useVllm); setVllmUtil(d.vllmUtil); setUseSglang(d.useSglang);
-        setSglangMem(d.sglangMem); setUseLmEval(d.useLmEval); setLmTasks(d.lmTasks); setLmLimit(d.lmLimit); setLmShots(d.lmShots);
+        setSglangMem(d.sglangMem); setUseSweep(d.useSweep); setSweepLevels(d.sweepLevels); setSweepBudget(d.sweepBudget); setUseLmEval(d.useLmEval); setLmTasks(d.lmTasks); setLmLimit(d.lmLimit); setLmShots(d.lmShots);
         setGguf(d.gguf); setExportFmts(d.exportFmts); setSens(d.sens); setProbe(d.probe); setProbeExact(d.probeExact);
         setParentJob(fromJob);
         const own = (det.job as { artifact?: Artifact }).artifact;
@@ -257,10 +263,11 @@ export default function NewJobPage() {
       ...(isGguf
         ? { llamacpp: { gpu_layers: evalDevice === "cpu" ? 0 : 99, serve: { concurrency: 4, requests: 16, prompt_len: 256, n_predict: 64 } } }
         : deployBackend === "sglang"
-          ? { sglang: { mem_fraction_static: sglangMem } }
+          ? { sglang: { mem_fraction_static: sglangMem, ...sweepCfg } }
           : {
               vllm: {
                 gpu_memory_utilization: vllmUtil,
+                ...sweepCfg,
                 ...(useLmEval ? { lm_eval: { tasks: lmTasks.split(",").map((t) => t.trim()).filter(Boolean), limit: lmLimit, num_fewshot: lmShots } } : {}),
               },
             }),
@@ -331,11 +338,12 @@ export default function NewJobPage() {
             hardware: hw,
             device: quantDevice === "gpu" || evalDevice === "gpu" ? "gpu" : "cpu",
             ...(!quantizeOnly && gguf.length ? { llamacpp: { types: gguf } } : {}),
-            ...(!quantizeOnly && useSglang ? { sglang: { mem_fraction_static: sglangMem } } : {}),
+            ...(!quantizeOnly && useSglang ? { sglang: { mem_fraction_static: sglangMem, ...sweepCfg } } : {}),
             ...(!quantizeOnly && useVllm
               ? {
                   vllm: {
                     gpu_memory_utilization: vllmUtil,
+                    ...sweepCfg,
                     ...(useLmEval
                       ? { lm_eval: { tasks: lmTasks.split(",").map((t) => t.trim()).filter(Boolean), limit: lmLimit, num_fewshot: lmShots } }
                       : {}),
@@ -865,6 +873,22 @@ export default function NewJobPage() {
             </div>
           )}
         </div>
+        {kind === "llm" && (artifact ? !isGguf : useVllm || useSglang) && (
+          <div className="form-row" data-testid="sweep-options" style={{ marginTop: 8 }}>
+            <div className="field" style={{ minWidth: 340 }}>
+              <label>
+                <input type="checkbox" checked={useSweep} onChange={(e) => setUseSweep(e.target.checked)} data-testid="opt-sweep" /> 并发扫描（吞吐 / TTFT / TPOT / ITL 随并发变化，找出饱和点）
+              </label>
+              {useSweep && (
+                <div className="small" style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 4 }}>
+                  并发档 <input value={sweepLevels} onChange={(e) => setSweepLevels(e.target.value)} style={{ width: 150 }} placeholder="1,2,4,8,16" data-testid="opt-sweep-levels" aria-invalid={!levelsOk} />
+                  TTFT p99 预算 <input type="number" min={0} value={sweepBudget} onChange={(e) => setSweepBudget(e.target.value)} style={{ width: 80 }} placeholder="不限" data-testid="opt-sweep-budget" /> ms
+                  {!levelsOk && <span className="warn" style={{ color: "#e0a84a" }}>请填用逗号分隔、互不相同的正整数</span>}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         <p className="note">当前执行后端为 PyTorch fake-quant（评估量化误差）；选择一个部署后端后，上面的导出格式/GGUF 类型会按建议自动勾选，仍可手动调整。</p>
       </div>
       )}
@@ -874,7 +898,7 @@ export default function NewJobPage() {
         <pre className="log" style={{ height: "auto", maxHeight: 240 }}>
           {JSON.stringify(job, null, 2)}
         </pre>
-        <button disabled={busy || blocked || picked.length === 0} onClick={submit}>
+        <button disabled={busy || blocked || picked.length === 0 || (useSweep && !levelsOk)} onClick={submit} title={useSweep && !levelsOk ? "并发档格式不对" : undefined}>
           {busy ? "提交中…" : blocked ? "该领域尚未支持提交" : "提交作业"}
         </button>
       </div>

@@ -4,6 +4,7 @@ import { api, fmt, fmtBytes, LlamaCppDeploy, LlamaServe, llamaSpeed, LLMJobRepor
 import { baseOption, Chart, series, token } from "../charts";
 import { Tile } from "./Estimate";
 import { LayerAnalysis } from "./LayerAnalysis";
+import { SweepCard } from "./SweepCard";
 
 export const LLM_STAGES: [string, string][] = [
   ["validate", "校验"],
@@ -173,6 +174,7 @@ function Overview({ rep, rs }: { rep: LLMJobReport; rs: LLMRecipeReport[] }) {
       {rs.some((r) => r.logits) && <LogitsCard rep={rep} rs={rs} />}
       {rs.some((r) => Object.values(r.export ?? {}).some((e) => e.vllm)) && <ServeCard rs={rs} which="vllm" />}
       {rs.some((r) => Object.values(r.export ?? {}).some((e) => e.sglang)) && <ServeCard rs={rs} which="sglang" />}
+      {rs.flatMap((r) => Object.entries(r.export ?? {}).flatMap(([f, e]) => (["vllm", "sglang"] as const).flatMap((k) => (e[k]?.sweep ? [<SweepCard key={`${r.recipe}-${f}-${k}`} title={`${r.recipe} · ${f} · ${k === "vllm" ? "vLLM" : "SGLang"}`} sweep={e[k]!.sweep!} />] : []))))}
       {(rep.baseline_lm_eval || rs.some((r) => Object.values(r.export ?? {}).some((e) => e.vllm?.lm_eval))) && <LmEvalCard rep={rep} rs={rs} />}
       {rep.llamacpp && <LlamaCppCard d={rep.llamacpp} />}
     </>

@@ -152,3 +152,33 @@ def test_from_yaml_reads_the_wizards_deploy_job(tmp_path: Path) -> None:
     p.write_text(yaml.safe_dump(d))
     s = DeployJobSpec.from_yaml(p)
     assert s.device == "cpu" and s.llamacpp_gpu_layers == 0
+
+
+def test_a_concurrency_sweep_is_run_against_the_served_checkpoint_when_asked(runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MQDE_SGLANG_PYTHON", str(mock_backend.wrapper(tmp_path, "python")))
+    cfg = {**serve_cfg(), "sweep": {"levels": [4, 1, 2], "requests_per_level": 2, "max_ttft_p99_ms": 5000}}
+    rep = DeployJob(spec(runs, sglang=cfg), job_id="child").run()
+    s = rep["deploy"]["sglang"]["sweep"]
+    assert [p["concurrency"] for p in s["points"]] == [1, 2, 4] and s["peak"]["concurrency"] == 4
+    assert s["saturation"]["reason"] in ("not-reached", "throughput") and s["max_ttft_p99_ms"] == 5000
+    assert all(p["ok"] > 0 and p["itl_ms"]["p99"] > 0 for p in s["points"])
+    off = DeployJob(spec(runs, sglang=serve_cfg()), job_id="child2").run()["deploy"]["sglang"]
+    assert off["status"] == "succeeded" and "sweep" not in off, "off unless asked for (and its absence is not a crash)"
+    ev = (runs / "child" / "events.jsonl").read_text()
+    assert '"sweep.c1.tps"' in ev and '"sweep.c4.tps"' in ev, "each level's throughput is a metric event for the live log"
+
+
+def test_a_sweep_with_no_levels_given_uses_the_default_ladder(runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MQDE_SGLANG_PYTHON", str(mock_backend.wrapper(tmp_path, "python")))
+    rep = DeployJob(spec(runs, sglang={**serve_cfg(), "sweep": {"requests_per_level": 2}}), job_id="child").run()
+    assert [p["concurrency"] for p in rep["deploy"]["sglang"]["sweep"]["points"]] == [1, 2, 4, 8, 16]
+
+
+def test_a_failing_sweep_does_not_throw_away_the_rest_of_the_serving_result(runs: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from mqde.eval import loadtest
+
+    monkeypatch.setenv("MQDE_VLLM_BIN", str(mock_backend.wrapper(tmp_path, "vllm")))
+    monkeypatch.setattr(loadtest, "sweep", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("sweep exploded")))
+    rep = DeployJob(spec(runs, vllm={**serve_cfg(), "sweep": {"levels": [1, 2]}}), job_id="child").run()
+    v = rep["deploy"]["vllm"]
+    assert v["status"] == "succeeded" and v["served_ppl"] > 0 and v["sweep"] == {"error": "RuntimeError: sweep exploded"}

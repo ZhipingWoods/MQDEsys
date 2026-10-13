@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { DeployJobReport, fmt, fmtBytes, VllmDeploy } from "../api";
 import { Tile } from "./Estimate";
+import { SweepCard } from "./SweepCard";
 
 export const DEPLOY_STAGES: [string, string][] = [
   ["validate", "校验产物"],
@@ -61,6 +62,7 @@ export function DeployReportView({ rep }: { rep: DeployJobReport }) {
           <p className="note">部署后 PPL 由推理框架自己的 prompt logprobs 算出，与父作业的真实权重 PPL 用同一套 wikitext-2 窗口协议；差异来自推理框架的内核与精度。</p>
         </div>
       )}
+      {(["vllm", "sglang"] as const).map((k) => d[k]?.sweep && <SweepCard key={k} title={k === "vllm" ? "vLLM" : "SGLang"} sweep={d[k]!.sweep!} />)}
       {d.llamacpp && (
         <div className="card table-wrap">
           <h2>llama.cpp 部署结果</h2>
