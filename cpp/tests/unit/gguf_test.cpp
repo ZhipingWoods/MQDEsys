@@ -307,7 +307,9 @@ TEST(gguf_read, an_alignment_that_is_not_a_power_of_two_is_refused) {
     const auto p = write_file(build(3, {kv_str("general.architecture", "x"), kv_n<uint32_t>("general.alignment", U32, a)}, {}, 32, false), "align");
     auto g = read_gguf(p);
     EXPECT_FALSE(g) << a;
-    if (!g) EXPECT_NE(g.error().message.find("power of two"), std::string::npos) << a;
+    if (!g) {
+      EXPECT_NE(g.error().message.find("power of two"), std::string::npos) << a;
+    }
     fs::remove(p);
   }
   const auto p = write_file(build(3, {kv_str("general.architecture", "x"), kv_n<uint32_t>("general.alignment", U32, 128)}, {}, 128, false), "align128");
