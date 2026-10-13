@@ -374,6 +374,15 @@ export interface VLMJobReport {
   recipes?: Record<string, VLMRecipeReport>;
 }
 
+/** POST /recommend: one ranked deployment option (planner::recommend + the accuracy risk from advice.cpp). */
+export interface Advice {
+  recipe: string; algorithm: string; backend: string; hardware: string; maturity: string; feasible: boolean;
+  deploy_verdict: string; peak_bytes: number; capacity_bytes: number; max_concurrency: number; export_format: string; reasons: string[];
+  risk: "low" | "medium" | "high"; risk_source: "measured" | "prior";
+  measured?: { job_id: string; kind: string; algorithm: string; metric: string; value: number };
+}
+export type AdviceObjective = "accuracy" | "balanced" | "throughput";
+
 export interface LLMJobReport {
   job_id: string;
   kind: "llm";
@@ -643,6 +652,8 @@ export const api = {
   hardware: () => req<{ devices: Device[]; job_gpus: { pool: { gpu: number; job: string | null }[]; queued: number } }>("GET", "/hardware"),
   inspect: (path: string) => req<Record<string, any>>("POST", "/models:inspect", { path }),
   backends: () => req<BackendInfo[]>("GET", "/backends"),
+  recommend: (model: string, hardware: string[], backend: string[], objective: AdviceObjective, runtime: Partial<RuntimeParams>, top_k = 8) =>
+    req<{ top: Advice[]; excluded: number; considered: number; objective: AdviceObjective; measured_jobs: number }>("POST", "/recommend", { model, hardware, backend, objective, runtime, top_k }),
   estimate: (model: string, hardware: string, recipes: string[], runtime: RuntimeParams, backend = "hf_transformers") =>
     req<{ hardware: HardwareProfile; estimates: Estimate[] }>("POST", "/estimate", { model, hardware, recipes, runtime, backend }),
   matrix: (model: string, runtime: RuntimeParams) => req<{ cells: MatrixCell[] }>("POST", "/estimate:matrix", { model, runtime }),

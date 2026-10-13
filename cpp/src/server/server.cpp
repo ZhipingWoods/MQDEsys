@@ -11,6 +11,7 @@
 #include <fmt/ranges.h>
 #include <httplib.h>
 
+#include "advice.h"
 #include "backend_envs.h"
 #include "job_runner.h"
 #include "mqde/common/log.h"
@@ -473,6 +474,11 @@ Result<void> serve(const ServerOptions& o) {
     if (!spec) return send_error(res, spec.error());
     const auto rt = runtime_from(body->value("runtime", Json::object()));
     const int top_k = body->value("top_k", 5);
+    // "throughput" is planner::recommend's own order (most sequences first); "balanced" / "accuracy" also
+    // weigh the accuracy risk, measured on this model by finished jobs where there are any (see advice.h).
+    const auto objective = body->value("objective", std::string("throughput"));
+    if (!valid_objective(objective))
+      return send_error(res, 400, "invalid_argument", "objective must be accuracy, balanced or throughput");
     std::vector<estimator::HardwareProfile> hws;
     if (auto want = body->value("hardware", Json::array()); !want.empty()) {
       for (const auto& h : want)
@@ -489,24 +495,44 @@ Result<void> serve(const ServerOptions& o) {
       if (auto be = estimator::load_backend(b.get<std::string>())) bes.push_back(*be);
     if (hws.empty() || bes.empty())
       return send_error(res, 400, "invalid_argument", "no usable hardware / backend profile");
-    const auto r = planner::recommend(*spec, bes, hws, rt, top_k);
+    const auto r = planner::recommend(*spec, bes, hws, rt, 1 << 20);  // rank everything here, truncate below
+    const auto measured = measured_for(o.runs_dir, path);
+    std::map<std::string, estimator::Recipe> recipes;
+    if (auto ids = estimator::list_data_entries("recipes"))
+      for (const auto& id : *ids)
+        if (auto rc = estimator::load_recipe(id)) recipes[rc->name] = *rc;
+    std::vector<Json> all;
+    for (const auto& rec : r.top) {
+      Json j = {{"recipe", rec.recipe},
+                {"algorithm", rec.algorithm},
+                {"backend", rec.backend},
+                {"hardware", rec.hardware},
+                {"maturity", rec.maturity},
+                {"feasible", rec.feasible},
+                {"deploy_verdict", std::string(planner::verdict_name(rec.deploy_verdict))},
+                {"peak_bytes", rec.peak_bytes},
+                {"capacity_bytes", rec.capacity_bytes},
+                {"max_concurrency", rec.max_concurrency},
+                {"export_format", rec.export_format},
+                {"reasons", rec.reasons}};
+      if (auto m = measured.find(rec.recipe); m != measured.end()) {
+        j["risk"] = risk_name(m->second.risk);
+        j["risk_source"] = "measured";
+        j["measured"] = {{"job_id", m->second.job_id}, {"kind", m->second.kind}, {"algorithm", m->second.algorithm},
+                         {"metric", m->second.metric}, {"value", m->second.value}};
+      } else {
+        auto rc = recipes.find(rec.recipe);
+        j["risk"] = risk_name(rc != recipes.end() ? prior_risk(rc->second) : Risk::kMedium);
+        j["risk_source"] = "prior";
+      }
+      all.push_back(std::move(j));
+    }
+    rank(all, objective);
+    if (static_cast<int>(all.size()) > top_k) all.resize(static_cast<size_t>(top_k));
     Json top = Json::array();
-    for (const auto& rec : r.top)
-      top.push_back({{"recipe", rec.recipe},
-                     {"algorithm", rec.algorithm},
-                     {"backend", rec.backend},
-                     {"hardware", rec.hardware},
-                     {"maturity", rec.maturity},
-                     {"feasible", rec.feasible},
-                     {"deploy_verdict", std::string(planner::verdict_name(rec.deploy_verdict))},
-                     {"peak_bytes", rec.peak_bytes},
-                     {"capacity_bytes", rec.capacity_bytes},
-                     {"max_concurrency", rec.max_concurrency},
-                     {"export_format", rec.export_format},
-                     {"reasons", rec.reasons}});
-    send_json(
-        res,
-        {{"top", top}, {"excluded", r.excluded}, {"considered", static_cast<int>(top.size()) + r.excluded}});
+    for (auto& j : all) top.push_back(std::move(j));
+    send_json(res, {{"top", top}, {"excluded", r.excluded}, {"considered", static_cast<int>(r.top.size()) + r.excluded},
+                    {"objective", objective}, {"measured_jobs", static_cast<int>(measured.size())}});
   });
 
   // Which export format a chosen (recipe, backend) pair should default to (T-1304): query params

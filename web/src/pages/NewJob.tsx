@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, CatalogModel, DownloadStatus, fmtBytes, RuntimeParams } from "../api";
+import { Advice, AdviceObjective, api, CatalogModel, DownloadStatus, fmtBytes, RuntimeParams } from "../api";
 import { DEFAULT_DATASET, DEFAULT_LLM, DEFAULT_MODEL, DEFAULT_VLM, useAsync, useDebounced } from "../hooks";
 import { Meter } from "./Fit";
 
@@ -323,6 +323,22 @@ export default function NewJobPage() {
                 </div>
               </div>
             )}
+            <AdvicePanel
+              model={model}
+              kind={kind}
+              hw={hw}
+              profiles={profiles.data ?? []}
+              onAdopt={(a) => {
+                const id = recipes.data?.find((r) => r.name === a.recipe)?.id;
+                if (id) {
+                  setNoQuant(false);
+                  setPicked([id]);
+                }
+                setAlgorithm(a.algorithm || "recipe");
+                setHw(a.hardware);
+                if (kind === "llm") setDeployBackend(a.backend === "vllm" ? "vllm" : "none");
+              }}
+            />
             <h2 style={{ marginTop: 16 }}>② 量化算法</h2>
             <div className="form-row">
               <div className="field" style={{ minWidth: 260 }}>
@@ -803,6 +819,158 @@ function CatalogModelPicker({ onPick, currentPath }: { onPick: (path: string) =>
         <p className="note" style={{ width: "100%" }}>
           当前使用路径：{currentPath}
         </p>
+      )}
+    </div>
+  );
+}
+
+const RISK: Record<Advice["risk"], string> = { low: "低", medium: "中", high: "高" };
+const METRIC: Record<string, (v: number) => string> = {
+  ppl_delta_pct: (v) => `PPL ${v >= 0 ? "+" : ""}${v.toFixed(2)}%`,
+  top1_agreement: (v) => `答案 Top-1 一致 ${(v * 100).toFixed(1)}%`,
+  action_rel_l2_over_noise_floor: (v) => `动作误差 ${v.toFixed(2)}× 噪声下限`,
+};
+
+/** 部署建议：先看目标设备能装下什么、精度风险多大，再决定怎么量化、用哪个推理框架。 */
+function AdvicePanel({ model, kind, hw, profiles, onAdopt }: {
+  model: string; kind: "llm" | "vlm" | "vla"; hw: string; profiles: { id: string; name: string }[]; onAdopt: (a: Advice) => void;
+}) {
+  const devices = useAsync(api.hardware, []);
+  const backendList = useAsync(api.backends, []);
+  const detected = devices.data?.devices.find((d) => d.kind === "gpu" && (d as { profile?: string }).profile) as ({ name: string; profile?: string } | undefined);
+  const [target, setTarget] = useState<string | null>(null);
+  const [objective, setObjective] = useState<AdviceObjective>("balanced");
+  const [backends, setBackends] = useState<string[]>(["hf_transformers", "vllm"]);
+  const [conc, setConc] = useState(8);
+  const [ctx, setCtx] = useState(4096);
+  const [res, setRes] = useState<Awaited<ReturnType<typeof api.recommend>> | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const tgt = target ?? detected?.profile ?? hw;
+  const run = async () => {
+    setErr(null);
+    setBusy(true);
+    try {
+      const rt = kind === "llm" ? { concurrency: conc, context_tokens: ctx } : { concurrency: conc, images_per_step: 2, text_tokens: 42 };
+      setRes(await api.recommend(model, [tgt], backends, objective, rt));
+    } catch (e) {
+      setErr((e as Error).message);
+      setRes(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="card" style={{ margin: "12px 0", padding: 12 }} data-testid="advice-card">
+      <h2 style={{ marginTop: 0 }}>部署建议（按目标设备推荐量化方式与推理框架）</h2>
+      <div className="form-row">
+        <div className="field">
+          <label>目标设备{detected ? `（本机检测到 ${detected.name}）` : ""}</label>
+          <select value={tgt} onChange={(e) => setTarget(e.target.value)} data-testid="advice-hw">
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label>目标</label>
+          <select value={objective} onChange={(e) => setObjective(e.target.value as AdviceObjective)} data-testid="advice-objective">
+            <option value="balanced">均衡（排除高风险配方后比并发）</option>
+            <option value="accuracy">精度优先</option>
+            <option value="throughput">吞吐优先（只看能装下多少并发）</option>
+          </select>
+        </div>
+        <div className="field">
+          <label>并发</label>
+          <input type="number" min={1} value={conc} onChange={(e) => setConc(Number(e.target.value))} data-testid="advice-conc" />
+        </div>
+        {kind === "llm" && (
+          <div className="field">
+            <label>上下文（token）</label>
+            <input type="number" min={128} step={512} value={ctx} onChange={(e) => setCtx(Number(e.target.value))} />
+          </div>
+        )}
+        <div className="field">
+          <label>候选推理框架</label>
+          <div className="chips">
+            {(backendList.data ?? []).map((b) => (
+              <span key={b.id} className={`chip ${backends.includes(b.id) ? "on" : ""}`} data-testid={`advice-backend-${b.id}`}
+                onClick={() => setBackends(backends.includes(b.id) ? backends.filter((x) => x !== b.id) : [...backends, b.id])}>
+                {b.id}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="field" style={{ justifyContent: "flex-end" }}>
+          <button onClick={run} disabled={busy || !model || backends.length === 0} data-testid="advice-run">
+            {busy ? "计算中…" : "生成建议"}
+          </button>
+        </div>
+      </div>
+      <p className="small muted">
+        SGLang 与 llama.cpp 还没有估算画像，暂不参与推荐。{kind !== "llm" && "VLM/VLA 作业目前只做伪量化评测、不做推理框架部署；这里的推理框架只用于显存与并发估算。"}
+      </p>
+      {err && <div className="error-box">{err}</div>}
+      {res && (
+        <>
+          <table data-testid="advice-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>配方</th>
+                <th>算法</th>
+                <th>推理框架</th>
+                <th>导出格式</th>
+                <th>峰值 / 容量</th>
+                <th>最大并发</th>
+                <th>精度风险</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {res.top.map((a, i) => (
+                <tr key={`${a.recipe}-${a.backend}-${a.hardware}`} data-testid={`advice-row-${i}`}>
+                  <td>{i + 1}</td>
+                  <td>
+                    {a.recipe}
+                    {a.maturity === "experimental" && <span className="exp">实验</span>}
+                  </td>
+                  <td>{a.algorithm}</td>
+                  <td>
+                    {a.backend}
+                    {a.deploy_verdict !== "native" && <span className="muted">（{a.deploy_verdict}）</span>}
+                  </td>
+                  <td>{a.export_format || "—"}</td>
+                  <td className="num">
+                    {fmtBytes(a.peak_bytes)} / {fmtBytes(a.capacity_bytes)}
+                  </td>
+                  <td className="num">{a.max_concurrency}</td>
+                  <td data-testid={`advice-risk-${i}`}>
+                    <b>{RISK[a.risk]}</b>{" "}
+                    {a.risk_source === "measured" && a.measured ? (
+                      <span className="small">
+                        实测：{(METRIC[a.measured.metric] ?? ((v: number) => String(v)))(a.measured.value)}（{a.measured.algorithm}，
+                        <a href={`/jobs/${a.measured.job_id}`}>作业</a>）
+                      </span>
+                    ) : (
+                      <span className="small muted">经验值（按位宽，未实测）</span>
+                    )}
+                  </td>
+                  <td>
+                    <button className="secondary" onClick={() => onAdopt(a)} data-testid={`advice-adopt-${i}`}>
+                      采用
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="note">
+            显存与并发来自估算器；精度风险优先用这个模型已完成作业的实测结果（共 {res.measured_jobs} 个配方有实测），否则按位宽给经验值（≥8 bit 低，4 bit 中，≤3 bit 或 4 bit 激活为高）。「采用」只是填好配方、算法、硬件{kind === "llm" ? "与部署后端" : ""}，提交前仍可修改；{res.excluded} 个组合因装不下被排除。
+          </p>
+        </>
       )}
     </div>
   );
