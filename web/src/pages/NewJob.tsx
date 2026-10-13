@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { deriveFromJob, DeriveStep, DERIVE_STEPS, Rule } from "../derive";
 import { Advice, AdviceObjective, api, CatalogModel, DownloadStatus, fmtBytes, RuntimeParams } from "../api";
 import { DEFAULT_DATASET, DEFAULT_LLM, DEFAULT_MODEL, DEFAULT_VLM, useAsync, useDebounced } from "../hooks";
 import { Meter } from "./Fit";
@@ -78,6 +79,14 @@ export default function NewJobPage() {
   const [action, setAction] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // 作业派生 (/new?from=<job>&step=eval|device|deploy|recipe|all): every field comes from that job's job.yaml
+  const [params] = useSearchParams();
+  const fromJob = params.get("from");
+  const fromStep = (params.get("step") ?? "all") as DeriveStep;
+  const [parentJob, setParentJob] = useState<string | null>(null);
+  const [inheritedRules, setInheritedRules] = useState<Rule[]>([]);
+  const [deriveErr, setDeriveErr] = useState<string | null>(null);
+  const keepParentDeploy = useRef(false); // the backend effect below must not overwrite the parent's own export/deploy choices
   // T-1304: which real backend this job deploys to, if any. Drives an auto-suggested export format
   // instead of leaving the GPTQ/AWQ/GGUF chip lists below to be lined up with vLLM/llama.cpp by hand.
   const [deployBackend, setDeployBackend] = useState<"none" | "vllm" | "llamacpp" | "sglang">("none");
@@ -144,6 +153,10 @@ export default function NewJobPage() {
       .then((s) => {
         if (!alive) return;
         setSuggestion(s);
+        if (keepParentDeploy.current) {
+          keepParentDeploy.current = false;
+          return;
+        }
         // Turning deployment on does not depend on there being a format to suggest (e.g. a bf16/no-quant
         // recipe legitimately has no export format but can still be served as-is).
         if (deployBackend === "vllm" || deployBackend === "sglang") {
@@ -162,8 +175,44 @@ export default function NewJobPage() {
     };
   }, [deployBackend, primaryRecipe, hw, kind]);
 
+  useEffect(() => {
+    if (!fromJob) return;
+    let alive = true;
+    api
+      .job(fromJob)
+      .then((det) => {
+        if (!alive) return;
+        if (!det.job) throw new Error(`作业 ${fromJob} 没有 job.yaml，无法派生`);
+        const d = deriveFromJob(det.job, fromStep, {
+          domain, name, model, picked, algorithm, groupSizeOverride, action, actStatic, kv, kvMethod, keepEnds, downBits,
+          inheritedRules: [], nCalib, seqLen, dataset, nEval, windows, maxNewTokens, attribution, quantizeOnly, quantDevice,
+          evalDevice, hw, deployBackend, useVllm, vllmUtil, useSglang, sglangMem, useLmEval, lmTasks, lmLimit, lmShots, gguf,
+          exportFmts, sens, probe, probeExact,
+        });
+        keepParentDeploy.current = d.deployBackend !== "none";
+        setDomain(d.domain); setName(d.name); setModel(d.model); setModelMode("custom");
+        setNoQuant(d.picked.length === 1 && d.picked[0] === "bf16"); setPicked(d.picked);
+        setAlgorithm(d.algorithm); setGroupSizeOverride(d.groupSizeOverride); setAdvancedOpen(d.groupSizeOverride !== "");
+        setAction(d.action); setActStatic(d.actStatic); setKv(d.kv); setKvMethod(d.kvMethod); setKeepEnds(d.keepEnds);
+        setDownBits(d.downBits); setInheritedRules(d.inheritedRules); setNCalib(d.nCalib); setSeqLen(d.seqLen);
+        setDataset(d.dataset); setNEval(d.nEval); setWindows(d.windows); setMaxNewTokens(d.maxNewTokens);
+        setAttribution(d.attribution); setQuantizeOnly(d.quantizeOnly); setQuantDevice(d.quantDevice); setEvalDevice(d.evalDevice);
+        setHw(d.hw); setDeployBackend(d.deployBackend); setUseVllm(d.useVllm); setVllmUtil(d.vllmUtil); setUseSglang(d.useSglang);
+        setSglangMem(d.sglangMem); setUseLmEval(d.useLmEval); setLmTasks(d.lmTasks); setLmLimit(d.lmLimit); setLmShots(d.lmShots);
+        setGguf(d.gguf); setExportFmts(d.exportFmts); setSens(d.sens); setProbe(d.probe); setProbeExact(d.probeExact);
+        setParentJob(fromJob);
+        const target = { eval: "step-eval", device: "step-eval", deploy: "step-deploy", recipe: "step-recipe", all: null }[fromStep];
+        if (target) setTimeout(() => document.getElementById(target)?.scrollIntoView({ block: "start" }), 50);
+      })
+      .catch((e: Error) => alive && setDeriveErr(e.message));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromJob, fromStep]);
+
   const kvSpec = kv === "" ? null : kv === "fp8" ? { format: "fp8_e4m3", bits: 8 } : { format: "int", bits: Number(kv.slice(3)), symmetric: false };
-  const rules = [
+  const rules: Rule[] = inheritedRules.length ? inheritedRules : [
     ...(keepEnds ? [{ match: "block:0", bits: 8 }, { match: "block:-1", bits: 8 }] : []),
     ...(downBits === "fp" ? [{ match: "mlp\\.down_proj$", skip: true }] : downBits ? [{ match: "mlp\\.down_proj$", bits: Number(downBits) }] : []),
   ];
@@ -171,9 +220,14 @@ export default function NewJobPage() {
     kind === "vlm"
       ? {
           domain,
-          metadata: { name },
+          metadata: { name, ...(parentJob ? { parent_job: parentJob } : {}) },
           model: { source: "local", path: model, type: "vlm" },
-          quant: { recipe: picked, algorithm, ...(groupSizeOverride !== "" ? { group_size: Number(groupSizeOverride) } : {}) },
+          quant: {
+            recipe: picked,
+            algorithm,
+            ...(groupSizeOverride !== "" ? { group_size: Number(groupSizeOverride) } : {}),
+            ...(inheritedRules.length ? { mixed_precision: { rules: inheritedRules } } : {}),
+          },
           calibration: { dataset, n_samples: nCalib },
           evaluation: {
             dataset,
@@ -187,7 +241,7 @@ export default function NewJobPage() {
       : kind === "vla"
       ? {
           domain,
-          metadata: { name },
+          metadata: { name, ...(parentJob ? { parent_job: parentJob } : {}) },
           model: { source: "local", path: model, type: "vla", modality: "vla" },
           quant: { recipe: picked, algorithm, ...(action ? { also_quantize: ["action"] } : {}), ...(groupSizeOverride !== "" ? { group_size: Number(groupSizeOverride) } : {}) },
           calibration: { dataset, n_samples: nCalib },
@@ -202,7 +256,7 @@ export default function NewJobPage() {
         }
       : {
           domain,
-          metadata: { name },
+          metadata: { name, ...(parentJob ? { parent_job: parentJob } : {}) },
           model: { source: "local", path: model, type: "llm" },
           quant: {
             recipe: picked,
@@ -280,6 +334,13 @@ export default function NewJobPage() {
         选领域 → 选模型 → 选量化算法 → 选配方 → 评估数据与设备 → 部署与导出。作业由 C++ 调度到 GPU 池（{cfg.data?.gpus.join(", ") ?? "…"}）上的 Python 执行器，全过程事件实时推送。
       </p>
       {err && <div className="error-box">{err}</div>}
+      {deriveErr && <div className="error-box">{deriveErr}</div>}
+      {parentJob && (
+        <div className="note" data-testid="derive-banner" style={{ marginBottom: 12 }}>
+          派生自作业 <Link to={`/jobs/${parentJob}`}>{parentJob}</Link>（{DERIVE_STEPS.find((x) => x.step === fromStep)?.label}）：已沿用它的全部参数，只改你要改的部分即可。
+          量化会重新运行——量化后的权重没有落盘，但同样的配方、数据和随机种子得到同样的量化结果。
+        </div>
+      )}
       <div className="split">
       <div>
       <div className="card">
@@ -369,7 +430,16 @@ export default function NewJobPage() {
               </p>
             )}
             {algos.error && <div className="error-box">{algos.error}</div>}
-            <h2 style={{ marginTop: 16 }}>③ 量化配方</h2>
+            <h2 style={{ marginTop: 16 }} id="step-recipe" className={parentJob && fromStep === "recipe" ? "derive-focus" : ""}>③ 量化配方</h2>
+            {inheritedRules.length > 0 && (
+              <div className="small" style={{ marginBottom: 8 }} data-testid="inherited-rules">
+                沿用父作业的 {inheritedRules.length} 条混合精度规则（{inheritedRules.filter((r) => r.skip).length} 条保持原精度，例如动态量化建议的跳过清单）：
+                <span className="mono"> {inheritedRules.slice(0, 3).map((r) => r.match).join("，")}{inheritedRules.length > 3 ? " …" : ""}</span>{" "}
+                <button className="secondary" onClick={() => setInheritedRules([])} data-testid="drop-inherited-rules">
+                  去掉这些规则
+                </button>
+              </div>
+            )}
             <label className="small" style={{ display: "block", marginBottom: 8 }}>
               <input type="checkbox" checked={noQuant} onChange={(e) => setNoQuant(e.target.checked)} data-testid="opt-no-quant" /> 不量化（保持原始精度，等同于只选 BF16 配方）
             </label>
@@ -462,14 +532,14 @@ export default function NewJobPage() {
                 </div>
                 <div className="field">
                   <label>混合精度：首尾块</label>
-                  <select value={keepEnds ? "8" : ""} onChange={(e) => setKeepEnds(e.target.value === "8")} disabled={noQuant}>
+                  <select value={keepEnds ? "8" : ""} onChange={(e) => setKeepEnds(e.target.value === "8")} disabled={noQuant || inheritedRules.length > 0} title={inheritedRules.length ? "正在沿用父作业的混合精度规则；去掉后才能用这里的选项" : undefined}>
                     <option value="">同配方</option>
                     <option value="8">首块 + 末块 8 bit</option>
                   </select>
                 </div>
                 <div className="field">
                   <label>混合精度：down_proj</label>
-                  <select value={downBits} onChange={(e) => setDownBits(e.target.value)} disabled={noQuant}>
+                  <select value={downBits} onChange={(e) => setDownBits(e.target.value)} disabled={noQuant || inheritedRules.length > 0}>
                     <option value="">同配方</option>
                     <option value="8">8 bit</option>
                     <option value="4">4 bit</option>
@@ -482,8 +552,13 @@ export default function NewJobPage() {
         )}
       </div>
       {!blocked && (
-      <div className="card">
+      <div className={`card ${parentJob && (fromStep === "eval" || fromStep === "device") ? "derive-focus" : ""}`} id="step-eval">
         <h2>④ 评估数据 + 设备</h2>
+        {parentJob && fromStep === "device" && kind !== "llm" && (
+          <p className="note" data-testid="derive-device-note">
+            {kind.toUpperCase()} 作业只在 GPU 池上运行（由调度器分配空闲卡），这里能换的是⑤里的目标硬件画像（用于资源预估）。
+          </p>
+        )}
         {kind !== "llm" ? (
           <>
             <div className="form-row">
@@ -569,7 +644,7 @@ export default function NewJobPage() {
       </div>
       )}
       {!blocked && (
-      <div className="card">
+      <div className={`card ${parentJob && fromStep === "deploy" ? "derive-focus" : ""}`} id="step-deploy">
         <h2>⑤ 部署与导出</h2>
         <div className="form-row">
           <div className="field">
