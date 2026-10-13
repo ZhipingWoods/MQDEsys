@@ -295,19 +295,21 @@ table.matrix td.cell.light { color: #0b0b0b; }
 .group-sub td { background: rgba(255, 255, 255, 0.025); padding-top: 6px; padding-bottom: 6px; }
 
 /* 新建作业：分步向导 */
-.stepper { display: flex; align-items: center; gap: 12px; padding: 10px 14px; margin-bottom: 12px; }
-.stepper ol { display: flex; flex: 1; gap: 4px; list-style: none; margin: 0; padding: 0; overflow-x: auto; }
-.stepper li { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 120px; padding: 6px 10px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
+.stepper { display: flex; align-items: center; gap: 10px; padding: 8px 12px; margin-bottom: 12px; }
+.stepper ol { display: flex; flex: 1; flex-wrap: wrap; gap: 4px; list-style: none; margin: 0; padding: 0; min-width: 0; }
+.stepper li { display: flex; align-items: center; gap: 7px; flex: 1 1 130px; min-width: 0; padding: 5px 8px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
 .stepper li:hover { background: rgba(255, 255, 255, 0.04); }
-.stepper li .n { width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; background: rgba(255, 255, 255, 0.08); color: var(--text-secondary); flex: none; }
-.stepper li .t { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
-.stepper li .t small { color: var(--text-muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
+.stepper li .n { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; background: rgba(255, 255, 255, 0.08); color: var(--text-secondary); flex: none; }
+.stepper li .t { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.stepper li .t b { font-size: 13px; white-space: nowrap; }
+.stepper li .t small { color: var(--text-muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
 .stepper li .t small.warn { color: #e0a84a; }
 .stepper li.current { border-color: var(--accent); background: var(--accent-dim); }
 .stepper li.current .n { background: var(--accent); color: #fff; }
 .stepper li.done .n { background: rgba(80, 200, 120, 0.25); color: #6fd38f; }
 .stepper li.skipped { opacity: 0.45; cursor: default; }
 .stepper li.all .n { background: var(--accent-dim); color: var(--accent-strong); }
+.stepper > button { flex: none; }
 table.kv th { text-align: left; width: 120px; color: var(--text-muted); font-weight: 500; padding: 4px 8px 4px 0; vertical-align: top; }
 table.kv td { padding: 4px 0; }
 button.small { padding: 4px 10px; font-size: 12px; }
