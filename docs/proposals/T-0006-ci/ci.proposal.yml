@@ -1,0 +1,69 @@
+# PROPOSAL, not active. Copy to .github/workflows/ci.yml after maintainer approval (CI files are L2, docs/STRUCTURE.md).
+# What it runs is exactly `scripts/check_all.sh`, the local gate T-0005 already built, so a green local run and a green CI run
+# mean the same thing. Everything the gate needs comes from environment.ci.yml in this directory.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: gate (linux, gcc-12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash -el {0}   # a login shell so the conda environment is active
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false   # 3rdpart/* (vllm, sglang, llama.cpp) are not needed by the gate and are large
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          environment-file: docs/proposals/T-0006-ci/environment.ci.yml   # move to the repo root when activated
+          activate-environment: mqde-ci
+          python-version: "3.11"
+          use-mamba: true
+          conda-remove-defaults: true
+      - name: cache the C++ build
+        uses: actions/cache@v4
+        with:
+          path: build/dev
+          key: cpp-${{ runner.os }}-${{ hashFiles('cpp/**/CMakeLists.txt', 'cpp/CMakeLists.txt', 'docs/proposals/T-0006-ci/environment.ci.yml') }}
+          restore-keys: cpp-${{ runner.os }}-
+      - name: configure
+        run: cmake -S . -B build/dev -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: web dependencies
+        run: cd web && npm ci   # web/package-lock.json; the gate's web step needs web/node_modules
+      - name: the gate
+        # dependency rules, HAL ABI layout, algorithm registry sync, job schema, clang-format, build, ctest, pytest, web typecheck+build
+        run: scripts/check_all.sh
+      - name: browser tests (Playwright)
+        # the e2e files launch the system Google Chrome (`chromium.launch({channel: 'chrome'})`), which GitHub-hosted
+        # ubuntu runners have preinstalled -- not verified by the author, see README "What was not verified"
+        run: |
+          (cd demo && npm ci)
+          for f in web/e2e/*.mjs; do node "$f" || exit 1; done
+        env:
+          MQDE_BIN: build/dev/bin/mqde
+
+  # macOS compiles the Metal plugin and runs the same ctest; it does not need the Python stack.
+  macos:
+    name: build + ctest (macos)
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install cmake ninja nlohmann-json fmt cli11 spdlog yaml-cpp cpp-httplib googletest pybind11 sqlite openssl curl
+      - run: cmake -S . -B build/mac -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build/mac -j 4
+      - run: ctest --test-dir build/mac --output-on-failure
