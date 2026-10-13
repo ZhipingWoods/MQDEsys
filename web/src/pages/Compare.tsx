@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, fmt, fmtBytes, gib, JobListItem, JobReport, llamaSpeed, LLMJobReport, VLMJobReport } from "../api";
+import { api, DeployJobReport, fmt, fmtBytes, gib, JobListItem, JobReport, llamaSpeed, LLMJobReport, VLMJobReport } from "../api";
+import { engineNote, servingRuns } from "../perf";
 import { baseOption, Chart, series, token } from "../charts";
 
 /** Accuracy vs. cost across finished jobs: VLA (action error vs. deployed memory) and LLM (PPL vs. weight bits). */
 export default function ComparePage() {
   const [jobs, setJobs] = useState<JobListItem[]>([]);
-  const [reports, setReports] = useState<(JobReport | LLMJobReport | VLMJobReport)[]>([]);
+  const [reports, setReports] = useState<(JobReport | LLMJobReport | VLMJobReport | DeployJobReport)[]>([]);
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") === "vla" ? "vla" : params.get("tab") === "vlm" ? "vlm" : "llm";
   useEffect(() => {
@@ -14,12 +15,13 @@ export default function ComparePage() {
       const done = js.filter((j) => j.state === "SUCCEEDED");
       setJobs(done);
       const reps = await Promise.all(done.slice(0, 30).map((j) => api.job(j.job_id).then((d) => d.report).catch(() => null)));
-      setReports(reps.filter((r): r is JobReport => !!r && !!r.recipes && Object.keys(r.recipes).length > 0));
+      setReports(reps.filter((r): r is JobReport => !!r && (r.kind === "llm_deploy" || (!!r.recipes && Object.keys(r.recipes).length > 0))));
     });
   }, []);
   const llm = reports.filter((r): r is LLMJobReport => r.kind === "llm");
   const vlm = reports.filter((r): r is VLMJobReport => (r.kind as string) === "vlm");
-  const vla = reports.filter((r): r is JobReport => r.kind !== "llm" && (r.kind as string) !== "vlm");
+  const dep = reports.filter((r): r is DeployJobReport => r.kind === "llm_deploy");
+  const vla = reports.filter((r): r is JobReport => r.kind !== "llm" && (r.kind as string) !== "vlm" && r.kind !== "llm_deploy");
   return (
     <>
       <h1>配方对比</h1>
@@ -35,7 +37,7 @@ export default function ComparePage() {
           VLA（动作误差）
         </div>
       </div>
-      {tab === "llm" ? <LLMCompare reps={llm} /> : tab === "vlm" ? <VLMCompare reps={vlm} /> : <VLACompare reps={vla} />}
+      {tab === "llm" ? <LLMCompare reps={llm} deploys={dep} /> : tab === "vlm" ? <VLMCompare reps={vlm} /> : <VLACompare reps={vla} />}
       {jobs.length === 0 && <p className="muted">暂无已完成作业</p>}
     </>
   );
@@ -89,7 +91,7 @@ function VLMCompare({ reps }: { reps: VLMJobReport[] }) {
   );
 }
 
-function LLMCompare({ reps }: { reps: LLMJobReport[] }) {
+function LLMCompare({ reps, deploys }: { reps: LLMJobReport[]; deploys: DeployJobReport[] }) {
   const pts = useMemo(
     () =>
       reps.flatMap((r) =>
@@ -171,6 +173,7 @@ function LLMCompare({ reps }: { reps: LLMJobReport[] }) {
         />
         <p className="note">同一模型、同一评估窗口的作业才可直接比较。W2 崩溃点（PPL 上千）用对数纵轴显示。</p>
       </div>
+      <PerfCompare reps={[...reps, ...deploys]} />
       <div className="card table-wrap">
         <h2>各作业配方明细</h2>
         <table>
@@ -359,5 +362,59 @@ function VLACompare({ reps }: { reps: JobReport[] }) {
         </table>
       </div>
     </>
+  );
+}
+
+/** T-R13: concurrency sweeps of every job that has one, side by side (throughput vs concurrency, saturation, tail latency). */
+function PerfCompare({ reps }: { reps: (LLMJobReport | DeployJobReport)[] }) {
+  const runs = useMemo(() => servingRuns(reps), [reps]);
+  if (!runs.length) return null;
+  const levels = [...new Set(runs.flatMap((r) => r.sweep.points.map((p) => p.concurrency)))].sort((a, b) => a - b);
+  const name = (r: (typeof runs)[number]) => `${r.job.slice(-6)} · ${r.label} · ${r.backend}`;
+  const note = engineNote(runs);
+  return (
+    <div className="card" data-testid="perf-compare">
+      <h2>服务吞吐 vs 并发（{runs.length} 条并发扫描）</h2>
+      <Chart
+        height={340}
+        option={() => {
+          const o = baseOption();
+          return {
+            ...o,
+            legend: { ...(o.legend as object), data: runs.map(name), type: "scroll" },
+            grid: { ...(o.grid as object), top: 56, bottom: 44 },
+            xAxis: { ...(o.xAxis as object), type: "category", data: levels.map(String), name: "并发", nameLocation: "middle", nameGap: 28, nameTextStyle: { color: token("--text-muted") } },
+            yAxis: { ...(o.yAxis as object), type: "value", name: "输出 tok/s", nameTextStyle: { color: token("--text-muted") } },
+            series: runs.map((r, i) => ({
+              name: name(r),
+              type: "line",
+              symbolSize: 7,
+              itemStyle: { color: series(i) },
+              connectNulls: true,
+              data: levels.map((c) => r.sweep.points.find((p) => p.concurrency === c)?.output_tokens_per_s ?? null),
+            })),
+          };
+        }}
+      />
+      <table data-testid="perf-compare-table">
+        <thead>
+          <tr><th>作业</th><th>服务的模型</th><th>引擎</th><th>峰值 tok/s</th><th>@并发</th><th>饱和点</th><th>峰值处 TTFT p99</th></tr>
+        </thead>
+        <tbody>
+          {[...runs].sort((a, b) => b.peak - a.peak).map((r) => (
+            <tr key={`${r.job}-${r.label}-${r.backend}`} data-testid={`perf-row-${r.job}-${r.backend}`}>
+              <td><Link to={`/jobs/${r.job}`}>{r.job.slice(-6)}</Link></td>
+              <td>{r.label}</td>
+              <td>{r.backend}</td>
+              <td>{fmt(r.peak, 0)}</td>
+              <td>{r.sweep.peak?.concurrency ?? "—"}</td>
+              <td>{r.saturation ?? "未饱和"}</td>
+              <td>{r.sweep.peak?.ttft_ms?.p99 != null ? `${fmt(r.sweep.peak.ttft_ms.p99, 0)} ms` : "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {note && <p className="note" data-testid="perf-engine-note">{note}</p>}
+    </div>
   );
 }

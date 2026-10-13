@@ -981,8 +981,8 @@
 | T-R09 | 导出 GPTQ v1/v2 / merged 16bit / GGUF | GPTQModel / unsloth | L2 | TODO |
 | T-R10 | 动态量化（按误差自动生成 skip 名单） | unsloth | L1 | PARTIAL (2026-10-13，VLM 作业：`quant/suggest.py` 按逐层输出 SQNR 在各组件内找离群层 → `summary.suggestion` → 前端一键带清单重跑；真机 MiniCPM-V-4.6 W4A16 标出 3 层(+6.8 MiB)，KL 8.8e-4→8.2e-4(−7%)；未做：LLM/VLA 作业接入、bits 型规则) |
 | T-R11 | eval：TaskConfig + registry + Evaluator + Report | evalscope | L2 | TODO |
-| T-R12 | perf：并发扫描 + TTFT/TPOT/ITL 百分位 | evalscope | L1 | PARTIAL (2026-10-13，`eval/loadtest.py::sweep/saturation` + vLLM/SGLang 服务阶段 `deploy.<backend>.sweep`；llama-server 未接，未在真机 vLLM 上跑过扫描) |
-| T-R13 | 前端评测页：Reports / Compare / Perf | evalscope | L1 | PARTIAL (2026-10-13，向导里的并发扫描开关 + 部署评测/LLM 作业页的并发曲线卡片(吞吐柱 + TTFT 线 + p50/p99 表 + 饱和点)；Compare 页的跨作业性能对比未做) |
+| T-R12 | perf：并发扫描 + TTFT/TPOT/ITL 百分位 | evalscope | L1 | PARTIAL (2026-10-13，`eval/loadtest.py::sweep/saturation` + vLLM/SGLang 服务阶段 `deploy.<backend>.sweep`；llama-server 未接；真机已验证：vLLM 扫到 64 并发(2929 tok/s)、vLLM+SGLang 各一次 1/4/16 扫描) |
+| T-R13 | 前端评测页：Reports / Compare / Perf | evalscope | L1 | PARTIAL (2026-10-13，向导里的并发扫描开关 + 部署评测/LLM 作业页的并发曲线卡片(吞吐柱 + TTFT 线 + p50/p99 表 + 饱和点)；2026-10-13 Compare 页的“服务吞吐 vs 并发”卡片(跨作业，按峰值排序、饱和点、TTFT p99、引擎不可比提示)，真机 vLLM/SGLang 数据验证，e2e `web/e2e/perf_compare.mjs`) |
 | T-R14 | hal：Target + Backend 接口 + 插件发现 | FlagTree | L3 | TODO |
 | T-R15 | 后端插件 + 回归基线 | FlagTree | L1 | TODO |
 | T-R28 | 存储估算 | llmfit A.17 | L1 | 暂不做 |
