@@ -114,6 +114,7 @@ export default function GgufView() {
                   const o = baseOption();
                   return {
                     ...o,
+                    grid: { ...(o.grid as object), left: 84 },  // byte labels ("7.63 MiB") are wider than the default margin
                     tooltip: { ...(o.tooltip as object), trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (v: number) => fmtBytes(v) },
                     xAxis: { ...(o.xAxis as object), type: "category", data: g.blocks.map((b) => b.index), name: "块", nameLocation: "middle", nameGap: 24, nameTextStyle: { color: token("--text-muted") } },
                     yAxis: { ...(o.yAxis as object), type: "value", name: "字节", axisLabel: { formatter: (v: number) => fmtBytes(v) } },
