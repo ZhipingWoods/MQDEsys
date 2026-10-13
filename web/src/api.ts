@@ -146,7 +146,7 @@ export interface JobListItem {
   recipes?: string[];
   model?: string;
   gpu?: number;
-  kind?: "vla" | "llm" | "vlm";
+  kind?: "vla" | "llm" | "vlm" | "llm_deploy";
   device?: string;
   started_ts?: number;
   last_ts?: number;
@@ -382,6 +382,27 @@ export interface Advice {
   measured?: { job_id: string; kind: string; algorithm: string; metric: string; value: number };
 }
 export type AdviceObjective = "accuracy" | "balanced" | "throughput";
+
+/** report.json of mqde.pipeline.deploy_job (kind === "llm_deploy"): an existing export served again, no quantization. */
+export interface DeployJobReport {
+  job_id: string;
+  kind: "llm_deploy";
+  verdict?: string;
+  error?: string;
+  spec: { name: string; model_path: string; artifact: { job: string; recipe?: string; format: string; type?: string }; eval_seq_len: number; eval_windows: number; device: string };
+  stages: { stage: string; status: string; seconds?: number; error?: string }[];
+  artifact?: {
+    job: string; format: string; path: string; bytes?: number | null; recipe?: string; algorithm?: string; type?: string;
+    parent_real_ppl?: number | null; parent_fake_ppl?: number | null; parent_baseline_ppl?: number | null; parent_ppl?: number | null;
+  };
+  data?: { eval: { dataset: string; windows: number; seq_len: number } };
+  deploy?: {
+    vllm?: VllmDeploy;
+    sglang?: VllmDeploy;
+    llamacpp?: { ppl: number; parent_ppl?: number | null; ppl_vs_parent_pct?: number | null; backend?: string; gpu_layers?: number | null; threads: number; serve?: LlamaServe; [k: string]: unknown };
+  };
+  env?: { device_name?: string };
+}
 
 export interface LLMJobReport {
   job_id: string;

@@ -634,3 +634,73 @@ TEST(planner_preferred_export_format, other_backends_are_unaffected_by_the_new_b
   EXPECT_EQ(preferred_export_format(w_int(4), "vllm"), "awq");
   EXPECT_EQ(preferred_export_format(w_int(4), ""), "awq");
 }
+
+// ---- B2 (作业派生): an `artifact` job serves a checkpoint a finished llm job exported, without quantizing ----
+namespace {
+Json artifact_job(const Json& artifact, const Json& deploy) {
+  return {{"model", {{"type", "llm"}}}, {"artifact", artifact}, {"deploy", deploy}};
+}
+std::vector<std::string> fields(const std::vector<Problem>& ps) {
+  std::vector<std::string> out;
+  for (const auto& p : ps) out.push_back(p.field);
+  return out;
+}
+}  // namespace
+
+TEST(planner_validate_artifact, an_awq_checkpoint_on_sglang_and_a_gguf_on_llamacpp_are_valid) {
+  EXPECT_TRUE(validate_jobspec(artifact_job({{"job", "20261009-225558-b43b47"}, {"recipe", "W4A16"}, {"format", "awq"}},
+                                            {{"device", "gpu"}, {"sglang", Json::object()}})).empty());
+  EXPECT_TRUE(validate_jobspec(artifact_job({{"job", "j1"}, {"format", "gguf"}, {"type", "q4_k"}},
+                                            {{"device", "cpu"}, {"llamacpp", {{"gpu_layers", 0}}}})).empty())
+      << "a GGUF on the CPU is a real device change";
+}
+
+TEST(planner_validate_artifact, each_malformed_piece_is_its_own_problem) {
+  auto f = fields(validate_jobspec(artifact_job({{"job", "../x"}, {"format", "safetensors"}}, {{"vllm", Json::object()}})));
+  EXPECT_NE(std::find(f.begin(), f.end(), "/artifact/job"), f.end());
+  EXPECT_NE(std::find(f.begin(), f.end(), "/artifact/format"), f.end());
+  f = fields(validate_jobspec(artifact_job({{"job", "j1"}, {"format", "awq"}}, {{"vllm", Json::object()}})));
+  EXPECT_NE(std::find(f.begin(), f.end(), "/artifact/recipe"), f.end()) << "an HF export is named by its recipe";
+  f = fields(validate_jobspec(artifact_job({{"job", "j1"}, {"format", "gguf"}}, {{"llamacpp", Json::object()}})));
+  EXPECT_NE(std::find(f.begin(), f.end(), "/artifact/type"), f.end()) << "a GGUF is named by its type";
+  f = fields(validate_jobspec(artifact_job("w4a16-awq", {{"vllm", Json::object()}})));
+  EXPECT_NE(std::find(f.begin(), f.end(), "/artifact"), f.end());
+}
+
+TEST(planner_validate_artifact, the_backend_must_be_able_to_load_the_format) {
+  auto p = validate_jobspec(artifact_job({{"job", "j1"}, {"format", "gguf"}, {"type", "q4_k"}}, {{"vllm", Json::object()}}));
+  ASSERT_EQ(fields(p), std::vector<std::string>{"/deploy"});
+  p = validate_jobspec(artifact_job({{"job", "j1"}, {"recipe", "W4A16"}, {"format", "awq"}}, {{"llamacpp", Json::object()}}));
+  ASSERT_EQ(fields(p), std::vector<std::string>{"/deploy"});
+  p = validate_jobspec(artifact_job({{"job", "j1"}, {"recipe", "W4A16"}, {"format", "awq"}}, {{"device", "gpu"}}));
+  ASSERT_EQ(fields(p), std::vector<std::string>{"/deploy"}) << "no serving backend at all";
+}
+
+TEST(planner_validate_artifact, vllm_and_sglang_need_a_gpu) {
+  auto p = validate_jobspec(artifact_job({{"job", "j1"}, {"recipe", "W4A16"}, {"format", "awq"}}, {{"device", "cpu"}, {"vllm", Json::object()}}));
+  ASSERT_EQ(fields(p), std::vector<std::string>{"/deploy/device"});
+}
+
+TEST(planner_validate_artifact, quantization_side_options_do_not_mix_with_serving_an_existing_export) {
+  auto j = artifact_job({{"job", "j1"}, {"recipe", "W4A16"}, {"format", "awq"}}, {{"device", "gpu"}, {"vllm", Json::object()}});
+  j["export"] = {{"formats", {"gptq"}}};
+  j["analysis"] = {{"sensitivity", "block"}};
+  j["evaluation"] = {{"skip", true}};
+  auto f = fields(validate_jobspec(j));
+  for (const char* want : {"/export", "/analysis", "/evaluation/skip"})
+    EXPECT_NE(std::find(f.begin(), f.end(), want), f.end()) << want;
+}
+
+TEST(planner_validate_artifact, only_llm_jobs_have_exports_to_reuse) {
+  auto j = artifact_job({{"job", "j1"}, {"recipe", "W4A16"}, {"format", "awq"}}, {{"vllm", Json::object()}});
+  j["model"]["type"] = "vlm";
+  auto f = fields(validate_jobspec(j));
+  EXPECT_NE(std::find(f.begin(), f.end(), "/artifact"), f.end());
+}
+
+TEST(planner_validate_artifact, it_quantizes_nothing_so_it_has_no_quant_section_and_needs_no_calibration) {
+  auto j = artifact_job({{"job", "j1"}, {"recipe", "W4A8"}, {"format", "awq"}}, {{"device", "gpu"}, {"sglang", Json::object()}});
+  EXPECT_TRUE(validate_jobspec(j).empty()) << "no quant.recipe, no calibration: fine";
+  j["quant"] = {{"recipe", {"w4a16"}}, {"algorithm", "gptq"}};  // the wizard used to send the parent's, contradicting the artifact
+  EXPECT_EQ(fields(validate_jobspec(j)), std::vector<std::string>{"/quant"}) << "one problem, not a calibration complaint too";
+}

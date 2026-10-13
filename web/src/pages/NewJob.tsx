@@ -86,6 +86,11 @@ export default function NewJobPage() {
   const [parentJob, setParentJob] = useState<string | null>(null);
   const [inheritedRules, setInheritedRules] = useState<Rule[]>([]);
   const [deriveErr, setDeriveErr] = useState<string | null>(null);
+  // B2: serve one of the parent's exported checkpoints instead of quantizing again (mqde.pipeline.deploy_job)
+  const [artifactOpts, setArtifactOpts] = useState<ArtifactOpt[]>([]);
+  const [artifactKey, setArtifactKey] = useState("");
+  const artifact = artifactOpts.find((a) => a.key === artifactKey)?.artifact ?? null;
+  const isGguf = artifact?.format === "gguf";
   const keepParentDeploy = useRef(false); // the backend effect below must not overwrite the parent's own export/deploy choices
   // T-1304: which real backend this job deploys to, if any. Drives an auto-suggested export format
   // instead of leaving the GPTQ/AWQ/GGUF chip lists below to be lined up with vLLM/llama.cpp by hand.
@@ -201,6 +206,19 @@ export default function NewJobPage() {
         setSglangMem(d.sglangMem); setUseLmEval(d.useLmEval); setLmTasks(d.lmTasks); setLmLimit(d.lmLimit); setLmShots(d.lmShots);
         setGguf(d.gguf); setExportFmts(d.exportFmts); setSens(d.sens); setProbe(d.probe); setProbeExact(d.probeExact);
         setParentJob(fromJob);
+        const own = (det.job as { artifact?: Artifact }).artifact;
+        const source = own?.job ?? fromJob;
+        (source === fromJob ? Promise.resolve(det) : api.job(source))
+          .then((src) => {
+            if (!alive) return;
+            const opts = artifactOptions(source, src.report as unknown as Record<string, any>); // eslint-disable-line @typescript-eslint/no-explicit-any
+            setArtifactOpts(opts);
+            const mine = own && opts.find((o) => sameArtifact(o.artifact, own));
+            if (mine) setArtifactKey(mine.key);
+            // re-quantizing is only needed to change the quantization or the fake-quant evaluation; serving elsewhere is not
+            else if (opts.length && (fromStep === "deploy" || fromStep === "device")) setArtifactKey(opts[0].key);
+          })
+          .catch(() => alive && setArtifactOpts([]));
         const target = { eval: "step-eval", device: "step-eval", deploy: "step-deploy", recipe: "step-recipe", all: null }[fromStep];
         if (target) setTimeout(() => document.getElementById(target)?.scrollIntoView({ block: "start" }), 50);
       })
@@ -211,13 +229,42 @@ export default function NewJobPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromJob, fromStep]);
 
+  useEffect(() => {
+    if (!artifact) return;
+    if (artifact.format === "gguf") setDeployBackend("llamacpp");
+    else setDeployBackend((b) => (b === "vllm" || b === "sglang" ? b : "vllm"));
+  }, [artifactKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const kvSpec = kv === "" ? null : kv === "fp8" ? { format: "fp8_e4m3", bits: 8 } : { format: "int", bits: Number(kv.slice(3)), symmetric: false };
   const rules: Rule[] = inheritedRules.length ? inheritedRules : [
     ...(keepEnds ? [{ match: "block:0", bits: 8 }, { match: "block:-1", bits: 8 }] : []),
     ...(downBits === "fp" ? [{ match: "mlp\\.down_proj$", skip: true }] : downBits ? [{ match: "mlp\\.down_proj$", bits: Number(downBits) }] : []),
   ];
+  const deployJob = artifact && {
+    domain,
+    metadata: { name, ...(parentJob ? { parent_job: parentJob } : {}) },
+    model: { source: "local", path: model, type: "llm" },
+    artifact,
+    evaluation: { dataset: "wikitext-2-raw-v1:test", seq_len: seqLen, max_windows: windows },
+    deploy: {
+      hardware: hw,
+      device: isGguf ? evalDevice : "gpu",
+      ...(isGguf
+        ? { llamacpp: { gpu_layers: evalDevice === "cpu" ? 0 : 99, serve: { concurrency: 4, requests: 16, prompt_len: 256, n_predict: 64 } } }
+        : deployBackend === "sglang"
+          ? { sglang: { mem_fraction_static: sglangMem } }
+          : {
+              vllm: {
+                gpu_memory_utilization: vllmUtil,
+                ...(useLmEval ? { lm_eval: { tasks: lmTasks.split(",").map((t) => t.trim()).filter(Boolean), limit: lmLimit, num_fewshot: lmShots } } : {}),
+              },
+            }),
+    },
+  };
   const job =
-    kind === "vlm"
+    kind === "llm" && deployJob
+      ? deployJob
+      : kind === "vlm"
       ? {
           domain,
           metadata: { name, ...(parentJob ? { parent_job: parentJob } : {}) },
@@ -338,7 +385,24 @@ export default function NewJobPage() {
       {parentJob && (
         <div className="note" data-testid="derive-banner" style={{ marginBottom: 12 }}>
           派生自作业 <Link to={`/jobs/${parentJob}`}>{parentJob}</Link>（{DERIVE_STEPS.find((x) => x.step === fromStep)?.label}）：已沿用它的全部参数，只改你要改的部分即可。
-          量化会重新运行——量化后的权重没有落盘，但同样的配方、数据和随机种子得到同样的量化结果。
+          {artifact
+            ? "本次复用父作业导出的产物，不重新量化：只部署、评测。"
+            : "量化会重新运行——量化后的权重没有落盘，但同样的配方、数据和随机种子得到同样的量化结果。"}
+          {artifactOpts.length > 0 && (
+            <div className="form-row" style={{ marginTop: 8 }}>
+              <div className="field grow">
+                <label>复用父作业的导出产物（不重新量化）</label>
+                <select value={artifactKey} onChange={(e) => setArtifactKey(e.target.value)} data-testid="artifact-select">
+                  <option value="">不复用：按下面的设置重新量化</option>
+                  {artifactOpts.map((o) => (
+                    <option key={o.key} value={o.key}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
         </div>
       )}
       <div className="split">
@@ -384,6 +448,7 @@ export default function NewJobPage() {
                 </div>
               </div>
             )}
+            <div style={{ display: artifact ? "none" : undefined }} data-testid="quant-steps">
             <AdvicePanel
               model={model}
               kind={kind}
@@ -548,6 +613,12 @@ export default function NewJobPage() {
                 </div>
               </div>
             )}
+            </div>
+            {artifact && (
+              <p className="note" data-testid="artifact-quant-note">
+                ②③ 量化算法与配方：产物 {artifact.format === "gguf" ? `GGUF ${artifact.type}` : `${artifact.recipe} · ${artifact.format}`} 在父作业里已经量化好，这次不再量化。
+              </p>
+            )}
           </>
         )}
       </div>
@@ -559,7 +630,29 @@ export default function NewJobPage() {
             {kind.toUpperCase()} 作业只在 GPU 池上运行（由调度器分配空闲卡），这里能换的是⑤里的目标硬件画像（用于资源预估）。
           </p>
         )}
-        {kind !== "llm" ? (
+        {kind === "llm" && artifact ? (
+          <div className="form-row" data-testid="artifact-eval">
+            <div className="field">
+              <label>序列长度（wikitext-2 test）</label>
+              <input type="number" value={seqLen} min={64} step={64} onChange={(e) => setSeqLen(Number(e.target.value))} />
+            </div>
+            <div className="field">
+              <label>PPL 窗口数</label>
+              <input type="number" value={windows} min={1} onChange={(e) => setWindows(Number(e.target.value))} data-testid="artifact-windows" />
+            </div>
+            <div className="field">
+              <label>运行设备</label>
+              {isGguf ? (
+                <select value={evalDevice} onChange={(e) => setEvalDevice(e.target.value)} data-testid="artifact-device">
+                  <option value="cpu">CPU（llama.cpp 全部在 CPU 上）</option>
+                  <option value="gpu">GPU 池（全部层卸载到 GPU）</option>
+                </select>
+              ) : (
+                <div className="small muted" style={{ minHeight: 32, display: "flex", alignItems: "center" }}>GPU 池（vLLM / SGLang 需要 GPU）</div>
+              )}
+            </div>
+          </div>
+        ) : kind !== "llm" ? (
           <>
             <div className="form-row">
               <div className="field grow">
@@ -666,10 +759,10 @@ export default function NewJobPage() {
                 onChange={(e) => setDeployBackend(e.target.value as typeof deployBackend)}
                 data-testid="deploy-backend"
               >
-                <option value="none">不部署（仅评估量化误差）</option>
-                <option value="vllm">vLLM</option>
-                <option value="llamacpp">llama.cpp（GGUF）</option>
-                <option value="sglang">SGLang</option>
+                {!artifact && <option value="none">不部署（仅评估量化误差）</option>}
+                {(!artifact || !isGguf) && <option value="vllm">vLLM</option>}
+                {(!artifact || isGguf) && <option value="llamacpp">llama.cpp（GGUF）</option>}
+                {(!artifact || !isGguf) && <option value="sglang">SGLang</option>}
               </select>
               {suggestion && (
                 <div className="small muted" data-testid="export-suggestion">
@@ -680,7 +773,7 @@ export default function NewJobPage() {
               {quantizeOnly && <div className="small muted">仅量化不评测已开启：导出/部署需要评测得到的 fake-quant 基线，本次跳过。</div>}
             </div>
           )}
-          {kind === "llm" && (
+          {kind === "llm" && !artifact && (
             <div className="field" style={{ opacity: quantizeOnly ? 0.5 : 1, pointerEvents: quantizeOnly ? "none" : "auto" }}>
               <label>真实导出（S09/S10 一致性检查）</label>
               <div className="chips">
@@ -692,7 +785,7 @@ export default function NewJobPage() {
               </div>
             </div>
           )}
-          {kind === "llm" && (
+          {kind === "llm" && !artifact && (
             <div className="field" style={{ opacity: quantizeOnly ? 0.5 : 1, pointerEvents: quantizeOnly ? "none" : "auto" }}>
               <label>llama.cpp 部署实测（GGUF，CPU）</label>
               <div className="chips">
@@ -704,7 +797,7 @@ export default function NewJobPage() {
               </div>
             </div>
           )}
-          {kind === "llm" && (
+          {kind === "llm" && (!artifact || deployBackend === "vllm") && (
             <div className="field" style={{ minWidth: 320, opacity: quantizeOnly ? 0.5 : 1, pointerEvents: quantizeOnly ? "none" : "auto" }}>
               <label>
                 <input type="checkbox" checked={useVllm} disabled={quantizeOnly} onChange={(e) => setUseVllm(e.target.checked)} data-testid="opt-vllm" /> vLLM 部署实测（需要 GPU 与 vLLM；缺失则该阶段跳过）
@@ -728,7 +821,7 @@ export default function NewJobPage() {
               )}
             </div>
           )}
-          {kind === "llm" && (
+          {kind === "llm" && (!artifact || deployBackend === "sglang") && (
             <div className="field" style={{ minWidth: 320, opacity: quantizeOnly ? 0.5 : 1, pointerEvents: quantizeOnly ? "none" : "auto" }}>
               <label>
                 <input type="checkbox" checked={useSglang} disabled={quantizeOnly} onChange={(e) => setUseSglang(e.target.checked)} data-testid="opt-sglang" /> SGLang 部署实测（需要 GPU 与独立的 SGLang 环境；缺失则该阶段跳过）
@@ -1049,4 +1142,25 @@ function AdvicePanel({ model, kind, hw, profiles, onAdopt }: {
       )}
     </div>
   );
+}
+
+type Artifact = { job: string; recipe?: string; format: string; type?: string };
+type ArtifactOpt = { key: string; label: string; artifact: Artifact };
+const sameArtifact = (a: Artifact, b: Artifact) => a.job === b.job && a.format === b.format && (a.recipe ?? "") === (b.recipe ?? "") && (a.type ?? "") === (b.type ?? "");
+
+/** The checkpoints a finished LLM job left that another job can serve again: HF exports per recipe, and its GGUF files. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function artifactOptions(job: string, rep: Record<string, any> | null | undefined): ArtifactOpt[] {
+  if (!rep || rep.kind !== "llm") return [];
+  const out: ArtifactOpt[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const r of Object.values<any>(rep.recipes ?? {}))
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const [fmt_, e] of Object.entries<any>(r.export ?? {}))
+      if (e?.status === "exported")
+        out.push({ key: `${r.recipe}/${fmt_}`, label: `${r.recipe} · ${fmt_}${e.real_ppl != null ? `（真实权重 PPL ${Number(e.real_ppl).toFixed(3)}）` : ""}`, artifact: { job, recipe: r.recipe, format: fmt_ } });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const [ty, g] of Object.entries<any>(rep.llamacpp?.results ?? {}))
+    out.push({ key: `gguf/${ty}`, label: `GGUF ${ty}${g?.ppl != null ? `（llama.cpp PPL ${Number(g.ppl).toFixed(3)}）` : ""}`, artifact: { job, format: "gguf", type: ty } });
+  return out;
 }

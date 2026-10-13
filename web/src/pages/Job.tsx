@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { api, fmt, fmtBytes, followJob, JobDetail, JobEvent, JobReport, LLMJobReport, RecipeReport, VLMJobReport } from "../api";
+import { api, fmt, fmtBytes, followJob, JobDetail, JobEvent, JobReport, LLMJobReport, RecipeReport, VLMJobReport, DeployJobReport } from "../api";
 import { barItem, baseOption, Chart, series, token } from "../charts";
 import { Tile } from "./Estimate";
 import { LLM_STAGES, LLMReportView } from "./JobLLM";
 import { VLM_STAGES, VLMReportView } from "./JobVLM";
+import { DEPLOY_STAGES, DeployReportView } from "./JobDeploy";
 import { DERIVE_STEPS } from "../derive";
 import { StateBadge } from "./Jobs";
 import { LayerAnalysis } from "./LayerAnalysis";
@@ -60,10 +61,13 @@ export default function JobPage() {
   }, [id]);
 
   const rep = detail?.report ?? null;
-  const job = detail?.job as { model?: { type?: string }; deploy?: { device?: string }; metadata?: { parent_job?: string } } | undefined;
-  const isLLM = rep?.kind === "llm" || job?.model?.type === "llm";
+  const job = detail?.job as { model?: { type?: string }; deploy?: { device?: string }; metadata?: { parent_job?: string }; artifact?: unknown } | undefined;
+  // a deploy job (B2) has model.type llm too, but serves an existing export: its own report and stages
+  const isDeploy = rep?.kind === ("llm_deploy" as string) || job?.artifact != null;
+  const isLLM = !isDeploy && (rep?.kind === "llm" || job?.model?.type === "llm");
   const isVLM = rep?.kind === ("vlm" as string) || job?.model?.type === "vlm";
-  const stageList = isLLM ? LLM_STAGES : isVLM ? VLM_STAGES : STAGES;
+  const deployKeys = Object.keys((detail?.job as { deploy?: Record<string, unknown> } | undefined)?.deploy ?? {});
+  const stageList = isDeploy ? DEPLOY_STAGES.filter(([k]) => !k.startsWith("deploy_") || deployKeys.includes(k.slice(7))) : isLLM ? LLM_STAGES : isVLM ? VLM_STAGES : STAGES;
   const stages = useMemo(() => {
     const m: Record<string, StageState> = {};
     for (const [k] of stageList) m[k] = { status: "pending", count: 0 };
@@ -116,7 +120,7 @@ export default function JobPage() {
         <div className="form-row" style={{ margin: "4px 0 12px", alignItems: "center" }} data-testid="derive-actions">
           <span className="small muted">基于此作业新建：</span>
           {DERIVE_STEPS.map(({ step, label }) =>
-            step === "deploy" && !isLLM ? (
+            step === "deploy" && !isLLM && !isDeploy ? (
               <button key={step} className="secondary" disabled title="VLM/VLA 作业目前不做推理框架部署" data-testid={`derive-${step}`}>
                 {label}
               </button>
@@ -154,7 +158,7 @@ export default function JobPage() {
         <EventLog events={events} />
       </div>
 
-      {rep && (isLLM ? <LLMReportView rep={rep as unknown as LLMJobReport} job={detail?.job} jobId={id} /> : isVLM ? <VLMReportView rep={rep as unknown as VLMJobReport} job={detail?.job} jobId={id} /> : <ReportView rep={rep} jobId={id} />)}
+      {rep && (isDeploy ? <DeployReportView rep={rep as unknown as DeployJobReport} /> : isLLM ? <LLMReportView rep={rep as unknown as LLMJobReport} job={detail?.job} jobId={id} /> : isVLM ? <VLMReportView rep={rep as unknown as VLMJobReport} job={detail?.job} jobId={id} /> : <ReportView rep={rep} jobId={id} />)}
     </>
   );
 }

@@ -761,6 +761,8 @@
 
 - **作业派生 B1（2026-10-13，用户要求"量化完想换评估数据/设备/推理框架"）**：作业页"基于此作业新建：换评估数据 / 换设备 / 换推理框架 / 换配方 / 复制全部参数"→ `/new?from=<id>&step=…`，`web/src/derive.ts::deriveFromJob` 把父作业 job.yaml 的每个字段读回向导（含 KV、设备拆分、vLLM/SGLang/lm-eval、导出格式、敏感度分析），定位到对应那一步，提交时写 `metadata.parent_job`，子作业页链接回父作业。两个坑：①选了部署后端会触发导出格式自动建议，回填时跳过一次，否则父作业的 gptq 会被换成 awq；②混合精度规则"首个匹配生效"，只有恰好是向导两个控件（首尾块 8 bit、down_proj）写出的形式和顺序才拆回控件，否则整份原样沿用（如动态量化跳过清单），并禁用那两个控件、提供"去掉这些规则"。量化会重跑（B3 不落盘，用户 2026-10-13 选择）。VLM/VLA 没有推理框架部署，"换推理框架"禁用；"换设备"对它们只改目标硬件画像（作业只在 GPU 池上跑），界面写明。校验：`web/e2e/derive.mjs` 27/27，6 处 mutation 全部被抓（首轮 `parent_job` 只改到 VLM 分支而存活，补检查后被抓）。
 
+- **作业派生 B2（2026-10-13）**：`mqde.pipeline.deploy_job`（report `kind: llm_deploy`）——复用父 LLM 作业已导出的产物，换推理框架/设备/评测设置，**不重新量化**。产物按名字引用而不是路径：`artifact: {job, recipe, format}` → `<runs>/<job>/export/<recipe>-<format>/`，或 `{job, format: gguf, type}` → `export/gguf/model-<type>.gguf`；对照值取父报告（HF 格式：真实权重 PPL；GGUF：llama-perplexity PPL）；不往父作业目录写任何东西（LLMJob 加了 `_serve_dir/_gguf_dir` 钩子，自身行为不变）。格式与推理框架严格对应：GGUF 只能给 llama.cpp，awq/gptq/compressed-tensors 只能给 vLLM/SGLang；vLLM/SGLang 必须 GPU；这类作业没有 `quant` 段（`validate` 拒绝）。前端：派生时"复用父作业的导出产物"下拉（列出父报告里 `status: exported` 的 checkpoint 和 GGUF，带其 PPL），换推理框架/换设备默认复用，换评估数据/换配方默认重跑；复用时隐藏②③、⑤只留能加载该格式的后端、GGUF 可选 CPU/GPU（gpu_layers 0/99）；报告页 `JobDeploy.tsx`。校验：pytest `test_deploy_job` 14 例（15 处 mutation 全部被抓，首轮 3 处存活后补测试）；ctest planner +8、job_runner +1；`web/e2e/derive.mjs` 44/44（B1+B2，前端 11 处 mutation 全部被抓）。
+
 #### T-1003 MoE / MLA 支持
 - **依赖**：T-0508, T-0208 **级别**：L1
 - **产出**：MoE 专家线性层枚举与校准（按路由统计专家样本不足时的处理策略）；MLA KV 预估与 KV 量化适配；DeepSeek-V2-Lite 端到端。

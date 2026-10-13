@@ -52,7 +52,7 @@ export default function JobsPage() {
                 </td>
                 <td>{j.name ?? "–"}</td>
                 <td>
-                  <span className="badge">{j.kind === "llm" ? "LLM" : j.kind === "vlm" ? "VLM" : "VLA"}</span>
+                  <span className="badge">{j.kind === "llm" ? "LLM" : j.kind === "vlm" ? "VLM" : j.kind === "llm_deploy" ? "部署评测" : "VLA"}</span>
                 </td>
                 <td>
                   <StateBadge state={j.state} />

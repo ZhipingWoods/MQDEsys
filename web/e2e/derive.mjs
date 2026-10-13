@@ -77,6 +77,24 @@ for (const [id, job, rep] of [[LLM, llmJob, 'llm_full.json'], [VLM, vlmJob, 'vlm
   fs.writeFileSync(path.join(d, 'report.json'), fs.readFileSync(path.join(repo, 'python/tests/fixtures/reports', rep)));
   fs.writeFileSync(path.join(d, 'events.jsonl'), JSON.stringify({ type: 'job_state', state: 'SUCCEEDED', seq: 1, ts: 1 }) + '\n');
 }
+const DEP = '20261013-000000-deployd';
+{
+  const d = path.join(runs, DEP); fs.mkdirSync(d);
+  const real = 20.41190233277122, served = 20.45;
+  fs.writeFileSync(path.join(d, 'report.json'), JSON.stringify({
+    job_id: DEP, kind: 'llm_deploy', verdict: 'succeeded',
+    spec: { name: 'qwen-p-deploy', model_path: MODEL, artifact: { job: LLM, recipe: 'W4A16', format: 'awq' }, eval_seq_len: 256, eval_windows: 12, device: 'cuda:0' },
+    stages: ['validate', 'eval_prepare', 'deploy_sglang', 'report'].map((stage) => ({ stage, status: 'succeeded', seconds: 1 })),
+    artifact: { job: LLM, recipe: 'W4A16', format: 'awq', algorithm: 'gptq', path: `${runs}/${LLM}/export/w4a16-awq`, bytes: 449000000, parent_real_ppl: real, parent_baseline_ppl: 13.2 },
+    data: { eval: { dataset: 'wikitext-2 test', windows: 12, seq_len: 256 } },
+    deploy: { sglang: { status: 'succeeded', startup_s: 41, served_ppl: served, served_vs_real_ppl_pct: 100 * (served / real - 1), engine: { kv_cache_tokens: 512000, weights_gib: 0.42 },
+      load: { ok: 16, spec: { requests: 16, concurrency: 4 }, output_tokens_per_s: 1850, ttft_ms: { p50: 31, p99: 60 }, tpot_ms: { p50: 2.1 } } } },
+    env: { device_name: 'NVIDIA GeForce RTX 4090' },
+  }));
+  fs.writeFileSync(path.join(d, 'events.jsonl'), JSON.stringify({ type: 'job_state', state: 'SUCCEEDED', seq: 1, ts: 1 }) + '\n');
+  fs.writeFileSync(path.join(d, 'job.yaml'), yaml({ apiVersion: 'mqde/v1', kind: 'Job', metadata: { name: 'qwen-p-deploy', parent_job: LLM }, model: { type: 'llm', path: MODEL },
+    artifact: { job: LLM, recipe: 'W4A16', format: 'awq' }, deploy: { device: 'gpu', sglang: { mem_fraction_static: 0.3 } }, output_dir: runs }) + '\n');
+}
 const port = await freePort();
 const server = spawn(bin, ['serve', '--repo', repo, '--runs', runs, '--web', path.join(repo, 'web/dist'), '--python', path.join(here, 'fake_worker.py'),
   '--gpus', '0', '--allow', os.tmpdir(), '--port', String(port)], { stdio: ['ignore', 'ignore', 'ignore'] });
@@ -129,6 +147,66 @@ try {
     cj.evaluation.max_windows === 20 && cj.metadata.parent_job === LLM && cj.export.formats[0] === 'gptq' && cj.quant.mixed_precision.rules.length === 3 && cj.deploy.vllm.lm_eval.tasks[0] === 'gsm8k', JSON.stringify(cj).slice(0, 200));
   await page.getByTestId('derived-from').waitFor({ timeout: 10000 });
   check('its page links back to the parent', (await page.getByTestId('derived-from').locator(`a[href="/jobs/${LLM}"]`).count()) === 1);
+
+  // ---- B2: reuse the parent's exported checkpoint instead of quantizing again ----
+  await page.goto(`${base}/new?from=${LLM}&step=deploy`, { waitUntil: 'load' });
+  await page.getByTestId('artifact-select').waitFor({ timeout: 10000 });
+  await waitJob(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.artifact; } catch { return false; } });
+  const opts = await page.getByTestId('artifact-select').locator('option').allInnerTexts();
+  check('the parent\'s exports are offered: 4 HF checkpoints and 3 GGUF files, plus "不复用"', opts.length === 8 && opts.some((o) => o.includes('W4A16 · awq') && o.includes('20.412')) && opts.some((o) => o.includes('GGUF q4_k')), opts.join(' | '));
+  j = await preview();
+  check('换推理框架 reuses an export by default (the first one listed)', JSON.stringify(j.artifact) === JSON.stringify({ job: LLM, recipe: 'W4A16', format: 'awq' }) && (await page.getByTestId('artifact-select').inputValue()) === 'W4A16/awq', JSON.stringify(j.artifact));
+  check('the job serves it and quantizes nothing: no quant, export, analysis or calibration', !j.quant && !j.export && !j.analysis && !j.calibration, JSON.stringify(Object.keys(j)));
+  check('it keeps the parent\'s vLLM settings and its evaluation windows', j.deploy.vllm?.gpu_memory_utilization === 0.4 && j.deploy.vllm?.lm_eval?.limit === 20 && j.evaluation.max_windows === 12 && j.evaluation.seq_len === 256 && j.deploy.device === 'gpu', JSON.stringify([j.deploy, j.evaluation]));
+  check('②③ are hidden and say they come from the parent', !(await page.getByTestId('quant-steps').isVisible()) && (await page.getByTestId('artifact-quant-note').isVisible()));
+  await page.getByTestId('artifact-select').selectOption('gguf/q4_k');
+  await waitJob(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.llamacpp; } catch { return false; } });
+  j = await preview();
+  check('a GGUF goes to llama.cpp, and only llama.cpp is offered', j.artifact.format === 'gguf' && j.artifact.type === 'q4_k' && !j.deploy.vllm && JSON.stringify(await page.getByTestId('deploy-backend').locator('option').allInnerTexts()) === '["llama.cpp（GGUF）"]', JSON.stringify(j.deploy));
+  check('on the GPU pool (the parent evaluated on GPU): every layer offloaded', j.deploy.device === 'gpu' && j.deploy.llamacpp.gpu_layers === 99, JSON.stringify(j.deploy));
+  await page.getByTestId('artifact-device').selectOption('cpu');
+  await waitJob(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.device === 'cpu'; } catch { return false; } });
+  check('换设备 to CPU: llama.cpp keeps every layer on the CPU', (await preview()).deploy.llamacpp.gpu_layers === 0);
+  await page.getByTestId('artifact-select').selectOption('W4A8/awq');
+  await waitJob(() => { try { const x = JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null'); return x?.artifact?.recipe === 'W4A8' && x?.deploy?.vllm; } catch { return false; } });
+  check('back to an HF checkpoint: vLLM / SGLang only, on the GPU', JSON.stringify(await page.getByTestId('deploy-backend').locator('option').allInnerTexts()) === '["vLLM","SGLang"]' && (await preview()).deploy.device === 'gpu');
+  await page.getByTestId('deploy-backend').selectOption('sglang');
+  await waitJob(() => { try { const x = JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null'); return x?.deploy?.sglang && !x?.deploy?.vllm; } catch { return false; } });
+  await page.getByRole('button', { name: '提交作业' }).click();
+  await page.waitForURL((u) => u.pathname.startsWith('/jobs/') && !u.pathname.endsWith(LLM), { timeout: 15000 }).catch(async (e) => {
+    console.log('submit error:', await page.locator('.error-box').allInnerTexts(), JSON.stringify(await preview()).slice(0, 600));
+    throw e;
+  });
+  const dj = page.url().split('/jobs/')[1];
+  const djy = (await (await fetch(`${base}/api/v1/jobs/${dj}`)).json()).job;
+  check('the server accepted the deploy job as written', djy.artifact.recipe === 'W4A8' && djy.artifact.format === 'awq' && djy.deploy.sglang.mem_fraction_static === 0.3 && !djy.export, JSON.stringify(djy.artifact));
+  await page.locator('.pipeline').waitFor({ timeout: 10000 });
+  const pl = await page.locator('.pipeline').innerText();
+  check('its page shows the deploy stages for the one backend it uses', pl.includes('校验产物') && pl.includes('SGLang 部署') && !pl.includes('vLLM 部署') && !pl.includes('逐块量化'), pl.replace(/\s+/g, ' '));
+  const nope = await fetch(`${base}/api/v1/jobs`, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ...djy, artifact: { job: 'nope', recipe: 'W4A16', format: 'awq' }, output_dir: undefined, apiVersion: undefined, kind: undefined }) });
+  check('an artifact from a job that does not exist is refused before it is queued', nope.status === 400 && (await nope.text()).includes('not found'));
+  await page.goto(`${base}/new?from=${LLM}&step=deploy`, { waitUntil: 'load' });
+  await page.getByTestId('artifact-select').waitFor({ timeout: 10000 });
+  await waitJob(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.artifact; } catch { return false; } });
+  await page.getByTestId('artifact-select').selectOption('');
+  await waitJob(() => { try { const x = JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null'); return !x?.artifact && x?.export; } catch { return false; } });
+  check('"不复用" goes back to quantizing again with the parent\'s full settings', (await page.getByTestId('quant-steps').isVisible()) && JSON.stringify((await preview()).export.formats) === '["gptq"]');
+
+  // ---- the deploy job's report page ----
+  await page.goto(`${base}/jobs/${DEP}`, { waitUntil: 'load' });
+  await page.getByTestId('deploy-table').waitFor({ timeout: 15000 });
+  const dt = (await page.getByTestId('deploy-table').locator('tbody tr').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
+  check('the report shows SGLang\'s served PPL against the parent\'s real-weight PPL', dt.length === 1 && dt[0].includes('SGLang') && dt[0].includes('20.450') && dt[0].includes('+0.19%') && dt[0].includes('1850') && dt[0].includes('31 / 60 ms') , dt[0]);
+  const tiles = (await page.getByTestId('deploy-tiles').innerText()).replace(/\s+/g, ' ');
+  check('tiles name the reused artifact and its source job, with the parent\'s PPL', tiles.includes('W4A16 · awq') && tiles.includes(LLM) && tiles.includes('20.412'), tiles);
+  check('the artifact links to the job it came from', (await page.getByTestId('deploy-artifact').locator(`a[href="/jobs/${LLM}"]`).count()) === 1);
+
+  // deriving from a deploy job keeps serving the same artifact, even for a step that does not reuse by default
+  await page.goto(`${base}/new?from=${DEP}&step=eval`, { waitUntil: 'load' });
+  await page.getByTestId('artifact-select').waitFor({ timeout: 10000 });
+  await waitJob(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.artifact; } catch { return false; } });
+  check('a job derived from a deploy job serves that same artifact (from the original job), with its backend', (await page.getByTestId('artifact-select').inputValue()) === 'W4A16/awq' && (await preview()).artifact.job === LLM && !!(await preview()).deploy.sglang, JSON.stringify((await preview()).artifact));
 
   // ---- LLM: 换推理框架 focuses ⑤ ----
   await page.goto(`${base}/new?from=${LLM}&step=deploy`, { waitUntil: 'load' });

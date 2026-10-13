@@ -177,6 +177,13 @@ class LLMJob:
     def _save(self) -> None:
         (self.out / "report.json").write_text(json.dumps(self.report, indent=2, default=str))
 
+    def _serve_dir(self, ckpt: Path) -> Path:
+        """Where a serving stage writes its logs and lm-eval output: next to the checkpoint this job exported."""
+        return ckpt.parent
+
+    def _gguf_dir(self) -> Path:
+        return self.out / "export" / "gguf"
+
     def _stage(self, name: str, fn: Callable[[], Any], msg: str = "") -> Any:
         t0 = self.ev.start_stage(name, msg=msg) if msg else self.ev.start_stage(name)
         try:
@@ -290,7 +297,7 @@ class LLMJob:
         n_predict = int(cfg.get("n_predict", 64))
         prompt_len = int(cfg.get("prompt_len", 256))
         ctx = int(cfg.get("ctx", conc * (prompt_len + n_predict + 64)))
-        srv = LlamaServer(path, self.out / "export" / "gguf" / f"server-{ty}.log", threads=threads, ctx=ctx, parallel=conc,
+        srv = LlamaServer(path, self._gguf_dir() / f"server-{ty}.log", threads=threads, ctx=ctx, parallel=conc,
                           gpu_layers=self.spec.llamacpp_gpu_layers)
         self.ev.log(f"llama-server {ty}: starting on {srv.port} (ctx {ctx}, {conc} slots)")
         try:
@@ -370,7 +377,7 @@ class LLMJob:
             return {"status": "skipped", "reason": "no CUDA device"}
         conc, n_predict, prompt_len = int(cfg.get("concurrency", 4)), int(cfg.get("n_predict", 64)), int(cfg.get("prompt_len", 256))
         max_len = served_max_len(cfg, s.eval_seq_len, prompt_len, n_predict)
-        srv = VllmServer(ckpt, ckpt.parent / f"vllm-{ckpt.name}.log", max_model_len=max_len, dtype="float16",
+        srv = VllmServer(ckpt, self._serve_dir(ckpt) / f"vllm-{ckpt.name}.log", max_model_len=max_len, dtype="float16",
                          gpu_memory_utilization=float(cfg.get("gpu_memory_utilization", 0.3)),
                          enforce_eager=bool(cfg.get("enforce_eager", True)), max_num_seqs=max(conc, 8))
         self.ev.log(f"vLLM {ckpt.name}: starting on {srv.port} (max_model_len {max_len})")
@@ -382,7 +389,7 @@ class LLMJob:
                                                    prompt_len=prompt_len, n_predict=n_predict))
                 sp = served_perplexity(srv.port, ids.tolist(), s.eval_seq_len, int(cfg.get("ppl_windows", s.eval_windows)),
                                        concurrency=conc)
-                lm = (self._lm_eval(srv.port, ckpt, ckpt.parent / f"lm-eval-{ckpt.name}", cfg["lm_eval"], openai_models(srv.port)[0]["id"])
+                lm = (self._lm_eval(srv.port, ckpt, self._serve_dir(ckpt) / f"lm-eval-{ckpt.name}", cfg["lm_eval"], openai_models(srv.port)[0]["id"])
                       if cfg.get("lm_eval") else None)
                 props, engine = srv.props(), srv.engine_info()
         except Exception as e:
@@ -414,7 +421,7 @@ class LLMJob:
             return {"status": "skipped", "reason": "no CUDA device"}
         conc, n_predict, prompt_len = int(cfg.get("concurrency", 4)), int(cfg.get("n_predict", 64)), int(cfg.get("prompt_len", 256))
         max_len = served_max_len(cfg, s.eval_seq_len, prompt_len, n_predict)
-        srv = SglangServer(ckpt, ckpt.parent / f"sglang-{ckpt.name}.log", max_model_len=max_len, dtype="float16",
+        srv = SglangServer(ckpt, self._serve_dir(ckpt) / f"sglang-{ckpt.name}.log", max_model_len=max_len, dtype="float16",
                            mem_fraction_static=float(cfg.get("mem_fraction_static", 0.3)),
                            disable_cuda_graph=bool(cfg.get("disable_cuda_graph", False)), max_running_requests=max(conc, 8))
         self.ev.log(f"SGLang {ckpt.name}: starting on {srv.port} (context_length {max_len})")

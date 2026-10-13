@@ -61,7 +61,8 @@ const DOWN = "mlp\\.down_proj$";
 export function deriveFromJob(job: any, step: DeriveStep, d: Derived): Derived {
   const q = job?.quant ?? {}, c = job?.calibration ?? {}, e = job?.evaluation ?? {}, dep = job?.deploy ?? {}, an = job?.analysis ?? {};
   const type = job?.model?.type ?? "vla";
-  const recipes: string[] = Array.isArray(q.recipe) ? q.recipe : q.recipe ? [q.recipe] : d.picked;
+  // a deploy job (B2) quantizes nothing; its artifact names the recipe that produced it
+  const recipes: string[] = Array.isArray(q.recipe) ? q.recipe : q.recipe ? [q.recipe] : job?.artifact?.recipe ? [String(job.artifact.recipe).toLowerCase()] : d.picked;
   // First match wins, so the order is part of the meaning: the rules map onto the wizard's two controls only when
   // they are exactly what those controls write, in their order; anything else is carried over untouched.
   const all: Rule[] = [...(q.mixed_precision?.rules ?? [])];

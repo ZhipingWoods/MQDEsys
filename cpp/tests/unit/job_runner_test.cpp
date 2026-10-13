@@ -273,3 +273,17 @@ TEST(job_runner_module, model_type_selects_the_python_pipeline_module) {
     EXPECT_NE(argv.find("-m " + module + " "), std::string::npos) << type << ": " << argv;
   }
 }
+
+TEST(job_runner_module, a_job_that_reuses_an_export_runs_the_deploy_pipeline_whatever_its_model_type) {
+  auto base = fresh_dir("module_artifact");
+  const auto script = write_fake_worker(base / "bin");
+  ::setenv("MQDE_TEST_FAIL_UNTIL", "0", 1);
+  JobRunner runner(base / "runs", base, script.string(), {}, 1, 0.05);
+  const auto id = runner.submit(Json{{"deploy", {{"device", "cpu"}}}, {"model", {{"type", "llm"}}},
+                                     {"artifact", {{"job", "j1"}, {"format", "gguf"}, {"type", "q4_k"}}}});
+  wait_for_terminal(runner, id);
+  std::ifstream f(base / "runs" / id / ".argv");
+  std::string argv;
+  std::getline(f, argv);
+  EXPECT_NE(argv.find("-m mqde.pipeline.deploy_job "), std::string::npos) << argv;
+}

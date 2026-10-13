@@ -102,7 +102,8 @@ std::string JobRunner::submit(const Json& job) {
   if (const auto& ed = job.value("/evaluation/device"_json_pointer, Json()); ed.is_string()) proc.eval_device = ed.get<std::string>();
   const bool wants_gpu = (proc.quant_device && *proc.quant_device == "gpu") || (proc.eval_device && *proc.eval_device == "gpu");
   proc.cpu = job.value("/deploy/device"_json_pointer, std::string()) == "cpu" && !wants_gpu;
-  if (const auto type = job.value("/model/type"_json_pointer, std::string()); type == "llm") proc.module = "mqde.pipeline.llm_job";
+  if (job.contains("artifact")) proc.module = "mqde.pipeline.deploy_job";  // serves an existing export, no quantization
+  else if (const auto type = job.value("/model/type"_json_pointer, std::string()); type == "llm") proc.module = "mqde.pipeline.llm_job";
   else if (type == "vlm") proc.module = "mqde.pipeline.vlm_job";
   {
     std::lock_guard lk(mu_);
