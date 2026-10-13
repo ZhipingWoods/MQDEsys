@@ -50,6 +50,7 @@ process.on('exit', stop);
 const base = `http://127.0.0.1:${port}`;
 for (let i = 0; i < 100; i++) { try { if ((await fetch(`${base}/api/v1/health`)).ok) break; } catch { /* not up */ } await new Promise((r) => setTimeout(r, 100)); }
 
+const post1 = (p, b) => fetch(`${base}/api/v1${p}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) });
 const browser = await chromium.launch({ channel: 'chrome' });
 let failed = false;
 try {
@@ -57,6 +58,18 @@ try {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('console', (m) => m.type() === 'error' && !/Failed to load resource/.test(m.text()) && errors.push(m.text()));
+
+  // ---- ?dry_run=1: validate a job without queueing it ----
+  const okJob = { domain: 'llm', model: { path: path.join(os.tmpdir(), 'm'), type: 'llm' }, quant: { recipe: ['w4a16'], algorithm: 'rtn' }, deploy: { device: 'gpu' } };
+  const before = (await (await fetch(`${base}/api/v1/jobs`)).json()).length;
+  const dv = await post1('/jobs?dry_run=1', okJob);
+  check('dry_run on a valid job says valid and 200', dv.status === 200 && (await dv.json()).valid === true);
+  const di = await post1('/jobs?dry_run=1', { ...okJob, quant: { recipe: ['nope'] } });
+  const dj = await di.json();
+  check('dry_run on an invalid job is the same 400 with the problems a real submit gives', di.status === 400 && dj.problems?.[0]?.field === '/quant/recipe', JSON.stringify(dj).slice(0, 160));
+  check('and neither queued anything', (await (await fetch(`${base}/api/v1/jobs`)).json()).length === before, String(before));
+  const real = await post1('/jobs', { ...okJob, quant: { recipe: ['nope'] } });
+  check('without dry_run the invalid job is refused identically', real.status === 400 && (await real.json()).problems?.[0]?.field === '/quant/recipe');
 
   // ---- device names ----
   const list = await (await fetch(`${base}/api/v1/jobs`)).json();

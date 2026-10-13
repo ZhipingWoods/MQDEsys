@@ -1238,6 +1238,8 @@ Result<void> serve(const ServerOptions& o) {
       if (!fs::is_regular_file(o.runs_dir / pj / "report.json"))
         return send_error(res, 400, "invalid_argument", fmt::format("artifact.job: job {} not found", pj));
     }
+    // ?dry_run=1: everything above (schema, planner, the artifact's job) without queueing anything
+    if (req.has_param("dry_run")) return send_json(res, {{"valid", true}});
     const auto mtype = job.value("/model/type"_json_pointer, std::string("vla"));
     const bool cpu = job.value("/deploy/device"_json_pointer, std::string()) == "cpu";
     if (!cpu && o.gpus.empty())
