@@ -180,6 +180,12 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **注意**：GPU 2 被他人进程占用约 21 GB，mqde serve 现只用 GPU 3（`--gpus 3`）。
 ## 会话日志（新记录加在最上面）
 
+### 2026-10-13（目标"完成所有任务"） · Claude · 并发扫描 + GGUF 结构解析
+
+- **做了**：T-R12/R13 并发扫描（真机 vLLM 发现并修了两个 mock 测不出的问题，见 TASKS "并发扫描的真机发现与修复"）；T-R05 GGUF 结构解析（DONE，真机 17 文件 4931 张量与 gguf-py 一致）。
+- **没做、也做不了（如实）**：约 60 项未完成任务里，L3（T-0609/T-1204/T-R14）要 ADR 与你批准；T-1105 Ascend、T-0706 TensorRT-LLM 没有对应软硬件；T-1003 MoE/MLA 没有模型；T-0006/T-0007/T-0008/T-1201/T-1202/T-0501 等 L2（CI、契约、Docker、wheel、Worker RPC）按规则要先提方案。"全部完成"在这些约束下不成立。
+- **待用户**：生产服务 18080 重启（`/tmp/restart_mqde.sh`）；L2 评审三项（schema 的 vlm、matrix.yaml sglang、估算器 sglang 画像）；新增：`cpp/CMakeLists.txt` 给 modelspec 加了内部 include 目录（构建文件，L2，最小改动）。
+
 ### 2026-10-13（再再续） · Claude · 前端改版：分步向导 / 首页总览 / 作业筛选
 
 - **状态**：DONE，见 TASKS "前端改版"。工作流按用户要求：Mac 提交 → 4090 拉取编译 → 4090 的 `web/dist` 同步回 Mac，本地 `mqde serve`（端口 18090，runs 为 4090 报告的只读副本）供查看。
