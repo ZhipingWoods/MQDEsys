@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { api, BuiltinDataset, DatasetInfo, fmtBytes } from "../api";
 import { useDebounced } from "../hooks";
 
@@ -55,20 +55,21 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
       alive = false;
     };
   }, []);
-  const options = (list?.builtin ?? []).filter((b) => b.roles.includes(role) && (kind === "text" ? b.kind === "text" : b.kind === "vision"));
-  const [custom, setCustom] = useState(false);
+  // the two built-ins are known before the server answers (and are all there is on an older one): show them at once, refine on arrival
+  const options = (list?.builtin ?? STATIC_BUILTINS).filter((b) => b.roles.includes(role) && (kind === "text" ? b.kind === "text" : b.kind === "vision"));
+  // "path" mode is what the value says it is: anything that is not a built-in. The one thing the value cannot say is that the user
+  // has just chosen "path" and has not typed yet (the value is still empty): that is `wantsPath`.
+  const [wantsPath, setWantsPath] = useState(false);
   const [touched, setTouched] = useState(false); // the user chose something: the default is no longer ours to replace
   const [fellBack, setFellBack] = useState<string | null>(null); // the default we replaced, for the note
-  // a value that is not a built-in is a path (it may arrive late: derived from another job, or the list loads after it)
-  useEffect(() => {
-    if (list && value !== "" && !options.some((b) => b.id === value)) setCustom(true);
-  }, [value, list]); // eslint-disable-line react-hooks/exhaustive-deps
+  const custom = value === "" ? wantsPath : !options.some((b) => b.id === value);
   const selected = custom ? CUSTOM : value;
 
   const typed = useDebounced(custom ? value.trim() : "", 350);
   const [info, setInfo] = useState<{ path: string; res?: DatasetInfo; err?: string } | null>(null);
   useEffect(() => {
-    if (!typed || list?.legacy) {
+    // not before the server has said what it can do: an older one has no such endpoint, and asking it would only produce errors
+    if (!typed || !list || list.legacy) {
       setInfo(null);
       return;
     }
@@ -80,13 +81,14 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
     return () => {
       alive = false;
     };
-  }, [typed, kind, list?.legacy]);
+  }, [typed, kind, list]);
 
   useEffect(() => {
     if (!defaultValue || touched || legacy || value !== defaultValue.path || info?.path !== value) return;
-    if (info.err || (info.res && !info.res.usable)) {
+    // only a definite answer counts: the server said it is unusable, or its sandbox refused the path. "Could not ask" is not one.
+    const definite = info.res ? !info.res.usable : /outside allowed roots|403/i.test(info.err ?? "");
+    if (definite) {
       setFellBack(defaultValue.path);
-      setCustom(false);
       onChange(defaultValue.fallback);
     }
   }, [info]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -96,7 +98,8 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
   // an older server cannot say whether a path is readable: the path is accepted (it still has to be non-empty) and the
   // submit-time check, if the server has one, decides
   const ok = !custom || (legacy ? value.trim() !== "" : !pending && !!info?.res?.usable);
-  useEffect(() => {
+  // before paint: the form must never be seen enabled for one frame while this says the path is not usable
+  useLayoutEffect(() => {
     onValid?.(ok);
   }, [ok]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -112,10 +115,10 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
           setTouched(true);
           setFellBack(null);
           if (e.target.value === CUSTOM) {
-            setCustom(true);
+            setWantsPath(true);
             onChange("");
           } else {
-            setCustom(false);
+            setWantsPath(false);
             onChange(e.target.value);
           }
         }}

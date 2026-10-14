@@ -237,8 +237,21 @@ try {
   check('older server: no request is made to an endpoint that does not exist', inspectCalls === 0, `${inspectCalls} calls`);
   await page.getByTestId('domain-tab-vla').click();
   await page.getByTestId('dataset-path').waitFor({ timeout: 10000 });
+  // the pickers have just mounted: until the server has said (or failed to say) what it supports, nothing can be checked
+  for (const id of ['dataset-path-status', 'eval-dataset-path-status']) await until((t) => /版本较旧/.test(document.querySelector(`[data-testid="${t}"]`)?.textContent ?? ''), id);
   check('older server: the VLA default is left as it is (there is nothing to check it against), and submitting is possible', (await page.getByTestId('dataset-path-fellback').count()) === 0 && await submit.isEnabled());
+  check('older server: still no request to the missing endpoint after the VLA pickers mounted too (they wait to hear what the server supports)', inspectCalls === 0, `${inspectCalls} calls`);
   await page.unroute('**/api/v1/datasets**');
+
+  // ---- a server that has the endpoint but fails on this request: "could not ask" is not "unreadable"
+  await page.route('**/api/v1/datasets/inspect**', (r) => r.fulfill({ status: 500, contentType: 'application/json', body: '{"code":"internal","message":"boom"}' }));
+  await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
+  await page.getByTestId('domain-tab-vla').click();
+  await page.getByTestId('dataset-path').waitFor({ timeout: 10000 });
+  await until(() => /boom/.test(document.querySelector('[data-testid="dataset-path-status"]')?.textContent ?? ''));
+  check('an inspect that fails (500) does not replace the default with synthetic: the default stays, the error is shown, submitting waits',
+    (await page.getByTestId('dataset-path-fellback').count()) === 0 && (await page.getByTestId('dataset-path').inputValue()).length > 10 && await submit.isDisabled(), await status('dataset-path-status'));
+  await page.unroute('**/api/v1/datasets/inspect**');
 
   check('no page errors', errors.length === 0, errors.slice(0, 2).join(' | '));
   failed = results.some((r) => !r);

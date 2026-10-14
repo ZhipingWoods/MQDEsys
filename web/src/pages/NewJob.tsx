@@ -164,13 +164,21 @@ export default function NewJobPage() {
   // pairs with the *new* deployBackend value -- that combination briefly set llamacpp's "gguf" suggestion
   // onto a vllm selection in testing before this was merged into one effect.
   const primaryRecipe = picked.find((r) => r !== "bf16") ?? picked[0];
+  const pickedKey = picked.filter((r) => r !== "bf16").join(","); // a recipe added or removed can change which export format works
   const [suggestion, setSuggestion] = useState<Awaited<ReturnType<typeof api.exportSuggestion>> | null>(null);
+  // where the server lets jobs read (for asking the planner about a job whose model path is not typed yet); null on an older server
+  const [allowedRoots, setAllowedRoots] = useState<string[] | null>(null);
+  useEffect(() => {
+    api.datasets().then((d) => setAllowedRoots(d.allowed_roots), () => setAllowedRoots(null));
+  }, []);
+  const [servingNotes, setServingNotes] = useState<{ recipe: string; backend: string; reason: string }[]>([]);
   useEffect(() => {
     if (deployBackend === "none") {
       setUseVllm(false);
       setUseSglang(false);
       setGguf([]);
       setSuggestion(null);
+      setServingNotes([]);
       return;
     }
     if (kind !== "llm" || !primaryRecipe) {
@@ -178,10 +186,14 @@ export default function NewJobPage() {
       return;
     }
     let alive = true;
-    api
-      .exportSuggestion(primaryRecipe, deployBackend, hw)
-      .then((s) => {
+    // The export format has to work for EVERY recipe the job quantizes (AWQ cannot export a 2-bit recipe, the server rejects the job),
+    // so ask about each one; the primary recipe's answer is what the card shows.
+    const asked = picked.filter((r) => r !== "bf16");
+    if (!asked.length) asked.push(primaryRecipe);
+    Promise.all(asked.map((r) => api.exportSuggestion(r, deployBackend, hw)))
+      .then((all) => {
         if (!alive) return;
+        const s = all[Math.max(0, asked.indexOf(primaryRecipe))];
         setSuggestion(s);
         if (keepParentDeploy.current) {
           keepParentDeploy.current = false;
@@ -194,8 +206,39 @@ export default function NewJobPage() {
           const otherHfOn = deployBackend === "vllm" ? useSglang : useVllm;
           if (deployBackend === "vllm") setUseVllm(true);
           else setUseSglang(true);
-          // the suggested format replaces the default; it is added to the other backend's only when that one is also on
-          if (s.format && s.verdict !== "unsupported") setExportFmts((f) => (otherHfOn ? (f.includes(s.format) ? f : [...f, s.format]) : [s.format]));
+          // Recipes this backend cannot serve at all: say which, and why (the job still exports them; that stage will not work)
+          setServingNotes(all.flatMap((x, i) => (x.verdict === "unsupported" ? [{ recipe: asked[i], backend: deployBackend, reason: x.reason }] : [])));
+          // The format must be one the planner accepts for EVERY recipe (AWQ cannot export a 2-bit one): try each recipe's own
+          // suggestion first, then the usual ones, and keep the first the planner's own dry run does not refuse on /export/formats.
+          const wanted = [...all.filter((x) => x.verdict !== "unsupported").map((x) => x.format), s.format, "gptq", "awq", "compressed-tensors"].filter(Boolean);
+          const candidates = [...new Set(wanted)];
+          // "the planner spoke" = it validated the job (it answers with JSON-pointer fields like /export/formats); the path sandbox's
+          // 403 and a network error say nothing about the formats
+          const spoke = (r: Awaited<ReturnType<typeof api.dryRun>>) => r.ok || r.problems.some((p) => p.field.startsWith("/"));
+          const ask = async (c: string) => {
+            const base = job as unknown as Record<string, unknown> & { model: Record<string, unknown> };
+            let r = await api.dryRun({ ...base, export: { formats: [c] } });
+            // The user may not have typed a model path yet (or typed one the server may not read): ask again with a path it does allow
+            if (!spoke(r) && allowedRoots?.length) r = await api.dryRun({ ...base, model: { ...base.model, path: allowedRoots[0] }, export: { formats: [c] } });
+            return spoke(r) ? r : null;
+          };
+          (async () => {
+            let format = candidates[0];
+            for (const c of candidates) {
+              const r = await ask(c);
+              if (r === null) {
+                format = "gptq"; // the planner could not look: GPTQ is the one format that takes every weight width
+                break;
+              }
+              if (r.ok || !r.problems.some((p) => p.field === "/export/formats")) {
+                format = c;
+                break;
+              }
+            }
+            if (!alive || !format) return;
+            // the chosen format replaces the default; it is added to the other backend's only when that one is also on
+            setExportFmts((f) => (otherHfOn ? (f.includes(format) ? f : [...f, format]) : [format]));
+          })();
         } else if (deployBackend === "llamacpp") {
           if (s.format) setGguf((g) => (g.length ? g : ["q4_k"]));
         }
@@ -204,7 +247,7 @@ export default function NewJobPage() {
     return () => {
       alive = false;
     };
-  }, [deployBackend, primaryRecipe, hw, kind]);
+  }, [deployBackend, primaryRecipe, pickedKey, hw, kind]);
 
   useEffect(() => {
     if (!fromJob) return;
@@ -602,7 +645,7 @@ export default function NewJobPage() {
               {recipes.data
                 ?.filter((r) => r.weight.format !== "none")
                 .map((r) => (
-                  <span key={r.id} className={`chip ${picked.includes(r.id) ? "on" : ""}`} onClick={() => toggle(r.id)} title={r.summary}>
+                  <span key={r.id} className={`chip ${picked.includes(r.id) ? "on" : ""}`} onClick={() => toggle(r.id)} title={r.summary} data-testid={`recipe-${r.id}`}>
                     {r.name}
                     {r.maturity === "experimental" && <span className="exp">实验</span>}
                   </span>
@@ -916,6 +959,15 @@ export default function NewJobPage() {
                 ),
               }}
             />
+            {servingNotes.length > 0 && (
+              <ul className="note warn" data-testid="serve-warnings">
+                {servingNotes.map((n) => (
+                  <li key={n.recipe}>
+                    <b>{n.recipe.toUpperCase()}</b> 在 {n.backend === "sglang" ? "SGLang" : "vLLM"} 上服务不了：{n.reason}。作业仍会导出它，这一步会失败或被跳过；不需要的话在第③步把它去掉。
+                  </li>
+                ))}
+              </ul>
+            )}
             {suggestion && (
               <div className="small muted" data-testid="export-suggestion">
                 建议格式：{suggestion.format || "—"}（{suggestion.verdict}

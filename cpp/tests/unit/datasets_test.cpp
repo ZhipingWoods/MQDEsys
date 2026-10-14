@@ -1,4 +1,5 @@
-// What the wizard may offer as calibration / evaluation data, and whether a path the user typed is something the executor can read.
+// What the wizard may offer as calibration / evaluation data, and whether a path the user typed is something
+// the executor can read.
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -13,7 +14,8 @@ namespace fs = std::filesystem;
 
 namespace {
 fs::path fresh(const char* name) {
-  const auto d = fs::temp_directory_path() / (std::string("mqde-datasets-") + name + "-" + std::to_string(::getpid()));
+  const auto d =
+      fs::temp_directory_path() / (std::string("mqde-datasets-") + name + "-" + std::to_string(::getpid()));
   fs::remove_all(d);
   fs::create_directories(d);
   return d;
@@ -157,7 +159,9 @@ TEST(datasets, the_builtin_list_reports_whether_wikitext_is_in_the_hf_cache) {
   auto b = builtin_datasets();
   EXPECT_FALSE(find(b, "wikitext-2-raw-v1:train").at("available")) << "an empty cache";
   EXPECT_TRUE(find(b, "synthetic").at("available"));
-  write(cache / "datasets--wikitext" / "snapshots" / "abc" / "wikitext-2-raw-v1" / "train-00000-of-00001.parquet", "pq");
+  write(cache / "datasets--wikitext" / "snapshots" / "abc" / "wikitext-2-raw-v1" /
+            "train-00000-of-00001.parquet",
+        "pq");
   b = builtin_datasets();
   EXPECT_TRUE(find(b, "wikitext-2-raw-v1:train").at("available"));
   ::unsetenv("HF_HUB_CACHE");
@@ -167,7 +171,8 @@ TEST(datasets, json_form_carries_every_field_the_ui_reads) {
   const auto d = fresh("json");
   write(d / "a.txt", "abc");
   const auto j = to_json(inspect_text_dataset(d.string()));
-  for (const char* k : {"kind", "files", "files_capped", "bytes", "formats", "usable"}) EXPECT_TRUE(j.contains(k)) << k;
+  for (const char* k : {"kind", "files", "files_capped", "bytes", "formats", "usable"})
+    EXPECT_TRUE(j.contains(k)) << k;
   EXPECT_FALSE(j.contains("reason")) << "no reason when it is usable";
   const auto bad = to_json(inspect_text_dataset("/nonexistent/x"));
   EXPECT_TRUE(bad.contains("reason"));

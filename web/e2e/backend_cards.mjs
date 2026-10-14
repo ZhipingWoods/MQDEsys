@@ -117,7 +117,7 @@ try {
   const sum = await page.getByTestId('backend-cards').innerText();
   check('each backend that is on shows its own options inside its card (GGUF types, memory share, lm-eval)', /Q4_K/i.test(sum) && (await page.getByTestId('opt-vllm-util').count()) === 1 && (await page.getByTestId('opt-sglang-mem').count()) === 1 && (await page.getByTestId('opt-lmeval').count()) === 1);
   const fm = (await preview()).export?.formats ?? [];
-  check('with vLLM and SGLang both on it is one export (awq), not the default gptq plus the suggestion', JSON.stringify(fm) === '["awq"]', JSON.stringify(fm));
+  check('with vLLM and SGLang both on, and the default recipes (one of them 2-bit, which AWQ cannot export), it is one export: gptq', JSON.stringify(fm) === '["gptq"]', JSON.stringify(fm));
   check('the export formats the vLLM and SGLang runs need are already chosen: the job names at least one, and its chip is shown as on', fm.length >= 1 && (await Promise.all(fm.map((f) => page.getByTestId(`export-chip-${f}`).first().evaluate((e) => e.classList.contains('on'))))).every(Boolean), JSON.stringify(fm));
   await page.getByTestId('backend-toggle-vllm').uncheck();
   await until(() => { try { return !JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.vllm; } catch { return false; } });
@@ -133,6 +133,39 @@ try {
   await page.getByTestId('opt-vllm-util').fill('0.4');
   await until(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.vllm?.gpu_memory_utilization === 0.4; } catch { return false; } });
   check('the vLLM options in its card reach deploy.vllm', (await deploy()).vllm.gpu_memory_utilization === 0.4);
+  await page.getByTestId('backend-toggle-vllm').uncheck();
+
+  // ---------------------------------------------------------------- the export format has to work for every recipe
+  const dry = async () => { const r = await fetch(`${base}/api/v1/jobs?dry_run=1`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(await preview()) }); return { status: r.status, body: await r.text() }; };
+  const formatsAre = (want) => until((w) => { try { return JSON.stringify(JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.export?.formats) === w; } catch { return false; } }, JSON.stringify(want));
+  await page.getByTestId('backend-toggle-vllm').check();
+  await formatsAre(['gptq']);
+  let v = await dry();
+  check('the default recipes include a 2-bit one, so vLLM gets GPTQ, and the server accepts the job as the page built it', v.status === 200, `${v.status} ${v.body.slice(0, 160)}`);
+  await page.getByTestId('serve-warnings').waitFor({ timeout: 10000 });
+  const warn = await text('serve-warnings');
+  check('vLLM cannot serve the 2-bit recipe: the page names it, says why (the server\'s own reason), and says what will happen', /W2A16/.test(warn) && /vLLM/.test(warn) && /asymmetric/i.test(warn) && /失败或被跳过/.test(warn) && !/W4A16/.test(warn), warn);
+  await page.getByTestId('recipe-w2a16').click();
+  await page.getByTestId('recipe-w4a8').click();
+  await formatsAre(['awq']);
+  await until(() => !document.querySelector('[data-testid="serve-warnings"]'));
+  check('with only a 4-bit recipe left there is nothing to warn about', (await page.getByTestId('serve-warnings').count()) === 0);
+  v = await dry();
+  check('with only the 4-bit recipe left, the planner\'s own answer (AWQ) is used, and the server accepts that too', v.status === 200, `${v.status} ${v.body.slice(0, 160)}`);
+  await page.getByTestId('recipe-w2a16').click();
+  await formatsAre(['gptq']);
+  check('putting the 2-bit recipe back moves the export to GPTQ again, so the job never becomes invalid behind the user\'s back', (await dry()).status === 200);
+  await page.getByTestId('recipe-w4a8').click();
+  await page.getByTestId('backend-toggle-vllm').uncheck();
+
+  // the usual order of a person at the form: switch a backend on first, type the model path afterwards
+  await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
+  await page.getByTestId('domain-tab-llm').click();
+  await page.getByTestId('backend-toggle-vllm').check();
+  await formatsAre(['gptq']);
+  await page.getByTestId('model-path').fill(MODEL);
+  v = await dry();
+  check('turning vLLM on BEFORE the model path is typed (the server cannot validate such a job yet) still ends with an export the server accepts', v.status === 200 && JSON.stringify((await preview()).export?.formats) === '["gptq"]', `${v.status} ${v.body.slice(0, 120)}`);
   await page.getByTestId('backend-toggle-vllm').uncheck();
 
   // ---------------------------------------------------------------- quantize-only

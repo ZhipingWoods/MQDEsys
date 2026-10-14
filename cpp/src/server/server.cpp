@@ -12,8 +12,8 @@
 #include <httplib.h>
 
 #include "advice.h"
-#include "datasets.h"
 #include "backend_envs.h"
+#include "datasets.h"
 #include "gguf.h"
 #include "job_runner.h"
 #include "mqde/common/log.h"
@@ -604,8 +604,8 @@ Result<void> serve(const ServerOptions& o) {
   svr.Get("/api/v1/datasets", [&](const httplib::Request&, httplib::Response& res) {
     send_json(res, {{"builtin", builtin_datasets()}, {"allowed_roots", o.allowed_roots}});
   });
-  // Metadata about ONE path the user typed (never a listing, never content): does it exist, how much is readable. The path has
-  // to be inside an allowed root, like every other path the server is asked about.
+  // Metadata about ONE path the user typed (never a listing, never content): does it exist, how much is
+  // readable. The path has to be inside an allowed root, like every other path the server is asked about.
   svr.Get("/api/v1/datasets/inspect", [&](const httplib::Request& req, httplib::Response& res) {
     const auto path = req.get_param_value("path");
     const auto kind = req.has_param("kind") ? req.get_param_value("kind") : std::string("text");
@@ -1276,20 +1276,22 @@ Result<void> serve(const ServerOptions& o) {
       if (!fs::is_regular_file(o.runs_dir / pj / "report.json"))
         return send_error(res, 400, "invalid_argument", fmt::format("artifact.job: job {} not found", pj));
     }
-    // The data the job names has to be something the executor can read: say so now, not minutes into the job. Built-ins
-    // (synthetic, wikitext-2) are resolved by the executor itself and are not checked here.
+    // The data the job names has to be something the executor can read: say so now, not minutes into the job.
+    // Built-ins (synthetic, wikitext-2) are resolved by the executor itself and are not checked here.
     {
       Json bad = Json::array();
       auto check = [&](const char* field, const char* ptr, bool lerobot) {
         const auto v = job.value(Json::json_pointer(ptr), Json());
-        if (!v.is_string() || v.get<std::string>().empty() || is_builtin_dataset(v.get<std::string>())) return;
+        if (!v.is_string() || v.get<std::string>().empty() || is_builtin_dataset(v.get<std::string>()))
+          return;
         const auto path = v.get<std::string>();
         const auto info = lerobot ? inspect_lerobot_dataset(path) : inspect_text_dataset(path);
         if (!info.usable)
           bad.push_back({{"field", field},
                          {"message", fmt::format("{}: {}", path, info.reason)},
                          {"suggestion", lerobot ? "use 'synthetic' or a LeRobot v3 directory"
-                                                : "name a text file (.txt .md .jsonl .json .parquet) or a directory of them, or use the built-in wikitext-2"}});
+                                                : "name a text file (.txt .md .jsonl .json .parquet) or a "
+                                                  "directory of them, or use the built-in wikitext-2"}});
       };
       const auto mt = job.value("/model/type"_json_pointer, std::string());
       if (mt == "llm") check("calibration.dataset", "/calibration/dataset", false);
@@ -1299,9 +1301,14 @@ Result<void> serve(const ServerOptions& o) {
       }
       if (!bad.empty()) {
         std::vector<std::string> lines;
-        for (const auto& p : bad) lines.push_back(fmt::format("{}: {}", p["field"].get<std::string>(), p["message"].get<std::string>()));
+        for (const auto& p : bad)
+          lines.push_back(
+              fmt::format("{}: {}", p["field"].get<std::string>(), p["message"].get<std::string>()));
         res.status = 400;
-        res.set_content(Json{{"code", "invalid_argument"}, {"message", fmt::format("{}", fmt::join(lines, "; "))}, {"problems", bad}}.dump(),
+        res.set_content(Json{{"code", "invalid_argument"},
+                             {"message", fmt::format("{}", fmt::join(lines, "; "))},
+                             {"problems", bad}}
+                            .dump(),
                         "application/json");
         return;
       }

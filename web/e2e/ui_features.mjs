@@ -127,7 +127,7 @@ try {
   check('logits probe on adds analysis.logits_probe', JSON.stringify((await preview()).analysis?.logits_probe) === '{}');
   await page.getByTestId('opt-probe-exact').check();
   check('exact KL adds exact: true', (await preview()).analysis.logits_probe.exact === true);
-  await page.getByTestId('opt-vllm').check();
+  await page.getByTestId('backend-toggle-vllm').check();
   await page.getByTestId('opt-vllm-util').fill('0.4');
   let j = await preview();
   check('vLLM on adds deploy.vllm with the chosen memory utilization', j.deploy.vllm?.gpu_memory_utilization === 0.4 && j.deploy.vllm.lm_eval === undefined, JSON.stringify(j.deploy.vllm));
@@ -135,10 +135,10 @@ try {
   await page.getByTestId('opt-lmeval-tasks').fill('gsm8k, arc_easy');
   j = await preview();
   check('lm-eval adds its tasks (split and trimmed), limit and few-shot under deploy.vllm', JSON.stringify(j.deploy.vllm.lm_eval.tasks) === '["gsm8k","arc_easy"]' && j.deploy.vllm.lm_eval.limit === 50 && j.deploy.vllm.lm_eval.num_fewshot === 5, JSON.stringify(j.deploy.vllm.lm_eval));
-  await page.getByTestId('opt-vllm').uncheck();
+  await page.getByTestId('backend-toggle-vllm').uncheck();
   check('switching vLLM off removes lm-eval with it', (await preview()).deploy.vllm === undefined);
   // submit through the real server: the job is accepted and its stored spec carries the options
-  await page.getByTestId('opt-vllm').check();
+  await page.getByTestId('backend-toggle-vllm').check();
   await page.getByTestId('opt-lmeval').check();
   await page.getByTestId('model-path').fill(MODEL);
   await page.getByRole('button', { name: '提交作业' }).click();

@@ -726,6 +726,13 @@ export const api = {
   job: (id: string) => req<JobDetail>("GET", `/jobs/${id}`),
   events: (id: string, after = 0) => req<JobEvent[]>("GET", `/jobs/${id}/events?after_seq=${after}`),
   submit: (job: unknown) => req<{ job_id: string }>("POST", "/jobs", job),
+  /** Ask the planner whether a job would be accepted, without queueing it (POST /jobs?dry_run=1). Never throws on a refusal. */
+  dryRun: async (job: unknown): Promise<{ ok: boolean; problems: { field: string; message: string }[] }> => {
+    const res = await fetch("/api/v1/jobs?dry_run=1", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(job) });
+    if (res.ok) return { ok: true, problems: [] };
+    const data = await res.json().catch(() => null);
+    return { ok: false, problems: data?.problems ?? [{ field: "", message: data?.message ?? `${res.status} ${res.statusText}` }] };
+  },
   cancel: (id: string) => req<{ state: string }>("POST", `/jobs/${id}:cancel`),
   models: () => req<LibraryModel[]>("GET", "/models"),
   ggufFiles: () => req<{ path: string; name: string; dir: string; bytes: number }[]>("GET", "/gguf"),

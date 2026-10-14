@@ -54,7 +54,9 @@ const freePort = () => new Promise((res) => { const s = net.createServer().liste
 const runs = fs.mkdtempSync(path.join(os.tmpdir(), 'mqde-e2e-runs-'));
 const port = await freePort();
 const server = spawn(bin, ['serve', '--repo', repo, '--runs', runs, '--web', path.join(repo, 'web/dist'), '--python', path.join(here, 'fake_worker.py'),
-  '--gpus', '0', '--allow', os.tmpdir(), '--port', String(port)], { stdio: ['ignore', 'ignore', 'ignore'] });
+  '--gpus', '0', '--allow', os.tmpdir(), '--port', String(port)],
+  // the deploy step asks which backends are installed: answer from the stand-in script, not by inspecting this machine
+  { stdio: ['ignore', 'ignore', 'ignore'], env: { ...process.env, MQDE_SETUP_BACKEND_BIN: path.join(here, 'fake_setup_backend.py') } });
 const stop = () => { try { server.kill(); } catch { /* already gone */ } };
 process.on('exit', stop);
 const base = `http://127.0.0.1:${port}`;

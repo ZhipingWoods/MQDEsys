@@ -131,6 +131,10 @@ try {
   check('and restores the recipes that were picked before ticking it (not stuck on bf16)', JSON.stringify((await preview()).quant.recipe) === '["w4a16","w4a8","w2a16"]', JSON.stringify((await preview()).quant.recipe));
 
   // ---- 3. picking a deploy backend calls the real export-suggestion endpoint and pre-selects chips ----
+  // The planner's AWQ answer is the one for a 4-bit recipe. With the default 2-bit recipe in the job AWQ cannot be exported (the server
+  // refuses it), so narrow to the 4-bit recipe first; the default-recipes case is covered in backend_cards.mjs.
+  await page.getByTestId('recipe-w4a8').click();
+  await page.getByTestId('recipe-w2a16').click();
   await pickBackend(page, 'llamacpp');
   await page.waitForFunction(() => document.querySelector('[data-testid="export-suggestion"]')?.textContent?.includes('gguf'), null, { timeout: 10000 });
   check('backend=llamacpp suggests format gguf (from the real planner, not a frontend guess)', (await page.getByTestId('export-suggestion').innerText()).includes('gguf'));

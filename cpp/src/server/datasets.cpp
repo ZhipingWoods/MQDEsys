@@ -16,7 +16,8 @@ constexpr std::array<std::string_view, 5> kTextSuffixes = {".txt", ".md", ".json
 
 std::string lower_suffix(const fs::path& p) {
   std::string s = p.extension().string();
-  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  std::transform(s.begin(), s.end(), s.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return s;
 }
 
@@ -140,7 +141,11 @@ DatasetInfo inspect_lerobot_dataset(const std::string& path) {
 }
 
 Json to_json(const DatasetInfo& i) {
-  Json j = {{"kind", i.kind}, {"files", i.files}, {"files_capped", i.files_capped}, {"bytes", i.bytes}, {"usable", i.usable}};
+  Json j = {{"kind", i.kind},
+            {"files", i.files},
+            {"files_capped", i.files_capped},
+            {"bytes", i.bytes},
+            {"usable", i.usable}};
   Json formats = Json::object();
   for (const auto& [k, v] : i.formats) formats[k] = v;
   j["formats"] = formats;
