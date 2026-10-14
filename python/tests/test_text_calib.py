@@ -182,3 +182,48 @@ def test_a_file_with_nothing_in_it_is_not_counted_as_read(tmp_path):
     (tmp_path / "c_blank.jsonl").write_text(json.dumps({"text": ""}) + "\n" + json.dumps({"id": 2}))
     loaded = T.load_calib_text(str(tmp_path))
     assert loaded.files == 1 and loaded.text == "real " * 30
+
+
+# ---------------------------------------------------------------- text pasted into the form (calibration.custom_samples)
+def test_pasted_samples_are_the_calibration_text_and_nothing_else_is_read(monkeypatch):
+    monkeypatch.setattr(T, "wikitext_text", lambda split: pytest.fail("wikitext must not be read for pasted samples"))
+    info: dict = {}
+    got = T.calib_batches(CharTok(), 4, 40, seed=1, texts=["0123456789" * 15, "abcdefghij" * 15], info=info)
+    pool = "0123456789" * 15 + "\n\n" + "abcdefghij" * 15
+    assert all(w in pool for w in windows_text(got))
+    assert info["dataset"] == "custom_samples" and info["samples"] == 2 and info["chars"] == len(pool) and info["tokens"] == len(pool)
+    assert info["truncated"] is False
+
+
+def test_pasted_samples_win_over_a_named_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(T, "wikitext_text", lambda split: pytest.fail("not read"))
+    p = corpus(tmp_path, body="FILE" * 100)
+    got = T.calib_batches(CharTok(), 2, 20, source=str(p), texts=["pasted " * 30])
+    assert not any("F" in w for w in windows_text(got)), "the file was read although samples were pasted"
+
+
+def test_blank_pasted_samples_are_dropped_and_an_all_blank_paste_is_an_error():
+    info: dict = {}
+    T.calib_batches(CharTok(), 1, 10, texts=["", "   \n", "real text " * 10, "\t"], info=info)
+    assert info["samples"] == 1
+    with pytest.raises(ValueError, match="custom_samples"):
+        T.calib_batches(CharTok(), 1, 10, texts=["", "  ", "\n"])
+    with pytest.raises(ValueError, match="custom_samples"):
+        T.calib_batches(CharTok(), 1, 10, texts=[])
+
+
+def test_too_little_pasted_text_says_how_much_there_is():
+    with pytest.raises(ValueError, match=r"custom_samples.*40 tokens.*512"):
+        T.calib_batches(CharTok(), 1, 512, texts=["x" * 40])
+
+
+def test_pasted_text_is_cut_at_the_same_limit_as_a_corpus(monkeypatch):
+    monkeypatch.setattr(T, "MAX_CALIB_CHARS", 250)
+    info: dict = {}
+    T.calib_batches(CharTok(), 2, 20, texts=["a" * 200, "b" * 200, "c" * 200], info=info)
+    assert info["truncated"] is True and info["chars"] == 250 and info["samples"] == 2
+
+
+def test_pasted_samples_must_be_strings():
+    with pytest.raises(ValueError, match="custom_samples"):
+        T.calib_batches(CharTok(), 1, 10, texts=["ok " * 20, 5])  # type: ignore[list-item]

@@ -17,6 +17,13 @@ type Kind = "llm" | "vlm" | "vla";
 // what the wizard's form looks like for a domain: LLM (PPL), VLM (image+question -> answer) or VLA (the rest)
 const kindOf = (d: string): Kind => (LLM_LIKE.has(d) ? "llm" : d === "vlm" ? "vlm" : "vla");
 
+const PASTE_MAX = 2_000_000; // characters; the job reads at most 50 million, and a form is not the place for more than this
+
+/** Pasted calibration text -> samples: a blank line separates them; each is trimmed and the empty ones are dropped. */
+export function splitSamples(text: string): string[] {
+  return text.split(/\n\s*\n/).map((t) => t.trim()).filter((t) => t !== "");
+}
+
 export default function NewJobPage() {
   const nav = useNavigate();
   const domainsQ = useAsync(api.domains, []);
@@ -83,6 +90,10 @@ export default function NewJobPage() {
   const [calibText, setCalibText] = useState("wikitext-2-raw-v1:train"); // LLM: calibration text (built-in, or a server path)
   // a typed path the server cannot read blocks submitting; each picker reports whether its value is fine
   const [calibTextOk, setCalibTextOk] = useState(true);
+  // LLM: text pasted straight into the form instead of a dataset (calibration.custom_samples); a blank line separates samples
+  const [usePaste, setUsePaste] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+  const pasteSamples = splitSamples(pasteText);
   const [calibVisionOk, setCalibVisionOk] = useState(true);
   const [evalVisionOk, setEvalVisionOk] = useState(true);
   const [maxNewTokens, setMaxNewTokens] = useState(24); // VLM: longest answer generated per question
@@ -119,7 +130,7 @@ export default function NewJobPage() {
   const backendEnv = useAsync(() => api.backendEnvs().then((r) => r.backends), []);
   const kind = kindOf(domain);
   // only the pickers this kind shows count; a deploy job (B2) has no calibration data at all
-  const dataOk = artifact ? true : kind === "llm" ? calibTextOk : calibVisionOk && evalVisionOk;
+  const dataOk = artifact ? true : kind === "llm" ? (usePaste ? pasteSamples.length > 0 : calibTextOk) : calibVisionOk && evalVisionOk;
   const currentDomain = domainsQ.data?.find((d) => d.id === domain);
   const blocked = currentDomain != null && currentDomain.pipeline_status !== "implemented";
 
@@ -264,7 +275,7 @@ export default function NewJobPage() {
         if (!det.job) throw new Error(`作业 ${fromJob} 没有 job.yaml，无法派生`);
         const d = deriveFromJob(det.job, fromStep, {
           domain, name, model, picked, algorithm, groupSizeOverride, action, actStatic, kv, kvMethod, keepEnds, downBits,
-          inheritedRules: [], nCalib, seqLen, dataset, evalDataset, calibText, nEval, windows, maxNewTokens, attribution, quantizeOnly, quantDevice,
+          inheritedRules: [], nCalib, seqLen, dataset, evalDataset, calibText, calibPaste: pasteText, nEval, windows, maxNewTokens, attribution, quantizeOnly, quantDevice,
           evalDevice, hw, deployBackend, useVllm, vllmUtil, useSglang, sglangMem, useSweep, sweepLevels, sweepBudget, useLmEval, lmTasks, lmLimit, lmShots, gguf,
           exportFmts, sens, probe, probeExact,
         });
@@ -274,7 +285,7 @@ export default function NewJobPage() {
         setAlgorithm(d.algorithm); setGroupSizeOverride(d.groupSizeOverride); setAdvancedOpen(d.groupSizeOverride !== "");
         setAction(d.action); setActStatic(d.actStatic); setKv(d.kv); setKvMethod(d.kvMethod); setKeepEnds(d.keepEnds);
         setDownBits(d.downBits); setInheritedRules(d.inheritedRules); setNCalib(d.nCalib); setSeqLen(d.seqLen);
-        setDataset(d.dataset); setEvalDataset(d.evalDataset); setCalibText(d.calibText); setNEval(d.nEval); setWindows(d.windows); setMaxNewTokens(d.maxNewTokens);
+        setDataset(d.dataset); setEvalDataset(d.evalDataset); setCalibText(d.calibText); setUsePaste(d.calibPaste !== ""); setPasteText(d.calibPaste); setNEval(d.nEval); setWindows(d.windows); setMaxNewTokens(d.maxNewTokens);
         setAttribution(d.attribution); setQuantizeOnly(d.quantizeOnly); setQuantDevice(d.quantDevice); setEvalDevice(d.evalDevice);
         setHw(d.hw); setDeployBackend(d.deployBackend); setUseVllm(d.useVllm); setVllmUtil(d.vllmUtil); setUseSglang(d.useSglang);
         setSglangMem(d.sglangMem); setUseSweep(d.useSweep); setSweepLevels(d.sweepLevels); setSweepBudget(d.sweepBudget); setUseLmEval(d.useLmEval); setLmTasks(d.lmTasks); setLmLimit(d.lmLimit); setLmShots(d.lmShots);
@@ -422,7 +433,7 @@ export default function NewJobPage() {
             ...(groupSizeOverride !== "" ? { group_size: Number(groupSizeOverride) } : {}),
           },
           ...(quantDevice !== evalDevice ? { quant_device: quantDevice } : {}),
-          calibration: { dataset: calibText, n_samples: nCalib, seq_len: seqLen },
+          calibration: { dataset: calibText, n_samples: nCalib, seq_len: seqLen, ...(usePaste && pasteSamples.length ? { custom_samples: pasteSamples } : {}) },
           evaluation: {
             dataset: "wikitext-2-raw-v1:test",
             seq_len: seqLen,
@@ -840,7 +851,7 @@ export default function NewJobPage() {
         ) : (
           <>
             <div className="form-row">
-              <DatasetPicker kind="text" role="calibration" label="校准数据" value={calibText} onChange={setCalibText} onValid={setCalibTextOk} testid="calib-dataset" />
+              <DatasetPicker kind="text" role="calibration" label={usePaste ? "校准数据（下面粘贴的文本优先，这里暂不用）" : "校准数据"} value={calibText} onChange={setCalibText} onValid={setCalibTextOk} testid="calib-dataset" />
               <div className="field">
                 <label>校准样本（窗口数）</label>
                 <input type="number" value={nCalib} min={1} onChange={(e) => setNCalib(Number(e.target.value))} data-testid="calib-n" />
@@ -853,6 +864,33 @@ export default function NewJobPage() {
                 <label>PPL 窗口数（wikitext-2 test）</label>
                 <input type="number" value={windows} min={1} onChange={(e) => setWindows(Number(e.target.value))} />
               </div>
+            </div>
+            <div data-testid="calib-paste-section" style={{ marginBottom: 8 }}>
+              <label className="small">
+                <input type="checkbox" checked={usePaste} onChange={(e) => setUsePaste(e.target.checked)} data-testid="calib-paste-toggle" /> 直接粘贴校准文本（代替上面的数据集）
+              </label>
+              {usePaste && (
+                <>
+                  <textarea
+                    value={pasteText}
+                    maxLength={PASTE_MAX}
+                    rows={8}
+                    style={{ width: "100%", fontFamily: "inherit" }}
+                    placeholder={"把要校准的文字贴在这里。空一行分成一段（一个样本）；窗口随机取自拼接后的全文。"}
+                    onChange={(e) => setPasteText(e.target.value)}
+                    data-testid="calib-paste"
+                  />
+                  <p className={`note ${pasteSamples.length ? "" : "warn"}`} data-testid="calib-paste-status">
+                    {pasteSamples.length ? `✓ ${pasteSamples.length} 段 · ${pasteText.length} 字符` : "填一点文字：全是空白不能校准。"}
+                    {pasteText.length >= PASTE_MAX && "（已到上限，多出的不会收）"}
+                  </p>
+                  {pasteSamples.length > 0 && pasteSamples.join("\n\n").length / 3 < seqLen + 2 && (
+                    <p className="note warn" data-testid="calib-paste-short">
+                      可能太短：一个窗口要 {seqLen + 2} 个 token，约 {(seqLen + 2) * 3} 个字符起（英文）。太短的话作业在数据准备阶段失败，并说明有多少 token。
+                    </p>
+                  )}
+                </>
+              )}
             </div>
             <div className="form-row">
               <div className="field">
@@ -1002,7 +1040,7 @@ export default function NewJobPage() {
       )}
       <div className="card" style={{ display: show(6) ? undefined : "none" }} data-testid="step-confirm">
         <h2>⑥ 确认提交 · JobSpec 预览</h2>
-        {!singlePage && <StepSummary rows={[["领域 / 模型", `${domain.toUpperCase()} · ${model}`], ["算法 / 配方", artifact ? `沿用父作业产物 ${artifact.format === "gguf" ? `GGUF ${artifact.type}` : `${artifact.recipe} · ${artifact.format}`}` : `${algorithm === "recipe" ? "按配方默认" : algorithm} · ${picked.map((x) => x.toUpperCase()).join("、")}`], ["校准数据", kind === "llm" ? `${calibText === "wikitext-2-raw-v1:train" ? "wikitext-2 train" : calibText} · ${nCalib} 段 × ${seqLen}` : `${dataset} · ${nCalib} 样本`], ["评估", kind === "llm" ? `wikitext-2 · ${windows} 窗口 × ${seqLen}${quantizeOnly ? " · 仅量化不评测" : ""}` : `${evalDataset} · ${nEval} 样本${kind === "vlm" ? ` · 最长回答 ${maxNewTokens}` : ""}`], ["设备", kind === "llm" ? (artifact ? (isGguf ? evalDevice.toUpperCase() : "GPU 池") : `量化 ${quantDevice.toUpperCase()} · 评估 ${evalDevice.toUpperCase()}`) : "GPU 池"], ["部署", kind === "llm" && chosenBackends.length ? `${chosenBackends.join(" + ")}${exportFmts.length ? ` · 导出 ${exportFmts.join("/")}` : ""}${gguf.length ? ` · GGUF ${gguf.join("/")}` : ""}` : "不部署"]]} />}
+        {!singlePage && <StepSummary rows={[["领域 / 模型", `${domain.toUpperCase()} · ${model}`], ["算法 / 配方", artifact ? `沿用父作业产物 ${artifact.format === "gguf" ? `GGUF ${artifact.type}` : `${artifact.recipe} · ${artifact.format}`}` : `${algorithm === "recipe" ? "按配方默认" : algorithm} · ${picked.map((x) => x.toUpperCase()).join("、")}`], ["校准数据", kind === "llm" ? `${usePaste && pasteSamples.length ? `粘贴的文本 ${pasteSamples.length} 段` : calibText === "wikitext-2-raw-v1:train" ? "wikitext-2 train" : calibText} · ${nCalib} 段 × ${seqLen}` : `${dataset} · ${nCalib} 样本`], ["评估", kind === "llm" ? `wikitext-2 · ${windows} 窗口 × ${seqLen}${quantizeOnly ? " · 仅量化不评测" : ""}` : `${evalDataset} · ${nEval} 样本${kind === "vlm" ? ` · 最长回答 ${maxNewTokens}` : ""}`], ["设备", kind === "llm" ? (artifact ? (isGguf ? evalDevice.toUpperCase() : "GPU 池") : `量化 ${quantDevice.toUpperCase()} · 评估 ${evalDevice.toUpperCase()}`) : "GPU 池"], ["部署", kind === "llm" && chosenBackends.length ? `${chosenBackends.join(" + ")}${exportFmts.length ? ` · 导出 ${exportFmts.join("/")}` : ""}${gguf.length ? ` · GGUF ${gguf.join("/")}` : ""}` : "不部署"]]} />}
         <pre className="log" style={{ height: "auto", maxHeight: 240 }}>
           {JSON.stringify(job, null, 2)}
         </pre>

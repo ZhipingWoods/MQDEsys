@@ -41,6 +41,7 @@ function calibHint(rep: LLMJobReport): string | undefined {
   const c = rep.data?.calib;
   if (!c) return undefined;
   if (c.tokens == null) return c.dataset;
+  if (c.samples != null) return `${c.samples} 段粘贴的文本 · ${c.tokens} token${c.truncated ? "（已截断）" : ""}`;
   return `${c.dataset.split("/").filter(Boolean).slice(-2).join("/")} · ${c.files ?? "?"} 个文件 · ${c.tokens} token${c.truncated ? "（已截断）" : ""}`;
 }
 

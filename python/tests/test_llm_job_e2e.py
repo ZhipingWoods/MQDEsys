@@ -348,7 +348,7 @@ def test_the_job_calibrates_on_the_named_source_and_records_what_it_read(
 ) -> None:
     seen: dict[str, object] = {}
 
-    def fake(tok, n, s, seed=0, source="?", info=None):  # type: ignore[no-untyped-def]
+    def fake(tok, n, s, seed=0, source="?", info=None, texts=None):  # type: ignore[no-untyped-def]
         seen["source"] = source
         if info is not None:
             info.update(dataset=source, files=3, chars=1234, tokens=987, truncated=False)
@@ -441,3 +441,65 @@ def test_the_report_names_each_window_with_a_text_preview_when_the_tokenizer_can
 def test_no_previews_when_the_tokenizer_cannot_decode(job_env: None, tmp_path: Path) -> None:
     rep = LLMJob(spec(tmp_path), job_dir=tmp_path / "j").run()
     assert "previews" not in rep["data"]["eval"]
+
+
+# ---------------------------------------------------------------- text pasted into the form
+def test_the_spec_reads_custom_samples_and_refuses_anything_but_a_list_of_strings(tmp_path: Path) -> None:
+    base = {"model": {"path": "<tiny>"}, "quant": {"recipe": ["w4a16"]}}
+    y = tmp_path / "j.yaml"
+    y.write_text(yaml.safe_dump({**base, "calibration": {"custom_samples": ["alpha " * 20, "beta " * 20]}}))
+    assert LLMJobSpec.from_yaml(y).calib_texts == ["alpha " * 20, "beta " * 20]
+    y.write_text(yaml.safe_dump(base))
+    assert LLMJobSpec.from_yaml(y).calib_texts is None
+    y.write_text(yaml.safe_dump({**base, "calibration": {"custom_samples": []}}))
+    assert LLMJobSpec.from_yaml(y).calib_texts is None, "an empty list is the same as none: the named source is used"
+    for bad in ("one long string", [1, 2], {"a": "b"}):
+        y.write_text(yaml.safe_dump({**base, "calibration": {"custom_samples": bad}}))
+        with pytest.raises(ValueError, match="custom_samples"):
+            LLMJobSpec.from_yaml(y)
+
+
+def test_the_job_passes_pasted_samples_through_and_records_them(job_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake(tok, n, s, seed=0, source="?", info=None, texts=None):  # type: ignore[no-untyped-def]
+        seen["texts"], seen["source"] = texts, source
+        if info is not None:
+            info.update(dataset="custom_samples", samples=2, chars=300, tokens=290, truncated=False)
+        return [torch.randint(0, VOCAB, (1, s)) for _ in range(n)]
+
+    monkeypatch.setattr(llm_job, "calib_batches", fake)
+    rep = LLMJob(spec(tmp_path, calib_texts=["a " * 50, "b " * 50]), job_dir=tmp_path / "j").run()
+    assert seen["texts"] == ["a " * 50, "b " * 50]
+    assert rep["data"]["calib"] == {
+        "dataset": "custom_samples", "samples": 2, "chars": 300, "tokens": 290, "truncated": False, "n": 4, "seq_len": 32,
+    }
+
+
+def test_pasted_text_changes_what_gptq_learns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_hf(path: str, device: str = "cpu", **kw: object):  # type: ignore[no-untyped-def]
+        ad = _tiny.tiny()
+        ad.path = path
+        ad.tokenizer = _CharTok()
+        return ad
+
+    monkeypatch.setattr(llm_job, "HFCausalLM", fake_hf)
+    monkeypatch.setattr(llm_job, "eval_ids", lambda tok: torch.randint(0, VOCAB, (4096,), generator=torch.Generator().manual_seed(9)))
+    ppl = {}
+    texts = {"a": "the quick brown fox jumps over the lazy dog. " * 80, "b": "".join(chr(33 + (i * 7919) % 90) for i in range(3600))}
+    for name, text in texts.items():
+        rep = LLMJob(spec(tmp_path, algorithm="gptq", calib_texts=[text], calib_seq_len=64), job_dir=tmp_path / f"j{name}").run()
+        assert rep["data"]["calib"]["dataset"] == "custom_samples" and rep["data"]["calib"]["samples"] == 1
+        ppl[name] = rep["recipes"]["W4A16"]["eval"]["fake_quant_wo_kv"]["ppl"]
+    assert ppl["a"] != ppl["b"], "GPTQ gave the same result on two different pasted texts: they were ignored"
+
+
+def test_blank_pasted_text_fails_the_job_at_calib_prepare(job_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from mqde.data import text as T
+
+    monkeypatch.setattr(llm_job, "calib_batches", T.calib_batches)
+    job = LLMJob(spec(tmp_path, calib_texts=["  ", "\n"]), job_dir=tmp_path / "j")
+    with pytest.raises(ValueError, match="custom_samples"):
+        job.run()
+    rep = json.loads((tmp_path / "j" / "report.json").read_text())
+    assert [x["stage"] for x in rep["stages"] if x["status"] == "failed"] == ["calib_prepare"]

@@ -294,6 +294,30 @@ std::vector<Problem> validate_jobspec(const Json& job) {
   if (mtype != "vla" && mtype != "llm" && mtype != "vlm")
     add(out, "/model/type", fmt::format("'{}' is not 'llm', 'vlm' or 'vla'", mtype), "");
 
+  // calibration.custom_samples (text pasted into the form): only an LLM job reads it, and it has to be a list of strings with some
+  // text in them. An empty list means "not given" (the named source is used).
+  if (const auto cs = job.value(Json::json_pointer("/calibration/custom_samples"), Json()); !cs.is_null()) {
+    if (mtype != "llm") {
+      add(out, "/calibration/custom_samples", fmt::format("{} jobs do not read pasted calibration text", mtype),
+          "remove it, or use a model of type llm");
+    } else if (!cs.is_array()) {
+      add(out, "/calibration/custom_samples", "must be a list of strings", "send an array of text samples");
+    } else {
+      bool any_text = false, all_strings = true;
+      for (size_t i = 0; i < cs.size(); ++i) {
+        if (!cs[i].is_string()) {
+          add(out, "/calibration/custom_samples", fmt::format("entry #{} is not a string (must be a list of strings)", i), "");
+          all_strings = false;
+          break;
+        }
+        const auto t = cs[i].get<std::string>();
+        any_text |= t.find_first_not_of(" \t\r\n") != std::string::npos;
+      }
+      if (all_strings && !cs.empty() && !any_text)
+        add(out, "/calibration/custom_samples", "every sample is blank", "paste some text, or clear the field");
+    }
+  }
+
   // domain (T-1301/T-1305): optional today (every existing caller keys off model.type instead), but when
   // present it must name a registered domain whose pipeline actually exists -- rejecting here, before
   // JobRunner ever picks a Python module to launch, is how a domain with no backend yet (vlm/world/ewm)

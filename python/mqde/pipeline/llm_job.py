@@ -55,6 +55,7 @@ class LLMJobSpec:
     calib_samples: int = 32
     calib_seq_len: int = 512
     calib_dataset: str = BUILTIN_CALIB  # wikitext-2 train, or a text file / directory (mqde.data.text)
+    calib_texts: list[str] | None = None  # text pasted into the form (calibration.custom_samples); wins over calib_dataset
     eval_seq_len: int = 512
     eval_windows: int = 40
     device: str = "cpu"  # deploy.device: shared fallback for quant_device/eval_device when they are not set
@@ -122,6 +123,7 @@ class LLMJobSpec:
             calib_samples=int(c.get("n_samples", 32)),
             calib_seq_len=int(c.get("seq_len", 512)),
             calib_dataset=str(c.get("dataset") or BUILTIN_CALIB),
+            calib_texts=_custom_samples(c.get("custom_samples")),
             eval_seq_len=int(e.get("seq_len", 512)),
             eval_windows=int(e.get("max_windows", 40)),
             device=dep_device,
@@ -572,11 +574,12 @@ class LLMJob:
         ad = self._stage("inspect", lambda: HFCausalLM(s.model_path, device=s.quant_device))
         self.report["model"] = {"path": s.model_path, "blocks": len(ad.get_blocks()), "linears": len(ad.qmodel.units)}
         calib_info: dict[str, Any] = {}
-        prep = lambda: (calib_batches(ad.tokenizer, s.calib_samples, s.calib_seq_len, s.seed, source=s.calib_dataset, info=calib_info),  # noqa: E731
+        prep = lambda: (calib_batches(ad.tokenizer, s.calib_samples, s.calib_seq_len, s.seed, source=s.calib_dataset, info=calib_info,  # noqa: E731
+                                      texts=s.calib_texts),
                         eval_ids(ad.tokenizer))
-        cal, ids = self._stage("calib_prepare", prep, s.calib_dataset)
+        cal, ids = self._stage("calib_prepare", prep, "custom_samples" if s.calib_texts else s.calib_dataset)
         # the default keeps its familiar label; a named source is reported as given, with what was actually read from it
-        calib_report = {"dataset": "wikitext-2 train"} if s.calib_dataset == BUILTIN_CALIB else calib_info
+        calib_report = {"dataset": "wikitext-2 train"} if s.calib_dataset == BUILTIN_CALIB and not s.calib_texts else calib_info
         self.report["data"] = {"calib": {**calib_report, "n": len(cal), "seq_len": s.calib_seq_len},
                                "eval": {"dataset": "wikitext-2 test", "windows": s.eval_windows, "seq_len": s.eval_seq_len}}
         if previews := self._window_previews(ad, ids):
@@ -688,6 +691,15 @@ def _recipe_kv(name: str) -> QuantSpec:
     from mqde import core
 
     return QuantSpec.from_dict(core.load_recipe(name)["kv"])
+
+
+def _custom_samples(v: Any) -> list[str] | None:
+    """calibration.custom_samples: None or [] means \"not given\"; anything but a list of strings is an error."""
+    if v is None or v == []:
+        return None
+    if not isinstance(v, list) or not all(isinstance(t, str) for t in v):
+        raise ValueError("calibration.custom_samples must be a list of strings")
+    return v
 
 
 def main() -> None:

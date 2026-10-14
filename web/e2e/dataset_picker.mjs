@@ -55,11 +55,15 @@ const mkjob = (id, yaml) => { const d = path.join(runs, id); fs.mkdirSync(d);
   fs.writeFileSync(path.join(d, 'report.json'), JSON.stringify(rep));
   fs.writeFileSync(path.join(d, 'events.jsonl'), JSON.stringify({ type: 'job_state', state: 'SUCCEEDED', seq: 1, ts: 1 }) + '\n');
   fs.writeFileSync(path.join(d, 'job.yaml'), yaml.join('\n') + '\n'); };
-const LLMJOB = '20261014-000000-dsllm', VLMJOB = '20261014-000000-dsvlm', VLMGONE = '20261014-000000-dsgone';
+const LLMJOB = '20261014-000000-dsllm', VLMJOB = '20261014-000000-dsvlm', VLMGONE = '20261014-000000-dsgone', PASTED = '20261014-000000-dspaste';
 mkjob(LLMJOB, ['metadata: {name: ds-llm}', `model: {type: llm, path: ${MODEL}}`, 'quant: {recipe: [w4a16]}', `calibration: {dataset: ${CORPUS}, n_samples: 8, seq_len: 128}`,
   'evaluation: {dataset: wikitext-2-raw-v1:test, seq_len: 128, max_windows: 4}', `output_dir: ${runs}`]);
 mkjob(VLMJOB, ['metadata: {name: ds-vlm}', `model: {type: vlm, path: ${MODEL}}`, 'quant: {recipe: [w4a16]}', 'calibration: {dataset: synthetic, n_samples: 8}',
   `evaluation: {dataset: ${LEROBOT}, n_samples: 6, max_new_tokens: 12}`, `output_dir: ${runs}`]);
+// a job that was calibrated on text pasted into the form
+mkjob(PASTED, ['metadata: {name: ds-pasted}', `model: {type: llm, path: ${MODEL}}`, 'quant: {recipe: [w4a16]}',
+  'calibration: {dataset: wikitext-2-raw-v1:train, n_samples: 8, seq_len: 128, custom_samples: ["first pasted paragraph " , "second pasted paragraph"]}',
+  'evaluation: {dataset: wikitext-2-raw-v1:test, seq_len: 128, max_windows: 4}', `output_dir: ${runs}`]);
 mkjob(VLMGONE, ['metadata: {name: ds-gone}', `model: {type: vlm, path: ${MODEL}}`, 'quant: {recipe: [w4a16]}', 'calibration: {dataset: synthetic, n_samples: 8}',
   `evaluation: {dataset: ${path.join(root, 'gone')}, n_samples: 6, max_new_tokens: 12}`, `output_dir: ${runs}`]);
 
@@ -225,6 +229,55 @@ try {
   await until(() => /✗/.test(document.querySelector('[data-testid="eval-dataset-path-status"]')?.textContent ?? ''));
   check('deriving a job whose data has since gone: the missing path is shown and blocks submitting, not silently swapped for synthetic',
     (await page.getByTestId('eval-dataset-path').inputValue()) === path.join(root, 'gone') && await submit.isDisabled() && (await page.getByTestId('eval-dataset-path-fellback').count()) === 0, await status('eval-dataset-path-status'));
+
+  // ---- text pasted straight into the form
+  await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
+  await page.getByTestId('domain-tab-llm').click();
+  await page.getByTestId('model-path').fill(MODEL);
+  await page.getByTestId('calib-paste-toggle').waitFor({ timeout: 10000 });
+  check('LLM: "paste the text" is offered, off by default, and the job has no custom_samples', !(await page.getByTestId('calib-paste-toggle').isChecked()) && (await page.getByTestId('calib-paste').count()) === 0 && (await preview()).calibration.custom_samples === undefined);
+  await page.getByTestId('calib-paste-toggle').check();
+  check('turning it on shows a box; empty, it says so and blocks submitting', /填一点文字/.test(await status('calib-paste-status')) && await submit.isDisabled());
+  await page.getByTestId('calib-paste').fill('   \n\n  \n');
+  check('only blanks is still "no text": blocked', /填一点文字/.test(await status('calib-paste-status')) && await submit.isDisabled());
+  const p1 = 'The first paragraph of the text to calibrate on, several words long.', p2 = 'A second paragraph, wrapped\nonto a second line, after one blank line.', p3 = 'And a third.';
+  await page.getByTestId('calib-paste').fill(`${p1}\n\n${p2}\n   \n\n${p3}\n`);
+  await until(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.calibration?.custom_samples?.length === 3; } catch { return false; } });
+  check('a blank line separates samples (however many, with or without spaces on them) and a single line break does not; each is trimmed: exactly three, in order', JSON.stringify((await preview()).calibration.custom_samples) === JSON.stringify([p1, p2, p3]), JSON.stringify((await preview()).calibration.custom_samples));
+  check('the box is capped at two million characters', (await page.getByTestId('calib-paste').getAttribute('maxlength')) === '2000000');
+  check('the page counts them and submitting is possible', /✓ 3 段/.test(await status('calib-paste-status')) && await submit.isEnabled());
+  check('a short text is flagged as possibly too short for one window', (await page.getByTestId('calib-paste-short').count()) === 1 && /可能太短/.test(await status('calib-paste-short')));
+  await page.getByTestId('calib-paste').fill('word '.repeat(2000));
+  await page.waitForTimeout(150);
+  check('a text long enough for a window has no such warning', (await page.getByTestId('calib-paste-short').count()) === 0);
+  // an unusable dataset path must not block a job that does not use it
+  await page.getByTestId('calib-dataset-select').selectOption({ label: '本地文件或目录…' });
+  await page.getByTestId('calib-dataset').fill(path.join(root, 'nope'));
+  await page.waitForTimeout(700);
+  check('a bad dataset path does not block submitting while pasted text is what gets used (and the picker says it is not used)', await submit.isEnabled() && /粘贴的文本优先/.test(await page.getByTestId('calib-dataset-picker').innerText()));
+  await page.getByTestId('calib-dataset-select').selectOption('wikitext-2-raw-v1:train');
+  await page.getByTestId('calib-paste').fill(`${p1}\n\n${p2}`);
+  await submit.click();
+  await page.waitForURL(/\/jobs\//, { timeout: 15000 });
+  const yp = fs.readFileSync(path.join(runs, page.url().split('/jobs/')[1], 'job.yaml'), 'utf8');
+  check('the server accepted it and stored the samples', yp.includes('custom_samples') && yp.includes('A second paragraph'), yp.split('\n').filter((l) => /custom_samples|paragraph/.test(l)).join(' | '));
+  { const r = await fetch(`${base}/api/v1/jobs?dry_run=1`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: { type: 'llm', path: MODEL }, quant: { recipe: ['w4a16'], algorithm: 'rtn' }, calibration: { custom_samples: ['  ', ''] } }) }), b = await r.json();
+    check('the server refuses all-blank samples, naming the field', r.status === 400 && b.problems?.[0]?.field === '/calibration/custom_samples' && /blank/.test(b.message), JSON.stringify(b).slice(0, 160)); }
+  { const r = await fetch(`${base}/api/v1/jobs?dry_run=1`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: { type: 'vlm', path: MODEL }, quant: { recipe: ['w4a16'] }, calibration: { dataset: 'synthetic', custom_samples: ['text'] } }) }), b = await r.json();
+    check('and refuses pasted text for a job type that would ignore it', r.status === 400 && b.problems?.some((x) => x.field === '/calibration/custom_samples'), JSON.stringify(b).slice(0, 160)); }
+  await page.goto(`${base}/new?mode=all&from=${PASTED}&step=eval`, { waitUntil: 'load' });
+  await page.getByTestId('derive-banner').waitFor({ timeout: 10000 });
+  await page.getByTestId('calib-paste').waitFor({ timeout: 10000 });
+  check('deriving from a job calibrated on pasted text: the box is on and holds that text', (await page.getByTestId('calib-paste-toggle').isChecked()) && (await page.getByTestId('calib-paste').inputValue()) === 'first pasted paragraph \n\nsecond pasted paragraph', JSON.stringify(await page.getByTestId('calib-paste').inputValue()));
+  await until(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.calibration?.custom_samples?.length === 2; } catch { return false; } });
+  check('and the new job carries the same two samples, trimmed (the stored first one had a trailing space)', JSON.stringify((await preview()).calibration.custom_samples) === JSON.stringify(['first pasted paragraph', 'second pasted paragraph']));
+  await page.getByTestId('calib-paste-toggle').uncheck();
+  await page.waitForTimeout(200);
+  check('turning it off drops custom_samples from the job (the text stays in the box if it is turned on again)', (await preview()).calibration.custom_samples === undefined && await submit.isEnabled());
+  await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
+  await page.getByTestId('domain-tab-vlm').click();
+  await page.getByTestId('dataset-path-select').waitFor({ timeout: 10000 });
+  check('VLM jobs do not offer pasted text (they would ignore it)', (await page.getByTestId('calib-paste-toggle').count()) === 0);
 
   // ---- an older server (before /api/v1/datasets): it cannot be asked, so nothing is pre-checked, but nothing is blocked either
   let inspectCalls = 0;

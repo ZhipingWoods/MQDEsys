@@ -45,6 +45,7 @@ class CalibText:
     files: int
     chars: int
     truncated: bool
+    samples: int | None = None  # set when the text was pasted into the form rather than read from a source
 
 
 def _record_text(rec: Any) -> str | None:
@@ -128,18 +129,50 @@ def load_calib_text(source: str = BUILTIN_CALIB) -> CalibText:
     return CalibText("\n\n".join(parts), used, chars, truncated)
 
 
+def pasted_calib_text(texts: list[str]) -> CalibText:
+    """The calibration corpus from text pasted into the form (calibration.custom_samples): blank samples are dropped, the same
+    character limit as for a corpus applies."""
+    if not all(isinstance(t, str) for t in texts):
+        raise ValueError("calibration.custom_samples must be a list of strings")
+    parts: list[str] = []
+    chars, truncated = 0, False
+    for t in texts:
+        if not t.strip():
+            continue
+        sep = 2 if parts else 0
+        room = MAX_CALIB_CHARS - chars - sep
+        if room <= 0:
+            truncated = True
+            break
+        if len(t) > room:
+            t, truncated = t[:room], True
+        parts.append(t)
+        chars += len(t) + sep
+        if truncated:
+            break
+    if not parts:
+        raise ValueError("calibration.custom_samples has no text in it (every sample is blank)")
+    return CalibText("\n\n".join(parts), 0, chars, truncated, samples=len(parts))
+
+
 def calib_batches(tokenizer: Any, n_samples: int = 32, seq_len: int = 512, seed: int = 0, source: str = BUILTIN_CALIB,
-                  info: dict[str, Any] | None = None) -> list[torch.Tensor]:
+                  info: dict[str, Any] | None = None, texts: list[str] | None = None) -> list[torch.Tensor]:
     """n_samples random windows of seq_len tokens from the calibration text (GPTQ/AWQ convention).
 
-    `info`, when given, is filled with what was read: dataset, files, chars, tokens, truncated."""
-    corpus = load_calib_text(source)
+    `texts` (text pasted into the form) wins over `source`. `info`, when given, is filled with what was read: dataset, files (or samples
+    for pasted text), chars, tokens, truncated."""
+    corpus = pasted_calib_text(texts) if texts is not None else load_calib_text(source)
+    name = "custom_samples" if texts is not None else source
     ids = tokenizer(corpus.text, return_tensors="pt").input_ids[0]
     if info is not None:
-        info.update(dataset=source, files=corpus.files, chars=corpus.chars, tokens=int(ids.numel()), truncated=corpus.truncated)
+        info.update(dataset=name, chars=corpus.chars, tokens=int(ids.numel()), truncated=corpus.truncated)
+        if corpus.samples is not None:
+            info["samples"] = corpus.samples
+        else:
+            info["files"] = corpus.files
     if ids.numel() < seq_len + 2:
         raise ValueError(
-            f"calibration data '{source}' has {ids.numel()} tokens, fewer than one window of {seq_len} (needs at least {seq_len + 2})"
+            f"calibration data '{name}' has {ids.numel()} tokens, fewer than one window of {seq_len} (needs at least {seq_len + 2})"
         )
     g = torch.Generator().manual_seed(seed)
     starts = torch.randint(0, ids.numel() - seq_len - 1, (n_samples,), generator=g)

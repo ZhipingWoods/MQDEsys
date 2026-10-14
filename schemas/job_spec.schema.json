@@ -81,7 +81,7 @@
         "n_samples": { "type": "integer" },
         "seq_len": { "type": "integer" },
         "custom_samples": {
-          "description": "T-1304: free-form calibration text the user typed instead of picking a known dataset. Not yet consumed by any pipeline stage (see T-1304's acceptance).",
+          "description": "Calibration text pasted into the form instead of naming a dataset (LLM jobs only; the executor reads it in mqde.data.text.calib_batches and it wins over calibration.dataset). A list of strings, each a sample; blank ones are dropped and at least one must have text. planner::validate_jobspec checks this.",
           "type": "array",
           "items": { "type": "string" }
         }

@@ -451,7 +451,7 @@ export interface LLMJobReport {
   model?: { path: string; blocks: number; linears: number };
   data?: {
     /** `files` / `chars` / `tokens` / `truncated` say what was read when the calibration data is a user-named file or directory */
-    calib: { dataset: string; n: number; seq_len: number; files?: number; chars?: number; tokens?: number; truncated?: boolean };
+    calib: { dataset: string; n: number; seq_len: number; files?: number; samples?: number; chars?: number; tokens?: number; truncated?: boolean };
     /** `previews`: the first words of each PPL window, in window order (absent when the tokenizer could not decode) */
     eval: { dataset: string; windows: number; seq_len: number; previews?: string[] };
   };

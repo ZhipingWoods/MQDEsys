@@ -347,6 +347,51 @@ TEST(planner_validate_jobspec, rtn_never_needs_calibration_samples) {
   EXPECT_TRUE(validate_jobspec(job).empty());
 }
 
+namespace {
+Json llm_with_samples(Json samples) {
+  return {{"model", {{"type", "llm"}}},
+          {"quant", {{"recipe", Json::array({"w4a16"})}, {"algorithm", "rtn"}}},
+          {"calibration", {{"custom_samples", std::move(samples)}}}};
+}
+}  // namespace
+
+TEST(planner_validate_jobspec, pasted_calibration_samples_are_a_list_of_text) {
+  EXPECT_TRUE(validate_jobspec(llm_with_samples(Json::array({"some real text to calibrate on", "and a second sample"}))).empty());
+  EXPECT_TRUE(validate_jobspec(llm_with_samples(Json::array())).empty()) << "an empty list is the same as not giving any";
+}
+
+TEST(planner_validate_jobspec, pasted_samples_that_are_not_a_list_of_strings_are_refused_with_the_field) {
+  for (const Json& bad : {Json("one long string"), Json(5), Json::object({{"a", "b"}})}) {
+    auto p = validate_jobspec(llm_with_samples(bad));
+    ASSERT_EQ(p.size(), 1u) << bad.dump();
+    EXPECT_EQ(p[0].field, "/calibration/custom_samples");
+    EXPECT_NE(p[0].message.find("list of strings"), std::string::npos) << p[0].message;
+  }
+  auto p = validate_jobspec(llm_with_samples(Json::array({"fine text", 7, "also fine"})));
+  ASSERT_EQ(p.size(), 1u);
+  EXPECT_NE(p[0].message.find("#1"), std::string::npos) << "names which entry (counting from 0): " << p[0].message;
+}
+
+TEST(planner_validate_jobspec, pasted_samples_that_are_all_blank_are_refused) {
+  auto p = validate_jobspec(llm_with_samples(Json::array({"", "   ", "\n\t"})));
+  ASSERT_EQ(p.size(), 1u);
+  EXPECT_EQ(p[0].field, "/calibration/custom_samples");
+  EXPECT_NE(p[0].message.find("blank"), std::string::npos) << p[0].message;
+  EXPECT_TRUE(validate_jobspec(llm_with_samples(Json::array({"", "one real one", " "}))).empty()) << "blank ones among real ones are dropped later";
+}
+
+TEST(planner_validate_jobspec, pasted_samples_are_only_for_llm_jobs) {
+  for (const char* type : {"vla", "vlm"}) {
+    Json job = {{"model", {{"type", type}}},
+                {"quant", {{"recipe", Json::array({"w4a16"})}}},
+                {"calibration", {{"dataset", "synthetic"}, {"custom_samples", Json::array({"text"})}}}};
+    auto p = validate_jobspec(job);
+    bool found = false;
+    for (const auto& x : p) found |= x.field == "/calibration/custom_samples";
+    EXPECT_TRUE(found) << type << " jobs would silently ignore the text";
+  }
+}
+
 TEST(planner_validate_jobspec, an_export_format_incompatible_with_the_recipe_is_reported) {
   Json job = {{"model", {{"type", "llm"}}},
               {"quant", {{"recipe", Json::array({"w2a16"})}}},
