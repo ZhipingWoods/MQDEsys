@@ -54,10 +54,12 @@ const mkjob = (id, report, yaml) => { const d = path.join(runs, id); fs.mkdirSyn
   fs.writeFileSync(path.join(d, 'report.json'), JSON.stringify({ ...report, job_id: id }));
   fs.writeFileSync(path.join(d, 'events.jsonl'), JSON.stringify({ type: 'job_state', state: 'SUCCEEDED', seq: 1, ts: 1 }) + '\n');
   fs.writeFileSync(path.join(d, 'job.yaml'), yaml.join('\n') + '\n'); };
-const PARENT = '20261014-000000-cardsp';
+const PARENT = '20261014-000000-cardsp', LLAMAONLY = '20261014-000000-cardsl';
 { const rep = JSON.parse(JSON.stringify(fixture)); rep.recipes.W4A16.export = { awq: { status: 'exported', bytes: 1, real_ppl: 20.4 } };
   fs.mkdirSync(path.join(runs, PARENT, 'export', 'w4a16-awq'), { recursive: true }); fs.writeFileSync(path.join(runs, PARENT, 'export', 'w4a16-awq', 'config.json'), '{}');
   mkjob(PARENT, rep, ['metadata: {name: cards-parent}', `model: {type: llm, path: ${MODEL}}`, 'quant: {recipe: [w4a16]}', `output_dir: ${runs}`]); }
+// a parent that used llama.cpp only: it has no vLLM / SGLang export formats of its own to keep
+mkjob(LLAMAONLY, fixture, ['metadata: {name: cards-llama}', `model: {type: llm, path: ${MODEL}}`, 'quant: {recipe: [w4a16]}', 'deploy: {device: cpu, llamacpp: {types: [q4_k]}}', `output_dir: ${runs}`]);
 
 const port = await freePort();
 const server = spawn(bin, ['serve', '--repo', repo, '--runs', runs, '--web', path.join(repo, 'web/dist'), '--python', path.join(here, 'fake_worker.py'),
@@ -208,6 +210,15 @@ try {
   await formatsAre(['gptq']);
   check('when the planner cannot look (older server, no readable model path) the page falls back to GPTQ, and does not leave the hand-picked awq that would be refused', JSON.stringify((await preview()).export?.formats) === '["gptq"]');
   await page.unroute('**/api/v1/datasets**');
+
+  // deriving from a job that used llama.cpp only: switching vLLM on afterwards must still get the planner's format (the "keep what the
+  // parent had" rule is for a parent that had vLLM / SGLang formats; it must not be left armed by a llama.cpp-only parent)
+  await page.goto(`${base}/new?mode=all&from=${LLAMAONLY}&step=recipe`, { waitUntil: 'load' });
+  await page.getByTestId('derive-banner').waitFor({ timeout: 10000 });
+  await until(() => { try { return !!JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.llamacpp; } catch { return false; } });
+  await page.getByTestId('backend-toggle-vllm').check();
+  await formatsAre(['awq']);
+  check('a llama.cpp-only parent: switching vLLM on afterwards still gets the planner\'s format (awq for its 4-bit recipe)', JSON.stringify((await preview()).export?.formats) === '["awq"]' && !!(await deploy()).llamacpp && !!(await deploy()).vllm);
 
   // ---------------------------------------------------------------- quantize-only
   await page.getByTestId('opt-quantize-only').check();
