@@ -135,21 +135,74 @@ __global__ void qdq(const float* x, float* out, const float* scale, const float*
 }
 
 
-// One thread per output word: gather the codes whose bits fall in [32w, 32w + 32). A code that started in the previous
-// word contributes its high part (a right shift), one that starts here its low part (a left shift): pack.cpp pack_bits.
-__global__ void pack_words(const uint8_t* codes, uint32_t* words, int64_t count, int64_t n_words, int bits) {
-  const int64_t w = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (w >= n_words) return;
+// Word `w` of an LSB-first stream of `count` codes of `bits` bits: gather the codes whose bits fall in [32w, 32w + 32). A code
+// that started in the previous word contributes its high part (a right shift), one that starts here its low part (a left
+// shift): pack.cpp pack_bits. `get(i)` returns code i (unmasked; masked here).
+template <class Get>
+__device__ __forceinline__ uint32_t stream_word(Get get, int64_t count, int64_t w, int bits) {
   const uint32_t mask = (1u << bits) - 1u;
   const int64_t lo = w * 32, hi = lo + 32;  // bit range of this word
-  int64_t first = lo / bits;                // the first code that touches it
   uint32_t acc = 0;
-  for (int64_t i = first; i < count && i * bits < hi; ++i) {
-    const uint32_t c = codes[i] & mask;
+  for (int64_t i = lo / bits; i < count && i * bits < hi; ++i) {
+    const uint32_t c = get(i) & mask;
     const int64_t sh = i * bits - lo;  // negative: the code began in an earlier word
     acc |= sh >= 0 ? (c << sh) : (c >> (-sh));
   }
-  words[w] = acc;
+  return acc;
+}
+
+__global__ void pack_words(const uint8_t* codes, uint32_t* words, int64_t count, int64_t n_words, int bits) {
+  const int64_t w = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (w >= n_words) return;
+  words[w] = stream_word([&](int64_t i) { return static_cast<uint32_t>(codes[i]); }, count, w, bits);
+}
+
+// pack.cpp pack_gptq: qweight[r * out + o] = word r of the stream of row o of the code matrix [out, in]
+__global__ void gptq_qweight(const uint8_t* codes, int32_t* qweight, int64_t out, int64_t in, int64_t rows, int bits) {
+  const int64_t t = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (t >= rows * out) return;
+  const int64_t r = t / out, o = t % out;
+  const uint8_t* row = codes + o * in;
+  qweight[t] = static_cast<int32_t>(stream_word([&](int64_t i) { return static_cast<uint32_t>(row[i]); }, in, r, bits));
+}
+
+// qzeros[g * cols + c] = word c of the stream of the zero points of group g over all outputs (v1 stores zero - 1)
+__global__ void gptq_qzeros(const uint8_t* zeros, int32_t* qzeros, int64_t out, int64_t groups, int64_t cols, int bits, int v1) {
+  const int64_t t = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (t >= groups * cols) return;
+  const int64_t g = t / cols, c = t % cols;
+  const uint32_t mask = (1u << bits) - 1u;
+  qzeros[t] = static_cast<int32_t>(stream_word(
+      [&](int64_t o) {
+        const uint32_t z = zeros[o * groups + g];
+        return v1 ? ((z - 1u) & mask) : z;
+      },
+      out, c, bits));
+}
+
+// pack.cpp fp32_to_fp16: the same branch-free round-to-nearest-even port (not __float2half_rn: NaN is the canonical 0x7E00)
+__device__ uint16_t fp32_to_fp16(float f) {
+  const float scale_to_inf = 0x1.0p+112f;
+  const float scale_to_zero = 0x1.0p-110f;
+  float base = __fmul_rn(__fmul_rn(fabsf(f), scale_to_inf), scale_to_zero);
+  const uint32_t w = __float_as_uint(f);
+  const uint32_t shl1_w = w + w;
+  const uint32_t sign = w & 0x80000000u;
+  uint32_t bias = shl1_w & 0xFF000000u;
+  if (bias < 0x71000000u) bias = 0x71000000u;
+  base = __fadd_rn(__uint_as_float((bias >> 1) + 0x07800000u), base);
+  const uint32_t bits = __float_as_uint(base);
+  const uint32_t exp_bits = (bits >> 13) & 0x00007C00u;
+  const uint32_t mantissa_bits = bits & 0x00000FFFu;
+  const uint32_t nonsign = exp_bits + mantissa_bits;
+  return static_cast<uint16_t>((sign >> 16) | (shl1_w > 0xFF000000u ? 0x7E00u : nonsign));
+}
+
+__global__ void gptq_scales(const float* scales, uint16_t* out16, int64_t out, int64_t groups) {
+  const int64_t t = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (t >= groups * out) return;
+  const int64_t g = t / out, o = t % out;
+  out16[t] = fp32_to_fp16(scales[o * groups + g]);
 }
 
 __global__ void unpack_codes(const uint32_t* words, uint8_t* codes, int64_t count, int bits) {
@@ -283,6 +336,50 @@ int mqde_cuda_unpack_bits(const uint32_t* words, uint8_t* codes, int64_t count, 
   cudaEventDestroy(t1);
   if (kernel_ms) *kernel_ms = ms;
   CK(cudaMemcpy(codes, dc.p, count, cudaMemcpyDeviceToHost), "copy out");
+#undef CK
+  return 0;
+}
+
+int mqde_cuda_pack_gptq(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out, int64_t in,
+                        int64_t group_size, int bits, int v1, int32_t* qweight, int32_t* qzeros, uint16_t* fp16_scales,
+                        double* kernel_ms, char* err, size_t errlen) {
+  const int64_t groups = in / group_size, rows = in * bits / 32, zcols = out * bits / 32;
+  Buf<uint8_t> dc, dz;
+  Buf<float> ds;
+  Buf<int32_t> dqw, dqz;
+  Buf<uint16_t> d16;
+  cudaError_t e;
+#define CK(call, what) \
+  if ((e = (call)) != cudaSuccess) return fail(err, errlen, what, e)
+  CK(cudaMalloc(&dc.p, out * in), "cudaMalloc codes");
+  CK(cudaMalloc(&dz.p, out * groups), "cudaMalloc zeros");
+  CK(cudaMalloc(&ds.p, out * groups * sizeof(float)), "cudaMalloc scales");
+  CK(cudaMalloc(&dqw.p, rows * out * sizeof(int32_t)), "cudaMalloc qweight");
+  CK(cudaMalloc(&dqz.p, groups * zcols * sizeof(int32_t)), "cudaMalloc qzeros");
+  CK(cudaMalloc(&d16.p, groups * out * sizeof(uint16_t)), "cudaMalloc fp16 scales");
+  CK(cudaMemcpy(dc.p, codes, out * in, cudaMemcpyHostToDevice), "copy codes");
+  CK(cudaMemcpy(dz.p, zeros, out * groups, cudaMemcpyHostToDevice), "copy zeros");
+  CK(cudaMemcpy(ds.p, scales, out * groups * sizeof(float), cudaMemcpyHostToDevice), "copy scales");
+  cudaEvent_t t0, t1;
+  cudaEventCreate(&t0);
+  cudaEventCreate(&t1);
+  cudaEventRecord(t0);
+  gptq_qweight<<<static_cast<unsigned>((rows * out + 255) / 256), 256>>>(dc.p, dqw.p, out, in, rows, bits);
+  CK(cudaGetLastError(), "qweight launch");
+  gptq_qzeros<<<static_cast<unsigned>((groups * zcols + 255) / 256), 256>>>(dz.p, dqz.p, out, groups, zcols, bits, v1);
+  CK(cudaGetLastError(), "qzeros launch");
+  gptq_scales<<<static_cast<unsigned>((groups * out + 255) / 256), 256>>>(ds.p, d16.p, out, groups);
+  CK(cudaGetLastError(), "scales launch");
+  cudaEventRecord(t1);
+  CK(cudaEventSynchronize(t1), "gptq pack");
+  float ms = 0;
+  cudaEventElapsedTime(&ms, t0, t1);
+  cudaEventDestroy(t0);
+  cudaEventDestroy(t1);
+  if (kernel_ms) *kernel_ms = ms;
+  CK(cudaMemcpy(qweight, dqw.p, rows * out * sizeof(int32_t), cudaMemcpyDeviceToHost), "copy qweight");
+  CK(cudaMemcpy(qzeros, dqz.p, groups * zcols * sizeof(int32_t), cudaMemcpyDeviceToHost), "copy qzeros");
+  CK(cudaMemcpy(fp16_scales, d16.p, groups * out * sizeof(uint16_t), cudaMemcpyDeviceToHost), "copy fp16 scales");
 #undef CK
   return 0;
 }

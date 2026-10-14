@@ -1,10 +1,12 @@
 // T-0406: the CUDA quantizer returns the scalar CPU path's bits. Compiled only with MQDE_WITH_CUDA; skipped
 // when no GPU is visible.
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <limits>
 #include <random>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -304,6 +306,110 @@ TEST(quant_cuda, pack_bits_indexes_past_32_bits) {
   auto back = mqde::quant::cuda::unpack_bits(*got, 8, n);
   ASSERT_TRUE(back) << back.error().message;
   EXPECT_EQ(*back, codes);
+}
+
+TEST(quant_cuda, pack_gptq_matches_the_cpu_packer_field_by_field) {
+  NEED_GPU();
+  namespace pack = mqde::quant::pack;
+  std::mt19937 rng(5);
+  struct Shape {
+    int64_t out, in, group;
+  };
+  // in*bits and out*bits must be divisible by 32: 3 bit needs 32 | in and 32 | out, 8 bit only 4 | in
+  for (int bits : {2, 3, 4, 8})
+    for (Shape sh :
+         {Shape{32, 128, 32}, Shape{64, 256, 128}, Shape{96, 96, 32}, Shape{32, 32, 32}, Shape{128, 512, 64}})
+      for (bool v1 : {true, false}) {
+        const int64_t groups = sh.in / sh.group;
+        std::vector<uint8_t> codes(static_cast<size_t>(sh.out * sh.in)),
+            zeros(static_cast<size_t>(sh.out * groups));
+        std::vector<float> scales(zeros.size());
+        const uint32_t mask = (1u << bits) - 1u;
+        for (auto& c : codes) c = static_cast<uint8_t>(rng() & mask);
+        for (auto& z : zeros) z = static_cast<uint8_t>(rng() & mask);  // includes 0: v1 stores (0 - 1) & mask
+        std::normal_distribution<float> d(0.0f, 0.02f);
+        for (auto& v : scales) v = d(rng);
+        auto ref =
+            pack::pack_gptq(codes.data(), zeros.data(), scales.data(), sh.out, sh.in, sh.group, bits, v1);
+        auto got = mqde::quant::cuda::pack_gptq(codes.data(), zeros.data(), scales.data(), sh.out, sh.in,
+                                                sh.group, bits, v1);
+        ASSERT_TRUE(ref) << ref.error().message;
+        ASSERT_TRUE(got) << got.error().message;
+        const std::string what = std::to_string(bits) + " bit [" + std::to_string(sh.out) + "," +
+                                 std::to_string(sh.in) + "] g" + std::to_string(sh.group) +
+                                 (v1 ? " v1" : " v2");
+        EXPECT_EQ(ref->qweight, got->qweight) << what;
+        EXPECT_EQ(ref->qzeros, got->qzeros) << what;
+        EXPECT_EQ(ref->scales, got->scales) << what;
+        EXPECT_EQ(ref->qweight_rows, got->qweight_rows) << what;
+        EXPECT_EQ(ref->qweight_cols, got->qweight_cols) << what;
+        EXPECT_EQ(ref->qzeros_rows, got->qzeros_rows) << what;
+        EXPECT_EQ(ref->qzeros_cols, got->qzeros_cols) << what;
+      }
+}
+
+TEST(quant_cuda, pack_gptq_converts_scales_to_fp16_exactly_like_the_cpu_for_every_kind_of_value) {
+  NEED_GPU();
+  namespace pack = mqde::quant::pack;
+  // one scale per (group, output): 32 outputs x 1 group per row of the weight, enough rows to carry the
+  // values below
+  std::vector<float> vals{0.0f,
+                          -0.0f,
+                          1.0f,
+                          -1.0f,
+                          65504.0f,
+                          65519.99f,
+                          65520.0f,
+                          1e6f,
+                          -1e6f,
+                          6.1035156e-05f,
+                          5.9604645e-08f,
+                          2.9802322e-08f,
+                          2.9802323e-08f,
+                          1e-10f,
+                          1.00048828125f,
+                          1.0014648437f,
+                          1.0009765625f,
+                          3.14159265f,
+                          std::numeric_limits<float>::infinity(),
+                          -std::numeric_limits<float>::infinity(),
+                          std::numeric_limits<float>::quiet_NaN(),
+                          std::numeric_limits<float>::denorm_min(),
+                          std::numeric_limits<float>::max(),
+                          std::numeric_limits<float>::min()};
+  std::mt19937 rng(11);
+  for (int i = 0; i < 8000; ++i)
+    vals.push_back(std::bit_cast<float>(static_cast<uint32_t>(rng())));  // every exponent, finite or not
+  const int64_t out = 32, in = 32, group = 32;
+  const size_t per = static_cast<size_t>(out);  // groups = 1
+  std::vector<uint8_t> codes(static_cast<size_t>(out * in), 1), zeros(per, 1);
+  for (size_t base = 0; base < vals.size(); base += per) {
+    std::vector<float> scales(per, 1.0f);
+    for (size_t k = 0; k < per && base + k < vals.size(); ++k) scales[k] = vals[base + k];
+    auto ref = pack::pack_gptq(codes.data(), zeros.data(), scales.data(), out, in, group, 4, true);
+    auto got =
+        mqde::quant::cuda::pack_gptq(codes.data(), zeros.data(), scales.data(), out, in, group, 4, true);
+    ASSERT_TRUE(ref && got);
+    for (size_t k = 0; k < per; ++k)
+      ASSERT_EQ(ref->scales[k], got->scales[k])
+          << "scale " << scales[k] << " (bits 0x" << std::hex << std::bit_cast<uint32_t>(scales[k]) << ")";
+  }
+}
+
+TEST(quant_cuda, pack_gptq_rejects_the_shapes_the_cpu_packer_rejects) {
+  NEED_GPU();
+  std::vector<uint8_t> codes(64 * 64, 0), zeros(64 * 2, 0);
+  std::vector<float> scales(64 * 2, 1.0f);
+  auto bad = [&](int64_t out, int64_t in, int64_t group, int bits) {
+    return mqde::quant::cuda::pack_gptq(codes.data(), zeros.data(), scales.data(), out, in, group, bits,
+                                        true);
+  };
+  EXPECT_FALSE(bad(64, 64, 32, 0));
+  EXPECT_FALSE(bad(64, 64, 32, 9));
+  EXPECT_FALSE(bad(0, 64, 32, 4));
+  EXPECT_FALSE(bad(64, 64, 48, 4)) << "64 is not divisible by 48";
+  EXPECT_TRUE(bad(64, 64, 32, 3)) << "64 * 3 = 192 is a multiple of 32";
+  EXPECT_FALSE(bad(40, 64, 32, 3)) << "40 * 3 = 120 is not a multiple of 32";
 }
 
 TEST(quant_cuda, works_in_place_and_a_group_of_only_nan_gets_scale_one) {

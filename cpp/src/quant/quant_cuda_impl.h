@@ -27,3 +27,9 @@ int mqde_cuda_pack_bits(const uint8_t* codes, uint32_t* words, int64_t count, in
                         char* err, size_t errlen);
 int mqde_cuda_unpack_bits(const uint32_t* words, uint8_t* codes, int64_t count, int bits, double* kernel_ms,
                           char* err, size_t errlen);
+
+// GPTQ checkpoint layout (pack.h pack_gptq): qweight [in*bits/32, out], qzeros [groups, out*bits/32], scales
+// fp16 [groups, out]. Shapes are validated by the caller.
+int mqde_cuda_pack_gptq(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out,
+                        int64_t in, int64_t group_size, int bits, int v1, int32_t* qweight, int32_t* qzeros,
+                        uint16_t* fp16_scales, double* kernel_ms, char* err, size_t errlen);

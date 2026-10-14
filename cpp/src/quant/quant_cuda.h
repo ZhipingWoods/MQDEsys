@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "mqde/quant/ops.h"
+#include "mqde/quant/pack.h"
 
 namespace mqde::quant::cuda {
 
@@ -22,6 +23,9 @@ Result<void> fake_quant(const float* x, int64_t rows, int64_t cols, const QuantS
 // words and the codes equal the CPU functions'. A code is masked to `bits`, as the CPU does.
 Result<std::vector<uint32_t>> pack_bits(std::span<const uint8_t> codes, int bits);
 Result<std::vector<uint8_t>> unpack_bits(std::span<const uint32_t> words, int bits, size_t count);
+// pack.h pack_gptq on the GPU (qweight, qzeros and the fp16 scales); every field equals the CPU function's.
+Result<pack::IntPacked> pack_gptq(const uint8_t* codes, const uint8_t* zeros, const float* scales,
+                                  int64_t out, int64_t in, int64_t group_size, int bits, bool v1 = true);
 // Wall-clock of the last call's kernels alone (calibration + qdq), in milliseconds, without the host<->device
 // copies.
 double last_kernel_ms();

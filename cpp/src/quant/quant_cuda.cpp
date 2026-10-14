@@ -78,4 +78,33 @@ Result<std::vector<uint8_t>> unpack_bits(std::span<const uint32_t> words, int bi
   return codes;
 }
 
+Result<pack::IntPacked> pack_gptq(const uint8_t* codes, const uint8_t* zeros, const float* scales,
+                                  int64_t out, int64_t in, int64_t group_size, int bits, bool v1) {
+  // the same checks as pack::pack_gptq, so a bad shape is the same error on either path
+  if (bits < 1 || bits > 8) return make_error(Errc::kInvalidArgument, "bits must be in [1, 8], got {}", bits);
+  if (out <= 0 || in <= 0) return make_error(Errc::kInvalidArgument, "empty weight [{}, {}]", out, in);
+  if (group_size <= 0 || in % group_size != 0)
+    return make_error(Errc::kInvalidArgument, "in_features {} is not divisible by group_size {}", in,
+                      group_size);
+  if ((in * bits) % 32 != 0 || (out * bits) % 32 != 0)
+    return make_error(Errc::kInvalidArgument,
+                      "GPTQ packing needs in*bits and out*bits divisible by 32 ([{}, {}], {} bit)", out, in,
+                      bits);
+  if (!available()) return make_error(Errc::kUnsupported, "no CUDA device");
+  const int64_t groups = in / group_size;
+  pack::IntPacked p;
+  p.qweight_rows = in * bits / 32;
+  p.qweight_cols = out;
+  p.qzeros_rows = groups;
+  p.qzeros_cols = out * bits / 32;
+  p.qweight.assign(static_cast<size_t>(p.qweight_rows * out), 0);
+  p.qzeros.assign(static_cast<size_t>(groups * p.qzeros_cols), 0);
+  p.scales.assign(static_cast<size_t>(groups * out), 0);
+  char err[256] = {};
+  if (mqde_cuda_pack_gptq(codes, zeros, scales, out, in, group_size, bits, v1, p.qweight.data(),
+                          p.qzeros.data(), p.scales.data(), &g_last_ms, err, sizeof err) != 0)
+    return make_error(Errc::kInternal, "CUDA pack_gptq: {}", err);
+  return p;
+}
+
 }  // namespace mqde::quant::cuda
