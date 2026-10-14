@@ -119,7 +119,7 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **踩坑**：变异脚本恢复源码后，文件 mtime 比被改过的目标文件旧，ninja 不重编，之后的 ctest 跑的是变异二进制（看起来像回归）；恢复后必须 `touch` 再编。
 - **后续（同日）**：quantize_int / dequantize_int 的 AVX2/NEON；`MQDE_WITH_CUDA` 的 GPU 路径（4090 上内核 3.4 ms，与 scalar 逐位一致）。CUDA 变异测试暴露了三处测试数据缺口（全正/全负组、全零组、float 与 double 累加只在近似平局时才不同），补了测试后变异从 10/15 到 13/15。
 - **未完成**：AVX-512（无硬件）、CUDA 的 FP8 / 位打包 / 接入 Python 作业（见任务书）。
-- **观察到一次**：`backend_envs.destroying_the_manager_stops_a_running_install` 在 `ctest -j8` 下失败过一次，单跑 3/3 通过、整套再跑通过；与本次改动无关，未查根因（疑似时序）。
+- **已修**：`backend_envs.destroying_the_manager_stops_a_running_install` 与 `only_one_install_runs_at_a_time` 在 CPU 过载时偶发失败：测试等脚本启动只给了固定 2–3 秒（脚本要起 Python 解释器）。过载下复现（40 个空转进程 + `ctest -j8`）4/6 失败，改成 15 秒截止、条件满足即返回的 `wait_until` 后 0/6。顺带发现前一个测试对它名字里的 bug 其实抓不住（析构不杀安装进程也会在 60 秒后“没有残留进程”而通过），加了“析构须在 10 秒内返回”的断言，变异（去掉 kill）现在在 60.5 秒时以预期信息失败。
 - **需要人工决策**：`CMakeLists.txt` 与 `cpp/CMakeLists.txt` 的改动（L2：`-Werror` 只给 C/C++、MQDE_WITH_CUDA 选项、quant_bench）。
 - **前端**：T-0406 是数值内核，无界面；T-R13 的卡片已在预览（localhost:18090）用真机数据确认。
 

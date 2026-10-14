@@ -64,6 +64,19 @@ struct Env {
   }
 };
 
+// Poll until `cond` holds or the deadline passes (generous: it returns as soon as the condition is true, and
+// a script that has to start a Python interpreter can take seconds when the whole suite runs in parallel on a
+// busy machine).
+template <class F>
+bool wait_until(F&& cond, int timeout_ms = 15000) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  while (!cond()) {
+    if (std::chrono::steady_clock::now() >= deadline) return false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return true;
+}
+
 Json wait_done(BackendEnvs& b, const std::string& id, int timeout_ms = 8000) {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   while (std::chrono::steady_clock::now() < deadline) {
@@ -180,8 +193,7 @@ TEST(backend_envs, only_one_install_runs_at_a_time) {
   EXPECT_NE(second.error().message.find("vllm"), std::string::npos) << "says which install is in the way";
   ASSERT_TRUE(b.current_install());
   EXPECT_EQ(b.current_install()->at("id"), *first);
-  for (int i = 0; i < 150 && e.calls().empty(); ++i)
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));  // let the first script start
+  wait_until([&] { return !e.calls().empty(); });  // let the first script start
   EXPECT_EQ(e.calls(), "install vllm --version 0.31.0\n") << "the refused request ran nothing";
 }
 
@@ -222,16 +234,20 @@ TEST(backend_envs, destroying_the_manager_stops_a_running_install) {
   Env e("destroy");
   ::setenv("FAKE_SLEEP", "60", 1);
   pid_t pid = 0;
+  std::chrono::steady_clock::time_point destroyed_at;
   {
     BackendEnvs b({e.script.string()}, e.dir / "logs");
     ASSERT_TRUE(b.start_install("vllm", ""));
-    for (int i = 0; i < 100 && !fs::exists(e.log.string() + ".pid"); ++i)
-      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    wait_until([&] { return fs::exists(e.log.string() + ".pid"); });
     std::ifstream(e.log.string() + ".pid") >> pid;
     ASSERT_GT(pid, 0);
     ASSERT_EQ(::kill(pid, 0), 0) << "the install is running";
+    destroyed_at = std::chrono::steady_clock::now();
   }
-  for (int i = 0; i < 100 && ::kill(pid, 0) == 0; ++i)
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  // the installer sleeps 60 s: only a destructor that stops it returns promptly (one that waited would also
+  // leave no process behind, but a minute later)
+  EXPECT_LT(std::chrono::steady_clock::now() - destroyed_at, std::chrono::seconds(10))
+      << "destroying the manager waited for the install";
+  wait_until([&] { return ::kill(pid, 0) != 0; });
   EXPECT_NE(::kill(pid, 0), 0) << "no orphaned installer left behind when the server stops";
 }
