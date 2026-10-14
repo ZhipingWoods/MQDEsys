@@ -21,3 +21,9 @@ struct MqdeCudaQuantArgs {
 int mqde_cuda_device_count();
 int mqde_cuda_fake_quant(const float* x, float* out, float* scale, float* zero /* nullptr when symmetric */,
                          const MqdeCudaQuantArgs& a, double* kernel_ms, char* err, size_t errlen);
+
+// LSB-first bit stream over little-endian 32-bit words (pack.h pack_bits / unpack_bits), 1..8 bits per code.
+int mqde_cuda_pack_bits(const uint8_t* codes, uint32_t* words, int64_t count, int bits, double* kernel_ms,
+                        char* err, size_t errlen);
+int mqde_cuda_unpack_bits(const uint32_t* words, uint8_t* codes, int64_t count, int bits, double* kernel_ms,
+                          char* err, size_t errlen);

@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include "mqde/quant/ops.h"
+#include "mqde/quant/pack.h"
 #include "quant_cuda.h"
 #include "quant_kernels.h"
 
@@ -251,6 +252,58 @@ TEST(quant_cuda, fp8_matches_the_scalar_path_bit_for_bit) {
             ASSERT_TRUE(same(ref[i], got[i])) << describe(sp) << (awkward ? " awkward" : "") << " out " << i
                                               << " x=" << w[i] << ": " << ref[i] << " vs " << got[i];
         }
+}
+
+TEST(quant_cuda, pack_bits_matches_the_cpu_packer_for_every_width_and_awkward_lengths) {
+  NEED_GPU();
+  namespace pack = mqde::quant::pack;
+  std::mt19937 rng(77);
+  for (int bits = 1; bits <= 8; ++bits)
+    for (size_t n : {size_t{0}, size_t{1}, size_t{2}, size_t{3}, size_t{10}, size_t{31}, size_t{32},
+                     size_t{33}, size_t{63}, size_t{64}, size_t{65}, size_t{1000}, size_t{100003}}) {
+      std::vector<uint8_t> codes(n);
+      for (auto& c : codes) c = static_cast<uint8_t>(rng());  // out of range for bits < 8: both must mask
+      const auto ref = pack::pack_bits(codes, bits);
+      auto got = mqde::quant::cuda::pack_bits(codes, bits);
+      ASSERT_TRUE(got) << got.error().message;
+      ASSERT_EQ(ref, *got) << bits << " bits, n=" << n;
+      auto back = mqde::quant::cuda::unpack_bits(ref, bits, n);
+      ASSERT_TRUE(back) << back.error().message;
+      ASSERT_EQ(pack::unpack_bits(ref, bits, n), *back) << "unpack, " << bits << " bits, n=" << n;
+    }
+}
+
+TEST(quant_cuda, pack_bits_rejects_bad_arguments) {
+  NEED_GPU();
+  std::vector<uint8_t> codes(8, 1);
+  EXPECT_FALSE(mqde::quant::cuda::pack_bits(codes, 0));
+  EXPECT_FALSE(mqde::quant::cuda::pack_bits(codes, 9));
+  EXPECT_FALSE(mqde::quant::cuda::unpack_bits(std::vector<uint32_t>(1), 4, 9))
+      << "one word holds 8 four-bit codes, not 9";
+  EXPECT_TRUE(mqde::quant::cuda::unpack_bits(std::vector<uint32_t>(1), 4, 8));
+}
+
+TEST(quant_cuda, pack_bits_indexes_past_32_bits) {
+  NEED_GPU();
+  // 8-bit codes i % 251: word w is the four bytes 4w..4w+3, so every word is known without a CPU reference.
+  // 600M codes put the last bit offset (4.8e9) above 2^32. The period is prime on purpose: a power of two
+  // would repeat with the 2^32-bit wrap-around itself, and an offset truncated to 32 bits would read the same
+  // values and go unnoticed.
+  const size_t n = 600u * 1000 * 1000;
+  std::vector<uint8_t> codes(n);
+  for (size_t i = 0; i < n; ++i) codes[i] = static_cast<uint8_t>(i % 251);
+  auto got = mqde::quant::cuda::pack_bits(codes, 8);
+  ASSERT_TRUE(got) << got.error().message;
+  ASSERT_EQ(got->size(), n / 4);
+  size_t bad = 0;
+  for (size_t w = 0; w < got->size(); ++w) {
+    const uint32_t b0 = (4 * w) % 251, b1 = (4 * w + 1) % 251, b2 = (4 * w + 2) % 251, b3 = (4 * w + 3) % 251;
+    bad += (*got)[w] != (b0 | b1 << 8 | b2 << 16 | b3 << 24);
+  }
+  EXPECT_EQ(bad, 0u);
+  auto back = mqde::quant::cuda::unpack_bits(*got, 8, n);
+  ASSERT_TRUE(back) << back.error().message;
+  EXPECT_EQ(*back, codes);
 }
 
 TEST(quant_cuda, works_in_place_and_a_group_of_only_nan_gets_scale_one) {

@@ -134,6 +134,36 @@ __global__ void qdq(const float* x, float* out, const float* scale, const float*
   out[i] = qdq1(x[i], {scale[gi], zero ? zero[gi] : 0.0f}, a);
 }
 
+
+// One thread per output word: gather the codes whose bits fall in [32w, 32w + 32). A code that started in the previous
+// word contributes its high part (a right shift), one that starts here its low part (a left shift): pack.cpp pack_bits.
+__global__ void pack_words(const uint8_t* codes, uint32_t* words, int64_t count, int64_t n_words, int bits) {
+  const int64_t w = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (w >= n_words) return;
+  const uint32_t mask = (1u << bits) - 1u;
+  const int64_t lo = w * 32, hi = lo + 32;  // bit range of this word
+  int64_t first = lo / bits;                // the first code that touches it
+  uint32_t acc = 0;
+  for (int64_t i = first; i < count && i * bits < hi; ++i) {
+    const uint32_t c = codes[i] & mask;
+    const int64_t sh = i * bits - lo;  // negative: the code began in an earlier word
+    acc |= sh >= 0 ? (c << sh) : (c >> (-sh));
+  }
+  words[w] = acc;
+}
+
+__global__ void unpack_codes(const uint32_t* words, uint8_t* codes, int64_t count, int bits) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (i >= count) return;
+  const uint32_t mask = (1u << bits) - 1u;
+  const int64_t bit = i * bits;
+  const int64_t word = bit / 32;
+  const unsigned shift = static_cast<unsigned>(bit % 32);
+  uint32_t v = words[word] >> shift;
+  if (shift + bits > 32) v |= words[word + 1] << (32 - shift);
+  codes[i] = static_cast<uint8_t>(v & mask);
+}
+
 struct Dev {
   float *x = nullptr, *out = nullptr, *scale = nullptr, *zero = nullptr;
   ~Dev() {
@@ -187,6 +217,72 @@ int mqde_cuda_fake_quant(const float* x, float* out, float* scale, float* zero, 
   CK(cudaMemcpy(out, d.out, n * sizeof(float), cudaMemcpyDeviceToHost), "copy out");
   CK(cudaMemcpy(scale, d.scale, groups * sizeof(float), cudaMemcpyDeviceToHost), "copy scale");
   if (zero) CK(cudaMemcpy(zero, d.zero, groups * sizeof(float), cudaMemcpyDeviceToHost), "copy zero");
+#undef CK
+  return 0;
+}
+
+namespace {
+template <class T>
+struct Buf {
+  T* p = nullptr;
+  ~Buf() { cudaFree(p); }
+};
+}  // namespace
+
+int mqde_cuda_pack_bits(const uint8_t* codes, uint32_t* words, int64_t count, int bits, double* kernel_ms, char* err,
+                        size_t errlen) {
+  const int64_t n_words = (count * bits + 31) / 32;
+  Buf<uint8_t> dc;
+  Buf<uint32_t> dw;
+  cudaError_t e;
+#define CK(call, what) \
+  if ((e = (call)) != cudaSuccess) return fail(err, errlen, what, e)
+  CK(cudaMalloc(&dc.p, count), "cudaMalloc codes");
+  CK(cudaMalloc(&dw.p, n_words * sizeof(uint32_t)), "cudaMalloc words");
+  CK(cudaMemcpy(dc.p, codes, count, cudaMemcpyHostToDevice), "copy in");
+  cudaEvent_t t0, t1;
+  cudaEventCreate(&t0);
+  cudaEventCreate(&t1);
+  cudaEventRecord(t0);
+  pack_words<<<static_cast<unsigned>((n_words + 255) / 256), 256>>>(dc.p, dw.p, count, n_words, bits);
+  CK(cudaGetLastError(), "pack launch");
+  cudaEventRecord(t1);
+  CK(cudaEventSynchronize(t1), "pack");
+  float ms = 0;
+  cudaEventElapsedTime(&ms, t0, t1);
+  cudaEventDestroy(t0);
+  cudaEventDestroy(t1);
+  if (kernel_ms) *kernel_ms = ms;
+  CK(cudaMemcpy(words, dw.p, n_words * sizeof(uint32_t), cudaMemcpyDeviceToHost), "copy out");
+#undef CK
+  return 0;
+}
+
+int mqde_cuda_unpack_bits(const uint32_t* words, uint8_t* codes, int64_t count, int bits, double* kernel_ms, char* err,
+                          size_t errlen) {
+  const int64_t n_words = (count * bits + 31) / 32;
+  Buf<uint8_t> dc;
+  Buf<uint32_t> dw;
+  cudaError_t e;
+#define CK(call, what) \
+  if ((e = (call)) != cudaSuccess) return fail(err, errlen, what, e)
+  CK(cudaMalloc(&dc.p, count), "cudaMalloc codes");
+  CK(cudaMalloc(&dw.p, n_words * sizeof(uint32_t)), "cudaMalloc words");
+  CK(cudaMemcpy(dw.p, words, n_words * sizeof(uint32_t), cudaMemcpyHostToDevice), "copy in");
+  cudaEvent_t t0, t1;
+  cudaEventCreate(&t0);
+  cudaEventCreate(&t1);
+  cudaEventRecord(t0);
+  unpack_codes<<<static_cast<unsigned>((count + 255) / 256), 256>>>(dw.p, dc.p, count, bits);
+  CK(cudaGetLastError(), "unpack launch");
+  cudaEventRecord(t1);
+  CK(cudaEventSynchronize(t1), "unpack");
+  float ms = 0;
+  cudaEventElapsedTime(&ms, t0, t1);
+  cudaEventDestroy(t0);
+  cudaEventDestroy(t1);
+  if (kernel_ms) *kernel_ms = ms;
+  CK(cudaMemcpy(codes, dc.p, count, cudaMemcpyDeviceToHost), "copy out");
 #undef CK
   return 0;
 }
