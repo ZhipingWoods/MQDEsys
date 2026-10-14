@@ -48,8 +48,10 @@ export function WindowReview({ base, recipes, previews, seqLen }: Props) {
   const top = order.slice(0, 8);
   const hist = useMemo(() => deltaHistogram(d), [d]);
   if (!cur || !base.length || cur.nll.length !== base.length) return null;
-  const lo = Math.min(...base, ...cur.nll), hi = Math.max(...base, ...cur.nll);
-  const pad = (hi - lo) * 0.04 || 0.1;
+  // axis bounds on round numbers (a raw min/max prints as 3.8293557481... on the axis and collides with its labels)
+  const lo = Math.floor((Math.min(...base, ...cur.nll) - 0.05) * 2) / 2; // multiples of 0.5, so the ticks (every 0.5) land on them
+  const hi = Math.ceil((Math.max(...base, ...cur.nll) + 0.05) * 2) / 2;
+  const tick = (v: number) => v.toFixed(1);
   const label = (i: number) => `窗口 ${i}${previews?.[i] ? `：${previews[i]}` : ""}`;
   const ppx = (x: number) => (Math.exp(x) - 1) * 100; // a per-window loss change, as the PPL change it alone would make
   return (
@@ -92,20 +94,20 @@ export function WindowReview({ base, recipes, previews, seqLen }: Props) {
               const item = (name: string, color: string, sign: 1 | -1) => ({ name, type: "scatter", symbolSize: 9, itemStyle: { color, opacity: 0.85 }, data: pts(sign) });
               return {
                 ...o,
-                legend: { ...(o.legend as object), data: ["变差", "没变差"] },
+                legend: { ...(o.legend as object), data: ["变差", "没变差"], top: 0, right: 8, left: "auto" },
+                grid: { ...(o.grid as object), top: 52, left: 52, right: 20, bottom: 44 },
                 tooltip: {
                   ...(o.tooltip as object),
                   trigger: "item",
                   formatter: (p: { data: { value: number[]; d: number } }) =>
                     `${label(p.data.value[2])}<br/>原模型 ${p.data.value[0].toFixed(4)} · 量化后 ${p.data.value[1].toFixed(4)}<br/>变化 ${p.data.d >= 0 ? "+" : ""}${p.data.d.toFixed(4)}`,
                 },
-                xAxis: { ...(o.xAxis as object), type: "value", min: lo - pad, max: hi + pad, name: "原模型 损失 (nats/token)", nameLocation: "middle", nameGap: 28 },
-                yAxis: { ...(o.yAxis as object), type: "value", min: lo - pad, max: hi + pad, name: `${cur.name} 损失` },
+                xAxis: { ...(o.xAxis as object), type: "value", min: lo, max: hi, interval: 0.5, axisLabel: { formatter: tick }, name: "原模型 损失 (nats/token)", nameLocation: "middle", nameGap: 28 },
+                yAxis: { ...(o.yAxis as object), type: "value", min: lo, max: hi, interval: 0.5, axisLabel: { formatter: tick }, name: `${cur.name} 损失`, nameLocation: "end", nameGap: 14 },
                 series: [
-                  {
-                    ...item("变差", token("--critical"), 1),
-                    markLine: { silent: true, symbol: "none", lineStyle: { color: token("--text-muted"), type: "dashed" }, label: { show: false }, data: [[{ coord: [lo - pad, lo - pad] }, { coord: [hi + pad, hi + pad] }]] },
-                  },
+                  // the diagonal: a point on it lost nothing; above it is worse
+                  { name: "y = x", type: "line", data: [[lo, lo], [hi, hi]], showSymbol: false, silent: true, lineStyle: { color: token("--text-muted"), type: "dashed", width: 1 }, tooltip: { show: false }, legendHoverLink: false },
+                  item("变差", token("--critical"), 1),
                   item("没变差", token("--good"), -1),
                 ],
               };
@@ -120,6 +122,7 @@ export function WindowReview({ base, recipes, previews, seqLen }: Props) {
               const o = baseOption();
               return {
                 ...o,
+                grid: { ...(o.grid as object), top: 40, left: 52, right: 20, bottom: 52 },
                 tooltip: { ...(o.tooltip as object), trigger: "axis", axisPointer: { type: "shadow" } },
                 xAxis: { ...(o.xAxis as object), type: "category", data: hist.map((b) => ((b.lo + b.hi) / 2).toFixed(3)), name: "损失变化 (nats/token)", nameLocation: "middle", nameGap: 28 },
                 yAxis: { ...(o.yAxis as object), type: "value", name: "窗口数", minInterval: 1 },

@@ -107,6 +107,7 @@ try {
   await page.getByTestId('backend-toggle-llamacpp').check();
   await until(() => { try { return !!JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.llamacpp; } catch { return false; } });
   d = await deploy();
+  check('the suggested-format line says which backend it is about (the one just switched on)', /llama\.cpp 的建议格式/.test(await text('export-suggestion')), await text('export-suggestion'));
   check('switching llama.cpp on as well keeps vLLM: both are in the job, llama.cpp with a default GGUF type', !!d.vllm && JSON.stringify(d.llamacpp.types) === '["q4_k"]', JSON.stringify(d));
   check('a backend that is not installed does not warn while it is switched off', (await page.getByTestId('backend-missing-sglang').count()) === 0);
   await page.getByTestId('backend-toggle-sglang').check();

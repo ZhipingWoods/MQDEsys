@@ -975,7 +975,7 @@ export default function NewJobPage() {
             )}
             {suggestion && (
               <div className="small muted" data-testid="export-suggestion">
-                建议格式：{suggestion.format || "—"}（{suggestion.verdict}
+                {deployBackend === "llamacpp" ? "llama.cpp" : deployBackend === "sglang" ? "SGLang" : "vLLM"} 的建议格式：{suggestion.format || "—"}（{suggestion.verdict}
                 {suggestion.reason ? `，${suggestion.reason}` : ""}）
               </div>
             )}
