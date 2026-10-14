@@ -26,6 +26,18 @@ if (!fs.existsSync(path.join(repo, 'web/dist/index.html'))) { console.error('web
 
 const results = [];
 const check = (name, ok, detail = '') => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`); };
+
+// The deploy step is three backend cards (llama.cpp / vLLM / SGLang). `pickBackend` turns exactly that one on, like the dropdown
+// this replaced did; 'none' turns them all off. For a reused artifact the cards are radio buttons, so choosing is enough.
+async function pickBackend(page, id) {
+  const ids = ['vllm', 'sglang', 'llamacpp'];
+  if (id !== 'none') {
+    const t = page.getByTestId(`backend-toggle-${id}`);
+    if ((await t.getAttribute('type')) !== 'radio') for (const b of ids) if (b !== id) { const o = page.getByTestId(`backend-toggle-${b}`); if (await o.isChecked()) await o.uncheck(); }
+    await t.check();
+  } else for (const b of ids) { const o = page.getByTestId(`backend-toggle-${b}`); if (await o.isChecked()) await o.uncheck(); }
+}
+const enabledBackends = (page) => page.locator('[data-testid^="backend-card-"]:not(.off) .backend-name').allInnerTexts();
 const freePort = () => new Promise((res) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 const runs = fs.mkdtempSync(path.join(os.tmpdir(), 'mqde-e2e-runs-'));
 const MODEL = fs.mkdtempSync(path.join(os.tmpdir(), 'mqde-e2e-model-'));
@@ -65,7 +77,7 @@ try {
   await page.goto(`${base}/new`, { waitUntil: 'load' });
   await page.getByTestId('stepper').waitFor({ timeout: 15000 });
   check('the page opens on step ① with the six steps on top', (await current()) === 1 && (await page.locator('[data-testid^="step-tab-"]').count()) === 6);
-  check('only step ① is on screen: the model path yes, the recipes / evaluation / deploy / confirm no', (await visible('model-path')) && !(await visible('opt-quantize-only')) && !(await visible('quant-device-select')) && !(await visible('deploy-backend')) && !(await visible('step-confirm')));
+  check('only step ① is on screen: the model path yes, the recipes / evaluation / deploy / confirm no', (await visible('model-path')) && !(await visible('opt-quantize-only')) && !(await visible('quant-device-select')) && !(await visible('backend-cards')) && !(await visible('step-confirm')));
   await page.getByTestId('model-path').fill('');
   check('下一步 is disabled until the model path is filled', await page.getByTestId('step-next').isDisabled());
   await page.getByTestId('model-path').fill(MODEL);
@@ -85,10 +97,10 @@ try {
   check('④ 评估数据 + 设备', (await current()) === 4 && (await visible('quant-device-select')));
   await page.getByTestId('eval-device-select').selectOption('gpu');
   await page.getByTestId('step-next').click();
-  check('⑤ 部署与导出', (await current()) === 5 && (await visible('deploy-backend')));
+  check('⑤ 部署与导出', (await current()) === 5 && (await visible('backend-cards')));
   const s4 = await page.getByTestId('step-tab-4').innerText();
   check('the ④ summary reflects the device choice', s4.includes('量化 CPU') && s4.includes('评估 GPU'), s4.replace(/\s+/g, ' '));
-  await page.getByTestId('deploy-backend').selectOption('vllm');
+  await pickBackend(page, 'vllm');
   await page.getByTestId('step-next').click();
   check('⑥ 确认提交 shows the summary table and the JobSpec, and no 下一步', (await current()) === 6 && (await visible('step-summary')) && (await page.getByTestId('step-next').count()) === 0);
   const sum = (await page.getByTestId('step-summary').innerText()).replace(/\s+/g, ' ');
@@ -101,9 +113,9 @@ try {
   check('上一步 works', (await current()) === 2);
   await page.getByTestId('toggle-single-page').click();
   await page.waitForFunction(() => location.search.includes('mode=all'), null, { timeout: 5000 });
-  check('单页显示全部 puts every step on one page (what the older tests use) and keeps the state', (await visible('model-path')) && (await visible('deploy-backend')) && (await visible('step-confirm')) && JSON.stringify((JSON.parse(await page.locator('pre.log').innerText())).quant.recipe) === '["w4a16"]');
+  check('单页显示全部 puts every step on one page (what the older tests use) and keeps the state', (await visible('model-path')) && (await visible('backend-cards')) && (await visible('step-confirm')) && JSON.stringify((JSON.parse(await page.locator('pre.log').innerText())).quant.recipe) === '["w4a16"]');
   await page.getByTestId('toggle-single-page').click();
-  check('and back to steps', !(await visible('deploy-backend')));
+  check('and back to steps', !(await visible('backend-cards')));
   await page.goto(`${base}/new?step=deploy`, { waitUntil: 'load' });
   await page.getByTestId('stepper').waitFor({ timeout: 15000 });
   check('?step=deploy (the derive links) opens on ⑤', (await current()) === 5);

@@ -51,11 +51,25 @@ const MODEL = fs.mkdtempSync(path.join(os.tmpdir(), 'mqde-e2e-model-'));
 
 const results = [];
 const check = (name, ok, detail = '') => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`); };
+
+// The deploy step is three backend cards (llama.cpp / vLLM / SGLang). `pickBackend` turns exactly that one on, like the dropdown
+// this replaced did; 'none' turns them all off. For a reused artifact the cards are radio buttons, so choosing is enough.
+async function pickBackend(page, id) {
+  const ids = ['vllm', 'sglang', 'llamacpp'];
+  if (id !== 'none') {
+    const t = page.getByTestId(`backend-toggle-${id}`);
+    if ((await t.getAttribute('type')) !== 'radio') for (const b of ids) if (b !== id) { const o = page.getByTestId(`backend-toggle-${b}`); if (await o.isChecked()) await o.uncheck(); }
+    await t.check();
+  } else for (const b of ids) { const o = page.getByTestId(`backend-toggle-${b}`); if (await o.isChecked()) await o.uncheck(); }
+}
+const enabledBackends = (page) => page.locator('[data-testid^="backend-card-"]:not(.off) .backend-name').allInnerTexts();
 const freePort = () => new Promise((res) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 const runs = fs.mkdtempSync(path.join(os.tmpdir(), 'mqde-e2e-runs-'));
 const port = await freePort();
 const server = spawn(bin, ['serve', '--repo', repo, '--runs', runs, '--web', path.join(repo, 'web/dist'), '--python', path.join(here, 'fake_worker.py'),
-  '--gpus', '0', '--allow', os.tmpdir(), '--port', String(port)], { stdio: ['ignore', 'ignore', 'ignore'] });
+  '--gpus', '0', '--allow', os.tmpdir(), '--port', String(port)],
+  // the deploy step asks which backends are installed: answer from the stand-in script, not by inspecting this machine
+  { stdio: ['ignore', 'ignore', 'ignore'], env: { ...process.env, MQDE_SETUP_BACKEND_BIN: path.join(here, 'fake_setup_backend.py') } });
 const stop = () => { try { server.kill(); } catch { /* already gone */ } };
 process.on('exit', stop);
 const base = `http://127.0.0.1:${port}`;
@@ -117,24 +131,25 @@ try {
   check('and restores the recipes that were picked before ticking it (not stuck on bf16)', JSON.stringify((await preview()).quant.recipe) === '["w4a16","w4a8","w2a16"]', JSON.stringify((await preview()).quant.recipe));
 
   // ---- 3. picking a deploy backend calls the real export-suggestion endpoint and pre-selects chips ----
-  await page.getByTestId('deploy-backend').selectOption('llamacpp');
+  await pickBackend(page, 'llamacpp');
   await page.waitForFunction(() => document.querySelector('[data-testid="export-suggestion"]')?.textContent?.includes('gguf'), null, { timeout: 10000 });
   check('backend=llamacpp suggests format gguf (from the real planner, not a frontend guess)', (await page.getByTestId('export-suggestion').innerText()).includes('gguf'));
   const j1 = await preview();
   check('a GGUF type chip was pre-selected', Array.isArray(j1.deploy.llamacpp?.types) && j1.deploy.llamacpp.types.length > 0, JSON.stringify(j1.deploy.llamacpp));
   check('vLLM deployment is off for llamacpp', j1.deploy.vllm === undefined);
 
-  await page.getByTestId('deploy-backend').selectOption('vllm');
+  await pickBackend(page, 'vllm');
   // wait on the actual effect (deploy.vllm appearing in the submitted job), not the suggestion text: a
   // stale "native" verdict from the previous (llamacpp) suggestion can still be on screen the instant
   // after switching, before the new vllm fetch resolves, which would make a text-only wait resolve early.
-  await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.vllm !== undefined; } catch { return false; } }, null, { timeout: 10000 });
+  // the switch sets deploy.vllm at once and the planner's suggested export format arrives a moment later: wait for both
+  await page.waitForFunction(() => { try { const j = JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null'); return j?.deploy?.vllm !== undefined && JSON.stringify(j?.export?.formats) === '["awq"]'; } catch { return false; } }, null, { timeout: 10000 });
   const j2 = await preview();
   check('backend=vllm turns on vLLM deployment', j2.deploy.vllm !== undefined, JSON.stringify(j2.deploy.vllm));
   check('and pre-selects awq (the real planner answer for a 4-bit recipe), not just any format', JSON.stringify(j2.export?.formats) === '["awq"]', JSON.stringify(j2.export));
 
-  await page.getByTestId('deploy-backend').selectOption('sglang');
-  await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.sglang !== undefined; } catch { return false; } }, null, { timeout: 10000 });
+  await pickBackend(page, 'sglang');
+  await page.waitForFunction(() => { try { const j = JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null'); return j?.deploy?.sglang !== undefined && j?.deploy?.vllm === undefined && JSON.stringify(j?.export?.formats) === '["awq"]'; } catch { return false; } }, null, { timeout: 10000 });
   const jS = await preview();
   check('backend=sglang turns on SGLang deployment (and turns vLLM off)', jS.deploy.sglang?.mem_fraction_static === 0.3 && jS.deploy.vllm === undefined, JSON.stringify([jS.deploy.sglang, jS.deploy.vllm]));
   check('and pre-selects awq, which SGLang really loads (measured), not "unsupported"', JSON.stringify(jS.export?.formats) === '["awq"]' && (await page.getByTestId('export-suggestion').innerText()).includes('awq'), JSON.stringify(jS.export));
@@ -142,16 +157,16 @@ try {
   await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.sglang?.mem_fraction_static === 0.45; } catch { return false; } }, null, { timeout: 10000 });
   check('the static memory fraction input reaches the job', (await preview()).deploy.sglang.mem_fraction_static === 0.45);
 
-  await page.getByTestId('deploy-backend').selectOption('none');
+  await pickBackend(page, 'none');
   const j3 = await preview();
   check('switching back to "不部署" clears all of them', j3.deploy.vllm === undefined && j3.deploy.llamacpp === undefined && j3.deploy.sglang === undefined, JSON.stringify([j3.deploy.vllm, j3.deploy.llamacpp, j3.deploy.sglang]));
 
   // ---- 3b. "仅量化不评测" (evaluation.skip, T-1304/T-1306 follow-up) strips export/vllm/llamacpp/analysis
   // outright -- even if they were set before the checkbox was ticked -- matching planner::validate_jobspec's
   // own rejection list exactly, so the UI can never produce a job the server would 400.
-  await page.getByTestId('deploy-backend').selectOption('vllm');
+  await pickBackend(page, 'vllm');
   await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.vllm !== undefined; } catch { return false; } }, null, { timeout: 10000 });
-  await page.getByTestId('opt-sglang').check(); // both backends on at once is allowed (compare them)
+  await page.getByTestId('backend-toggle-sglang').check(); // both backends on at once is allowed (compare them)
   await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.sglang !== undefined; } catch { return false; } }, null, { timeout: 10000 });
   await page.getByTestId('opt-quantize-only').check();
   await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.evaluation?.skip === true; } catch { return false; } }, null, { timeout: 10000 });
@@ -161,13 +176,13 @@ try {
   check('and strips deploy.sglang too', j4.deploy.sglang === undefined, JSON.stringify(j4.deploy.sglang));
   check('and strips export.formats', j4.export === undefined, JSON.stringify(j4.export));
   check('and strips deploy.llamacpp', j4.deploy.llamacpp === undefined, JSON.stringify(j4.deploy.llamacpp));
-  check('the deploy-backend select is disabled while quantize-only is on', await page.getByTestId('deploy-backend').isDisabled());
-  check('the vLLM checkbox is disabled too', await page.getByTestId('opt-vllm').isDisabled());
-  check('and the SGLang one', await page.getByTestId('opt-sglang').isDisabled());
+  check('the llama.cpp card is disabled while quantize-only is on', await page.getByTestId('backend-toggle-llamacpp').isDisabled());
+  check('the vLLM card is disabled too', await page.getByTestId('backend-toggle-vllm').isDisabled());
+  check('and the SGLang one', await page.getByTestId('backend-toggle-sglang').isDisabled());
   await page.getByTestId('opt-quantize-only').uncheck();
   await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.evaluation?.skip === undefined; } catch { return false; } }, null, { timeout: 10000 });
   check('unchecking it brings deploy.vllm back', (await preview()).deploy.vllm !== undefined);
-  await page.getByTestId('deploy-backend').selectOption('none');
+  await pickBackend(page, 'none');
 
   // ---- 3c. quant_device/eval_device split (T-1304/T-1306 follow-up): omitted when equal (today's
   // default, unchanged job shape), appear only once they differ, resolved for real end to end by

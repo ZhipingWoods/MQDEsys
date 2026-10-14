@@ -33,9 +33,13 @@ fs.writeFileSync(path.join(MODEL, 'config.json'), JSON.stringify({ architectures
 
 // ---- a report with per-window losses whose answers are known
 const fixture = JSON.parse(fs.readFileSync(path.join(repo, 'python/tests/fixtures/reports/llm_full.json'), 'utf8'));
-const N = 40, SPIKE = 7, BETTER = 21;
+const N = 40, SPIKE = 7, BETTER = 21, ZERO = 33;
 const base = Array.from({ length: N }, (_, i) => 2.8 + 0.05 * Math.sin(i));
-const shifted = (d, spike) => base.map((b, i) => b + (i === SPIKE ? spike : i === BETTER ? -0.02 : d));
+// the typical change grows a little with the window index, so the median is not just one repeated number; one window is exactly unchanged
+const shifted = (d, spike) => base.map((b, i) => b + (i === SPIKE ? spike : i === BETTER ? -0.02 : i === ZERO ? 0 : d + 0.0005 * i));
+const deltas = (d, spike) => shifted(d, spike).map((q, i) => q - base[i]);
+const medianOf = (v) => { const t = [...v].sort((a, b) => a - b); return t.length % 2 ? t[(t.length - 1) / 2] : (t[t.length / 2 - 1] + t[t.length / 2]) / 2; };
+const signed4 = (x) => `${x >= 0 ? '+' : ''}${x.toFixed(4)}`;
 const ppl = (v) => Math.exp(v.reduce((a, b) => a + b, 0) / v.length);
 const previews = Array.from({ length: N }, (_, i) => (i === SPIKE ? 'The quick brown fox jumps over the lazy dog' : `window ${i} of an ordinary article about nothing in particular`));
 const recipe = (name, algo, d, spike) => {
@@ -50,7 +54,9 @@ const recipe = (name, algo, d, spike) => {
 const full = JSON.parse(JSON.stringify(fixture));
 full.baseline = { ppl: ppl(base), tokens: 20440, windows: N, seq_len: 512, seconds: 1, window_nll: base };
 full.data = { calib: { dataset: root + '/corpus/notes', n: 32, seq_len: 512, files: 3, chars: 9000, tokens: 2400, truncated: false }, eval: { dataset: 'wikitext-2 test', windows: N, seq_len: 512, previews } };
-full.recipes = { W4A16: recipe('W4A16', 'gptq', 0.025, 0.5), W4A8: recipe('W4A8', 'gptq', 0.08, 0.7), W2A16: recipe('W2A16', 'rtn', 0.9, 2.0), W8A16: recipe('W8A16', 'rtn', 0.001, 0.05) };
+full.recipes = { W4A16: recipe('W4A16', 'gptq', 0.025, 0.5), W4A8: recipe('W4A8', 'gptq', 0.08, 0.7), W2A16: recipe('W2A16', 'rtn', 0.9, 2.0), W8A16: recipe('W8A16', 'rtn', -0.01, -0.01), FP8: recipe('FP8', 'rtn', 0.0149, 0.0149) };
+// an output head outside the blocks (embeddings / lm_head live there in a real model)
+for (const r of Object.values(full.recipes)) r.layers.push({ ...r.layers[0], name: 'lm_head', block: -1, shape: [100, 64], out_sqnr_db: 45, w_sqnr_db: 40 });
 delete full.llamacpp;
 const old = JSON.parse(JSON.stringify(fixture));  // as written before per-window losses existed
 const broken = JSON.parse(JSON.stringify(full));
@@ -88,11 +94,17 @@ try {
   check('W4A16 at about +3.8% is within its 5% budget: pass', (await status('W4A16')) === 'pass' && /达标/.test(await text('verdict-badge-W4A16')), await text('verdict-delta-W4A16'));
   check('W4A8 at about +10% is over its 8% budget: fail, and says so', (await status('W4A8')) === 'fail' && /超出预算/.test(await text('verdict-badge-W4A8')), await text('verdict-delta-W4A8'));
   check('W2A16 has no gate: recorded only, never a failure however bad', (await status('W2A16')) === 'record' && /仅记录/.test(await text('verdict-badge-W2A16')));
+  const fp8 = await text('verdict-FP8');
+  check('FP8 at about +1.4% is over its 1% budget: fail (a looser budget would let it through)', (await status('FP8')) === 'fail' && /≤ 1%/.test(fp8) && /超出预算/.test(fp8), fp8);
+  check('W4A16 and W4A8 show their own budgets, 5% and 8%', /≤ 5%/.test(await text('verdict-W4A16')) && /≤ 8%/.test(await text('verdict-W4A8')));
   check('a recipe the table does not name has no rule rather than an invented one', (await status('W8A16')) === 'none' && /没有门槛/.test(await text('verdict-badge-W8A16')));
-  const d416 = await text('verdict-delta-W4A16');
-  check('the change is printed with its sign and two decimals', /^\+\d+\.\d{2}%$/.test(d416) && Number(d416.replace(/[+%]/g, '')) > 3 && Number(d416.replace(/[+%]/g, '')) < 5, d416);
+  const p416 = await text('verdict-delta-W4A16');
+  check('the change is printed with its sign and two decimals', /^\+\d+\.\d{2}%$/.test(p416) && Number(p416.replace(/[+%]/g, '')) > 3 && Number(p416.replace(/[+%]/g, '')) < 5, p416);
   const colorOf = async (loc) => loc.evaluate((e) => getComputedStyle(e).color);
   const nameColor = await colorOf(page.getByTestId('verdict-W4A8').locator('td b'));
+  const improved = await text('verdict-delta-W8A16');
+  const goodColor = await colorOf(page.getByTestId('verdict-delta-W8A16'));
+  check('a recipe whose PPL went DOWN is shown with a minus sign, and coloured unlike one that went up', /^-\d/.test(improved) && goodColor !== (await colorOf(page.getByTestId('verdict-delta-W4A8'))) && goodColor !== nameColor, improved);
   check('a PPL that went up (worse) is coloured as a warning, not like ordinary text', (await colorOf(page.getByTestId('verdict-delta-W4A8'))) !== nameColor && (await colorOf(page.getByTestId('verdict-delta-W4A16'))) === (await colorOf(page.getByTestId('verdict-delta-W4A8'))));
   check('the strip names the section of the architecture the budgets come from', /§11\.4/.test(await text('verdict-strip')));
 
@@ -102,8 +114,10 @@ try {
   // ---------------------------------------------------------------- the window review
   await page.getByTestId('window-review').waitFor({ timeout: 15000 });
   await page.getByTestId('window-recipe-W4A16').click();  // the chips follow the report's own recipe order, which puts unlisted recipes first
-  check('every window is counted: 39 of 40 got worse for W4A16 (window 21 improved)', (await text('window-worse')) === '39 / 40', await text('window-worse'));
-  check('the median change is the typical +0.025, not dragged up by the spike', /^\+0\.0250$/.test(await text('window-median')), await text('window-median'));
+  const d416 = deltas(0.025, 0.5);
+  const worse416 = d416.filter((x) => x > 0).length;
+  check(`every window is counted: ${worse416} of 40 got worse for W4A16 (window ${BETTER} improved, window ${ZERO} did not change at all, so it is not "worse")`, (await text('window-worse')) === `${worse416} / 40` && worse416 === 38, await text('window-worse'));
+  check('the median change is the middle of the sorted list (the mean of the two middle windows), not dragged up by the spike', (await text('window-median')) === signed4(medianOf(d416)), `${await text('window-median')} vs ${signed4(medianOf(d416))}`);
   check('the worst window is the spike, +0.5000', /^\+0\.5000$/.test(await text('window-worst')) && /窗口 7/.test(await text('window-tiles')), await text('window-worst'));
   const rows = await page.getByTestId('window-worst-table').locator('tbody tr').allInnerTexts();
   check('the table lists the 8 windows that changed most, the spike first with its own text', rows.length === 8 && /^7\s/.test(rows[0]) && /quick brown fox/.test(rows[0]), rows[0]);
@@ -119,7 +133,7 @@ try {
   await page.goto(`${base_}/jobs/${NEW}?tab=W4A16`, { waitUntil: 'load' });
   await page.getByTestId('layer-sunburst').waitFor({ timeout: 15000 });
   const sum = await text('sunburst-summary');
-  check('the sunburst counts what it drew: 168 layers in 24 blocks', /168 个量化层/.test(sum) && /24 个块/.test(sum), sum);
+  check('the sunburst counts what it drew: 169 layers, 24 blocks, and the 1 layer outside the blocks', /169 个量化层/.test(sum) && /24 个块/.test(sum) && /块外 1 层/.test(sum), sum);
   const worstBefore = await text('sunburst-worst');
   check('it names the single worst module (lowest output SQNR) in model-relative form', /^layers\.\d+\.\S+$/.test(worstBefore), worstBefore);
   const expectWorst = full.recipes.W4A16.layers.filter((l) => l.out_sqnr_db != null).reduce((a, b) => (b.out_sqnr_db < a.out_sqnr_db ? b : a)).name.replace('model.', '');

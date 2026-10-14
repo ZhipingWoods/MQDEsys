@@ -26,6 +26,18 @@ if (!fs.existsSync(path.join(repo, 'web/dist/index.html'))) { console.error('web
 
 const results = [];
 const check = (name, ok, detail = '') => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`); };
+
+// The deploy step is three backend cards (llama.cpp / vLLM / SGLang). `pickBackend` turns exactly that one on, like the dropdown
+// this replaced did; 'none' turns them all off. For a reused artifact the cards are radio buttons, so choosing is enough.
+async function pickBackend(page, id) {
+  const ids = ['vllm', 'sglang', 'llamacpp'];
+  if (id !== 'none') {
+    const t = page.getByTestId(`backend-toggle-${id}`);
+    if ((await t.getAttribute('type')) !== 'radio') for (const b of ids) if (b !== id) { const o = page.getByTestId(`backend-toggle-${b}`); if (await o.isChecked()) await o.uncheck(); }
+    await t.check();
+  } else for (const b of ids) { const o = page.getByTestId(`backend-toggle-${b}`); if (await o.isChecked()) await o.uncheck(); }
+}
+const enabledBackends = (page) => page.locator('[data-testid^="backend-card-"]:not(.off) .backend-name').allInnerTexts();
 const freePort = () => new Promise((res) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 const runs = fs.mkdtempSync(path.join(os.tmpdir(), 'mqde-e2e-runs-'));
 const MODEL = fs.mkdtempSync(path.join(os.tmpdir(), 'mqde-e2e-model-'));
@@ -78,7 +90,7 @@ try {
   await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
   await page.getByTestId('model-path').fill(MODEL);
   check('no sweep option while nothing is deployed', (await page.getByTestId('sweep-options').count()) === 0);
-  await page.getByTestId('deploy-backend').selectOption('vllm');
+  await pickBackend(page, 'vllm');
   await page.getByTestId('opt-sweep').waitFor({ timeout: 10000 });
   check('picking vLLM offers the concurrency sweep, off by default', !(await page.getByTestId('opt-sweep').isChecked()) && (await preview()).deploy.vllm?.sweep === undefined);
   await page.getByTestId('opt-sweep').check();
@@ -94,10 +106,10 @@ try {
     check(`levels "${bad}" are refused: no sweep in the job and submit is disabled`, (await preview()).deploy.vllm.sweep === undefined && (await page.getByRole('button', { name: '提交作业' }).isDisabled()), JSON.stringify((await preview()).deploy.vllm));
   }
   await page.getByTestId('opt-sweep-levels').fill('1,4');
-  await page.getByTestId('deploy-backend').selectOption('sglang');
+  await pickBackend(page, 'sglang');
   await until(() => { try { const j = JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null'); return j?.deploy?.sglang && !j?.deploy?.vllm; } catch { return false; } });
   check('the same sweep goes with SGLang when that is the backend', JSON.stringify((await preview()).deploy.sglang.sweep.levels) === '[1,4]');
-  await page.getByTestId('deploy-backend').selectOption('llamacpp');
+  await pickBackend(page, 'llamacpp');
   await until(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.llamacpp !== undefined; } catch { return false; } });
   check('llama.cpp has no sweep (llama-server is measured by its own bench): the option disappears', (await page.getByTestId('sweep-options').count()) === 0 && !JSON.stringify((await preview()).deploy).includes('sweep'));
 
@@ -110,10 +122,10 @@ try {
   await page.getByTestId('opt-sweep-levels').fill('1,2');
   await until(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.vllm?.sweep; } catch { return false; } });
   check('and writes it into the deploy job', JSON.stringify((await preview()).deploy.vllm.sweep.levels) === '[1,2]');
-  await page.getByTestId('deploy-backend').selectOption('sglang');
+  await pickBackend(page, 'sglang');
   await until(() => { try { const j = JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null'); return j?.deploy?.sglang && !j?.deploy?.vllm; } catch { return false; } });
   check('SGLang on a reused artifact carries the sweep as well', JSON.stringify((await preview()).deploy.sglang.sweep?.levels) === '[1,2]', JSON.stringify((await preview()).deploy));
-  await page.getByTestId('deploy-backend').selectOption('vllm');
+  await pickBackend(page, 'vllm');
   await until(() => { try { const j = JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null'); return j?.deploy?.vllm?.sweep; } catch { return false; } });
   await page.getByRole('button', { name: '提交作业' }).click();
   await page.waitForURL((u) => u.pathname.startsWith('/jobs/') && !u.pathname.endsWith(DEP), { timeout: 15000 });

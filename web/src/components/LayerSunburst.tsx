@@ -93,6 +93,7 @@ export function LayerSunburst({ layers }: { layers: LayerTrace[] }) {
   );
   if (!layers.length || !have.length) return null;
   const blocks = (tree.children ?? []).filter((c) => c.name.startsWith("block ")).length;
+  const outside = tree.children?.find((c) => c.name === "其它")?.children?.length ?? 0; // embeddings, lm_head, ...
   const scored = layers.flatMap((l) => (valueOf(l, metric) === null ? [] : [{ name: l.name, v: valueOf(l, metric) as number }]));
   const worstLayer = scored.length ? scored.reduce((a, b) => ((meta.higherIsBetter ? b.v < a.v : b.v > a.v) ? b : a)) : null;
   const toData = (n: SunNode): object => ({
@@ -145,7 +146,7 @@ export function LayerSunburst({ layers }: { layers: LayerTrace[] }) {
         }}
       />
       <p className="small" data-testid="sunburst-summary">
-        {layers.length} 个量化层 · {blocks} 个块
+        {layers.length} 个量化层 · {blocks} 个块{outside > 0 ? ` · 块外 ${outside} 层` : ""}
         {worstLayer && (
           <>
             {" "}· 最差的一层：<span className="mono" data-testid="sunburst-worst">{worstLayer.name.replace("model.", "")}</span>（{worstLayer.v.toFixed(meta.unit ? 2 : 4)}

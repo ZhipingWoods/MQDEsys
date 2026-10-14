@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { deriveFromJob, DeriveStep, DERIVE_STEPS, Rule } from "../derive";
-import { Advice, AdviceObjective, api, CatalogModel, DownloadStatus, fmtBytes, RuntimeParams } from "../api";
+import { Advice, AdviceObjective, api, CatalogModel, DownloadStatus, fmtBytes, RuntimeParams , BackendId } from "../api";
+import { BackendCards } from "../components/BackendCards";
 import { DatasetPicker } from "../components/DatasetPicker";
 import { DEFAULT_DATASET, DEFAULT_LLM, DEFAULT_MODEL, DEFAULT_VLM, useAsync, useDebounced } from "../hooks";
 import { Meter } from "./Fit";
@@ -115,6 +116,7 @@ export default function NewJobPage() {
   // instead of leaving the GPTQ/AWQ/GGUF chip lists below to be lined up with vLLM/llama.cpp by hand.
   const [deployBackend, setDeployBackend] = useState<"none" | "vllm" | "llamacpp" | "sglang">("none");
 
+  const backendEnv = useAsync(() => api.backendEnvs().then((r) => r.backends), []);
   const kind = kindOf(domain);
   // only the pickers this kind shows count; a deploy job (B2) has no calibration data at all
   const dataOk = artifact ? true : kind === "llm" ? calibTextOk : calibVisionOk && evalVisionOk;
@@ -187,13 +189,14 @@ export default function NewJobPage() {
         }
         // Turning deployment on does not depend on there being a format to suggest (e.g. a bf16/no-quant
         // recipe legitimately has no export format but can still be served as-is).
+        // Several backends can be on at once (to compare them): turning one on never turns another off.
         if (deployBackend === "vllm" || deployBackend === "sglang") {
-          setUseVllm(deployBackend === "vllm");
-          setUseSglang(deployBackend === "sglang");
-          if (s.format && s.verdict !== "unsupported") setExportFmts([s.format]);
+          const otherHfOn = deployBackend === "vllm" ? useSglang : useVllm;
+          if (deployBackend === "vllm") setUseVllm(true);
+          else setUseSglang(true);
+          // the suggested format replaces the default; it is added to the other backend's only when that one is also on
+          if (s.format && s.verdict !== "unsupported") setExportFmts((f) => (otherHfOn ? (f.includes(s.format) ? f : [...f, s.format]) : [s.format]));
         } else if (deployBackend === "llamacpp") {
-          setUseVllm(false);
-          setUseSglang(false);
           if (s.format) setGguf((g) => (g.length ? g : ["q4_k"]));
         }
       })
@@ -259,6 +262,37 @@ export default function NewJobPage() {
     if (artifact.format === "gguf") setDeployBackend("llamacpp");
     else setDeployBackend((b) => (b === "vllm" || b === "sglang" ? b : "vllm"));
   }, [artifactKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The backends this job deploys to. A reused artifact (B2) goes to exactly one; a quantizing job can go to several.
+  const chosenBackends: BackendId[] = artifact
+    ? deployBackend === "none" ? [] : [deployBackend]
+    : ([useVllm && "vllm", useSglang && "sglang", gguf.length > 0 && "llamacpp"].filter(Boolean) as BackendId[]);
+  const toggleBackend = (id: BackendId, on: boolean) => {
+    if (artifact) {
+      if (on) setDeployBackend(id);
+      return;
+    }
+    const next: Record<BackendId, boolean> = { vllm: useVllm, sglang: useSglang, llamacpp: gguf.length > 0 };
+    next[id] = on;
+    if (id === "vllm") setUseVllm(on);
+    if (id === "sglang") setUseSglang(on);
+    if (id === "llamacpp") setGguf(on ? (gguf.length ? gguf : ["q4_k"]) : []);
+    // the one the export suggestion follows: the one just turned on, else whichever is still on
+    setDeployBackend(on ? id : (["vllm", "sglang", "llamacpp"] as const).find((b) => next[b]) ?? "none");
+  };
+
+  const exportChips = (
+    <div>
+      <div className="small muted">真实导出格式（vLLM / SGLang 共用；S09/S10 一致性检查）</div>
+      <div className="chips">
+        {["gptq", "awq"].map((f) => (
+          <span key={f} className={`chip ${exportFmts.includes(f) ? "on" : ""}`} onClick={() => setExportFmts(exportFmts.includes(f) ? exportFmts.filter((x) => x !== f) : [...exportFmts, f])} data-testid={`export-chip-${f}`}>
+            {f.toUpperCase()}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
 
   const kvSpec = kv === "" ? null : kv === "fp8" ? { format: "fp8_e4m3", bits: 8 } : { format: "int", bits: Number(kv.slice(3)), symmetric: false };
   const rules: Rule[] = inheritedRules.length ? inheritedRules : [
@@ -447,7 +481,7 @@ export default function NewJobPage() {
           2: algorithm === "recipe" ? "按配方默认" : algorithm,
           3: artifact ? "沿用父作业产物" : picked.map((x) => x.toUpperCase()).join("、") || "—",
           4: kind === "llm" ? (artifact ? `${windows} 窗口 × ${seqLen}` : `${windows} 窗口 × ${seqLen} · 量化 ${quantDevice.toUpperCase()} / 评估 ${evalDevice.toUpperCase()}`) : `${dataset.split("/").pop()}${evalDataset !== dataset ? ` → ${evalDataset.split("/").pop()}` : ""} · ${nEval} 样本`,
-          5: `${profiles.data?.find((p) => p.id === hw)?.name ?? hw}${kind === "llm" && deployBackend !== "none" ? ` · ${deployBackend}` : ""}`,
+          5: `${profiles.data?.find((p) => p.id === hw)?.name ?? hw}${kind === "llm" && chosenBackends.length ? ` · ${chosenBackends.join(" + ")}` : ""}`,
         }}
       />
       <div className="card" style={{ display: show(1) || show(2) || show(3) ? undefined : "none" }}>
@@ -825,90 +859,71 @@ export default function NewJobPage() {
               ))}
             </select>
           </div>
-          {kind === "llm" && (
-            <div className="field" style={{ minWidth: 220 }}>
-              <label>部署后端（自动建议导出格式）</label>
-              <select
-                value={deployBackend}
-                disabled={quantizeOnly}
-                onChange={(e) => setDeployBackend(e.target.value as typeof deployBackend)}
-                data-testid="deploy-backend"
-              >
-                {!artifact && <option value="none">不部署（仅评估量化误差）</option>}
-                {(!artifact || !isGguf) && <option value="vllm">vLLM</option>}
-                {(!artifact || isGguf) && <option value="llamacpp">llama.cpp（GGUF）</option>}
-                {(!artifact || !isGguf) && <option value="sglang">SGLang</option>}
-              </select>
-              {suggestion && (
-                <div className="small muted" data-testid="export-suggestion">
-                  建议格式：{suggestion.format || "—"}（{suggestion.verdict}
-                  {suggestion.reason ? `，${suggestion.reason}` : ""}）
-                </div>
-              )}
-              {quantizeOnly && <div className="small muted">仅量化不评测已开启：导出/部署需要评测得到的 fake-quant 基线，本次跳过。</div>}
-            </div>
-          )}
-          {kind === "llm" && !artifact && (
-            <div className="field" style={{ opacity: quantizeOnly ? 0.5 : 1, pointerEvents: quantizeOnly ? "none" : "auto" }}>
-              <label>真实导出（S09/S10 一致性检查）</label>
-              <div className="chips">
-                {["gptq", "awq"].map((f) => (
-                  <span key={f} className={`chip ${exportFmts.includes(f) ? "on" : ""}`} onClick={() => setExportFmts(exportFmts.includes(f) ? exportFmts.filter((x) => x !== f) : [...exportFmts, f])}>
-                    {f.toUpperCase()}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-          {kind === "llm" && !artifact && (
-            <div className="field" style={{ opacity: quantizeOnly ? 0.5 : 1, pointerEvents: quantizeOnly ? "none" : "auto" }}>
-              <label>llama.cpp 部署实测（GGUF，CPU）</label>
-              <div className="chips">
-                {["q8_0", "q5_0", "q4_0", "iq4_nl", "q4_k", "q2_k"].map((f) => (
-                  <span key={f} className={`chip ${gguf.includes(f) ? "on" : ""}`} onClick={() => setGguf(gguf.includes(f) ? gguf.filter((x) => x !== f) : [...gguf, f])}>
-                    {f.toUpperCase()}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-          {kind === "llm" && (!artifact || deployBackend === "vllm") && (
-            <div className="field" style={{ minWidth: 320, opacity: quantizeOnly ? 0.5 : 1, pointerEvents: quantizeOnly ? "none" : "auto" }}>
-              <label>
-                <input type="checkbox" checked={useVllm} disabled={quantizeOnly} onChange={(e) => setUseVllm(e.target.checked)} data-testid="opt-vllm" /> vLLM 部署实测（需要 GPU 与 vLLM；缺失则该阶段跳过）
-              </label>
-              {useVllm && (
-                <>
-                  <label className="small">
-                    显存利用率 <input type="number" step={0.05} min={0.1} max={0.95} value={vllmUtil} style={{ width: 70 }} onChange={(e) => setVllmUtil(Number(e.target.value))} data-testid="opt-vllm-util" />
-                  </label>
-                  <label className="small">
-                    <input type="checkbox" checked={useLmEval} onChange={(e) => setUseLmEval(e.target.checked)} data-testid="opt-lmeval" /> lm-eval 任务精度（同时评未量化基线）
-                  </label>
-                  {useLmEval && (
-                    <div className="form-row" style={{ margin: 0 }}>
-                      <input value={lmTasks} onChange={(e) => setLmTasks(e.target.value)} placeholder="gsm8k,arc_easy" style={{ width: 150 }} aria-label="lm-eval 任务" data-testid="opt-lmeval-tasks" />
-                      <input type="number" min={1} value={lmLimit} style={{ width: 70 }} onChange={(e) => setLmLimit(Number(e.target.value))} aria-label="样本数" />
-                      <input type="number" min={0} value={lmShots} style={{ width: 60 }} onChange={(e) => setLmShots(Number(e.target.value))} aria-label="few-shot" />
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          )}
-          {kind === "llm" && (!artifact || deployBackend === "sglang") && (
-            <div className="field" style={{ minWidth: 320, opacity: quantizeOnly ? 0.5 : 1, pointerEvents: quantizeOnly ? "none" : "auto" }}>
-              <label>
-                <input type="checkbox" checked={useSglang} disabled={quantizeOnly} onChange={(e) => setUseSglang(e.target.checked)} data-testid="opt-sglang" /> SGLang 部署实测（需要 GPU 与独立的 SGLang 环境；缺失则该阶段跳过）
-              </label>
-              {useSglang && (
-                <label className="small">
-                  静态显存占比 <input type="number" step={0.05} min={0.1} max={0.95} value={sglangMem} style={{ width: 70 }} onChange={(e) => setSglangMem(Number(e.target.value))} data-testid="opt-sglang-mem" />
-                </label>
-              )}
-            </div>
-          )}
         </div>
+        {kind === "llm" && (
+          <div data-testid="backend-section" style={{ marginTop: 10 }}>
+            <label className="small">部署后端（真实部署并实测；可以同时选几个来对比）</label>
+            <BackendCards
+              env={backendEnv.data}
+              sel={{
+                vllm: artifact ? deployBackend === "vllm" : useVllm,
+                sglang: artifact ? deployBackend === "sglang" : useSglang,
+                llamacpp: artifact ? deployBackend === "llamacpp" : gguf.length > 0,
+              }}
+              onToggle={toggleBackend}
+              single={!!artifact}
+              allowed={artifact ? (isGguf ? ["llamacpp"] : ["vllm", "sglang"]) : undefined}
+              disabled={quantizeOnly}
+              disabledNote="仅量化不评测已开启：导出/部署需要评测得到的 fake-quant 基线，本次跳过。"
+              options={{
+                llamacpp: artifact ? undefined : (
+                  <div>
+                    <div className="small muted">GGUF 类型（llama.cpp 自己量化，数值与上面的配方无关）</div>
+                    <div className="chips">
+                      {["q8_0", "q5_0", "q4_0", "iq4_nl", "q4_k", "q2_k"].map((f) => (
+                        <span key={f} className={`chip ${gguf.includes(f) ? "on" : ""}`} onClick={() => setGguf(gguf.includes(f) ? gguf.filter((x) => x !== f) : [...gguf, f])}>
+                          {f.toUpperCase()}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ),
+                vllm: (
+                  <>
+                    {!artifact && exportChips}
+                    <label className="small">
+                      显存利用率 <input type="number" step={0.05} min={0.1} max={0.95} value={vllmUtil} style={{ width: 70 }} onChange={(e) => setVllmUtil(Number(e.target.value))} data-testid="opt-vllm-util" />
+                    </label>
+                    <label className="small">
+                      <input type="checkbox" checked={useLmEval} onChange={(e) => setUseLmEval(e.target.checked)} data-testid="opt-lmeval" /> lm-eval 任务精度（同时评未量化基线）
+                    </label>
+                    {useLmEval && (
+                      <div className="form-row" style={{ margin: 0 }}>
+                        <input value={lmTasks} onChange={(e) => setLmTasks(e.target.value)} placeholder="gsm8k,arc_easy" style={{ width: 150 }} aria-label="lm-eval 任务" data-testid="opt-lmeval-tasks" />
+                        <input type="number" min={1} value={lmLimit} style={{ width: 70 }} onChange={(e) => setLmLimit(Number(e.target.value))} aria-label="样本数" />
+                        <input type="number" min={0} value={lmShots} style={{ width: 60 }} onChange={(e) => setLmShots(Number(e.target.value))} aria-label="few-shot" />
+                      </div>
+                    )}
+                  </>
+                ),
+                sglang: (
+                  <>
+                    {!artifact && exportChips}
+                    <label className="small">
+                      静态显存占比 <input type="number" step={0.05} min={0.1} max={0.95} value={sglangMem} style={{ width: 70 }} onChange={(e) => setSglangMem(Number(e.target.value))} data-testid="opt-sglang-mem" />
+                    </label>
+                  </>
+                ),
+              }}
+            />
+            {suggestion && (
+              <div className="small muted" data-testid="export-suggestion">
+                建议格式：{suggestion.format || "—"}（{suggestion.verdict}
+                {suggestion.reason ? `，${suggestion.reason}` : ""}）
+              </div>
+            )}
+          </div>
+        )}
         {kind === "llm" && (artifact ? !isGguf : useVllm || useSglang) && (
           <div className="form-row" data-testid="sweep-options" style={{ marginTop: 8 }}>
             <div className="field" style={{ minWidth: 340 }}>
@@ -930,7 +945,7 @@ export default function NewJobPage() {
       )}
       <div className="card" style={{ display: show(6) ? undefined : "none" }} data-testid="step-confirm">
         <h2>⑥ 确认提交 · JobSpec 预览</h2>
-        {!singlePage && <StepSummary rows={[["领域 / 模型", `${domain.toUpperCase()} · ${model}`], ["算法 / 配方", artifact ? `沿用父作业产物 ${artifact.format === "gguf" ? `GGUF ${artifact.type}` : `${artifact.recipe} · ${artifact.format}`}` : `${algorithm === "recipe" ? "按配方默认" : algorithm} · ${picked.map((x) => x.toUpperCase()).join("、")}`], ["校准数据", kind === "llm" ? `${calibText === "wikitext-2-raw-v1:train" ? "wikitext-2 train" : calibText} · ${nCalib} 段 × ${seqLen}` : `${dataset} · ${nCalib} 样本`], ["评估", kind === "llm" ? `wikitext-2 · ${windows} 窗口 × ${seqLen}${quantizeOnly ? " · 仅量化不评测" : ""}` : `${evalDataset} · ${nEval} 样本${kind === "vlm" ? ` · 最长回答 ${maxNewTokens}` : ""}`], ["设备", kind === "llm" ? (artifact ? (isGguf ? evalDevice.toUpperCase() : "GPU 池") : `量化 ${quantDevice.toUpperCase()} · 评估 ${evalDevice.toUpperCase()}`) : "GPU 池"], ["部署", kind === "llm" && deployBackend !== "none" ? `${deployBackend}${exportFmts.length ? ` · 导出 ${exportFmts.join("/")}` : ""}${gguf.length ? ` · GGUF ${gguf.join("/")}` : ""}` : "不部署"]]} />}
+        {!singlePage && <StepSummary rows={[["领域 / 模型", `${domain.toUpperCase()} · ${model}`], ["算法 / 配方", artifact ? `沿用父作业产物 ${artifact.format === "gguf" ? `GGUF ${artifact.type}` : `${artifact.recipe} · ${artifact.format}`}` : `${algorithm === "recipe" ? "按配方默认" : algorithm} · ${picked.map((x) => x.toUpperCase()).join("、")}`], ["校准数据", kind === "llm" ? `${calibText === "wikitext-2-raw-v1:train" ? "wikitext-2 train" : calibText} · ${nCalib} 段 × ${seqLen}` : `${dataset} · ${nCalib} 样本`], ["评估", kind === "llm" ? `wikitext-2 · ${windows} 窗口 × ${seqLen}${quantizeOnly ? " · 仅量化不评测" : ""}` : `${evalDataset} · ${nEval} 样本${kind === "vlm" ? ` · 最长回答 ${maxNewTokens}` : ""}`], ["设备", kind === "llm" ? (artifact ? (isGguf ? evalDevice.toUpperCase() : "GPU 池") : `量化 ${quantDevice.toUpperCase()} · 评估 ${evalDevice.toUpperCase()}`) : "GPU 池"], ["部署", kind === "llm" && chosenBackends.length ? `${chosenBackends.join(" + ")}${exportFmts.length ? ` · 导出 ${exportFmts.join("/")}` : ""}${gguf.length ? ` · GGUF ${gguf.join("/")}` : ""}` : "不部署"]]} />}
         <pre className="log" style={{ height: "auto", maxHeight: 240 }}>
           {JSON.stringify(job, null, 2)}
         </pre>

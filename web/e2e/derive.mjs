@@ -47,6 +47,18 @@ const MODEL = fs.mkdtempSync(path.join(os.tmpdir(), 'mqde-e2e-model-'));
 
 const results = [];
 const check = (name, ok, detail = '') => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`); };
+
+// The deploy step is three backend cards (llama.cpp / vLLM / SGLang). `pickBackend` turns exactly that one on, like the dropdown
+// this replaced did; 'none' turns them all off. For a reused artifact the cards are radio buttons, so choosing is enough.
+async function pickBackend(page, id) {
+  const ids = ['vllm', 'sglang', 'llamacpp'];
+  if (id !== 'none') {
+    const t = page.getByTestId(`backend-toggle-${id}`);
+    if ((await t.getAttribute('type')) !== 'radio') for (const b of ids) if (b !== id) { const o = page.getByTestId(`backend-toggle-${b}`); if (await o.isChecked()) await o.uncheck(); }
+    await t.check();
+  } else for (const b of ids) { const o = page.getByTestId(`backend-toggle-${b}`); if (await o.isChecked()) await o.uncheck(); }
+}
+const enabledBackends = (page) => page.locator('[data-testid^="backend-card-"]:not(.off) .backend-name').allInnerTexts();
 const freePort = () => new Promise((res) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 const yaml = (o, ind = '') => Object.entries(o).map(([k, v]) => Array.isArray(v)
   ? `${ind}${k}:\n` + v.map((x) => typeof x === 'object' ? `${ind}  - ` + yaml(x, ind + '    ').trimStart() : `${ind}  - ${JSON.stringify(x)}`).join('\n')
@@ -164,15 +176,15 @@ try {
   await page.getByTestId('artifact-select').selectOption('gguf/q4_k');
   await waitJob(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.llamacpp; } catch { return false; } });
   j = await preview();
-  check('a GGUF goes to llama.cpp, and only llama.cpp is offered', j.artifact.format === 'gguf' && j.artifact.type === 'q4_k' && !j.deploy.vllm && JSON.stringify(await page.getByTestId('deploy-backend').locator('option').allInnerTexts()) === '["llama.cpp（GGUF）"]', JSON.stringify(j.deploy));
+  check('a GGUF goes to llama.cpp, and only llama.cpp is offered', j.artifact.format === 'gguf' && j.artifact.type === 'q4_k' && !j.deploy.vllm && JSON.stringify(await enabledBackends(page)) === '["llama.cpp"]', JSON.stringify(j.deploy));
   check('on the GPU pool (the parent evaluated on GPU): every layer offloaded', j.deploy.device === 'gpu' && j.deploy.llamacpp.gpu_layers === 99, JSON.stringify(j.deploy));
   await page.getByTestId('artifact-device').selectOption('cpu');
   await waitJob(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.device === 'cpu'; } catch { return false; } });
   check('换设备 to CPU: llama.cpp keeps every layer on the CPU', (await preview()).deploy.llamacpp.gpu_layers === 0);
   await page.getByTestId('artifact-select').selectOption('W4A8/awq');
   await waitJob(() => { try { const x = JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null'); return x?.artifact?.recipe === 'W4A8' && x?.deploy?.vllm; } catch { return false; } });
-  check('back to an HF checkpoint: vLLM / SGLang only, on the GPU', JSON.stringify(await page.getByTestId('deploy-backend').locator('option').allInnerTexts()) === '["vLLM","SGLang"]' && (await preview()).deploy.device === 'gpu');
-  await page.getByTestId('deploy-backend').selectOption('sglang');
+  check('back to an HF checkpoint: vLLM / SGLang only, on the GPU', JSON.stringify(await enabledBackends(page)) === '["vLLM","SGLang"]' && (await preview()).deploy.device === 'gpu');
+  await pickBackend(page, 'sglang');
   await waitJob(() => { try { const x = JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null'); return x?.deploy?.sglang && !x?.deploy?.vllm; } catch { return false; } });
   await page.getByRole('button', { name: '提交作业' }).click();
   await page.waitForURL((u) => u.pathname.startsWith('/jobs/') && !u.pathname.endsWith(LLM), { timeout: 15000 }).catch(async (e) => {
@@ -215,7 +227,7 @@ try {
   await page.getByTestId('derive-banner').waitFor({ timeout: 10000 });
   check('换推理框架 puts ⑤ in focus', ((await page.locator('#step-deploy').getAttribute('class')) ?? '').includes('derive-focus'));
   await waitJob(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.metadata?.name === 'qwen-p-deploy'; } catch { return false; } });
-  await page.getByTestId('deploy-backend').selectOption('sglang');
+  await pickBackend(page, 'sglang');
   await waitJob(() => { try { const x = JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null'); return x?.deploy?.sglang && !x?.deploy?.vllm; } catch { return false; } });
   check('switching the backend there works as in a fresh job (SGLang on, vLLM off)', true);
 
