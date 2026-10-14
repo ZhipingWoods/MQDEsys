@@ -62,6 +62,26 @@ target_include_directories(mqde_quant PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/qua
 # Bit-exactness contract: no FMA contraction / fast-math in the numerical core.
 target_compile_options(mqde_quant PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-ffp-contract=off -fno-fast-math>)
 
+# Optional CUDA quantizer (T-0406). Off by default: the default build has no CUDA dependency.
+option(MQDE_WITH_CUDA "Build the CUDA integer quantizer (needs nvcc and a CUDA toolkit)" OFF)
+if(MQDE_WITH_CUDA)
+  if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES native)
+  endif()
+  enable_language(CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  # The .cu sits in its own library: nvcc has no C++23 dialect, and mqde_common (hence mqde_quant) requires one. It includes
+  # no project header (a plain-C boundary, quant_cuda_impl.h); quant_cuda.cpp is the C++23 side.
+  add_library(mqde_quant_cuda STATIC src/quant/quant_cuda.cu)
+  set_target_properties(mqde_quant_cuda PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
+  # bit-exactness: one rounding per operation, as the scalar path does
+  target_compile_options(mqde_quant_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false> $<$<COMPILE_LANGUAGE:CUDA>:--prec-div=true> $<$<COMPILE_LANGUAGE:CUDA>:--ftz=false>)
+  target_link_libraries(mqde_quant_cuda PUBLIC CUDA::cudart_static)
+  target_sources(mqde_quant PRIVATE src/quant/quant_cuda.cpp)
+  target_link_libraries(mqde_quant PUBLIC mqde_quant_cuda)
+  target_compile_definitions(mqde_quant PUBLIC MQDE_QUANT_CUDA=1)
+endif()
+
 # 4096 x 4096 MSE calibration, once per kernel set (T-0406); not part of ctest
 add_executable(quant_bench bench/quant_bench.cpp)
 target_link_libraries(quant_bench PRIVATE mqde_quant)
@@ -157,6 +177,9 @@ if(MQDE_BUILD_TESTS)
     tests/unit/hub_test.cpp
     tests/unit/hub_remote_test.cpp
     tests/unit/hal_test.cpp)
+  if(MQDE_WITH_CUDA)
+    target_sources(mqde_unit_tests PRIVATE tests/unit/quant_cuda_test.cpp)
+  endif()
   add_library(mqde_registry_probe STATIC tests/registry_probe/shapes.cpp)
   target_include_directories(mqde_registry_probe PUBLIC tests/registry_probe)
   target_link_libraries(mqde_registry_probe PUBLIC mqde_common)

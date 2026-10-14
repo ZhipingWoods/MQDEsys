@@ -117,8 +117,10 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **本次完成**：整数量化的 min/max、MSE 误差、qdq 三个内层循环做成运行时分派（scalar / AVX2 / NEON），与 scalar 逐位一致；4090 上 4096×4096 MSE 标定 1.34 s → 0.42 s。Compare 页新增“服务吞吐 vs 并发”卡片，真机 vLLM + SGLang 数据验证，并因此修了“未饱和”被显示成 16 的错误。
 - **校验**：ctest 358（Mac）/ 354（4090）全过；pytest golden/quant 96 过（经 `_core`，AVX2 生效）；变异 AVX2 13/13、NEON 10/12（2 个等价）；`web/e2e/perf_compare.mjs` 8/8，9 个变异全部抓到。
 - **踩坑**：变异脚本恢复源码后，文件 mtime 比被改过的目标文件旧，ninja 不重编，之后的 ctest 跑的是变异二进制（看起来像回归）；恢复后必须 `touch` 再编。
-- **未完成**：T-0406 的 CUDA / AVX-512 / pack 的 SIMD（见任务书）。
-- **需要人工决策**：`cpp/CMakeLists.txt` 的改动（L2）。
+- **后续（同日）**：quantize_int / dequantize_int 的 AVX2/NEON；`MQDE_WITH_CUDA` 的 GPU 路径（4090 上内核 3.4 ms，与 scalar 逐位一致）。CUDA 变异测试暴露了三处测试数据缺口（全正/全负组、全零组、float 与 double 累加只在近似平局时才不同），补了测试后变异从 10/15 到 13/15。
+- **未完成**：AVX-512（无硬件）、CUDA 的 FP8 / 位打包 / 接入 Python 作业（见任务书）。
+- **观察到一次**：`backend_envs.destroying_the_manager_stops_a_running_install` 在 `ctest -j8` 下失败过一次，单跑 3/3 通过、整套再跑通过；与本次改动无关，未查根因（疑似时序）。
+- **需要人工决策**：`CMakeLists.txt` 与 `cpp/CMakeLists.txt` 的改动（L2：`-Werror` 只给 C/C++、MQDE_WITH_CUDA 选项、quant_bench）。
 - **前端**：T-0406 是数值内核，无界面；T-R13 的卡片已在预览（localhost:18090）用真机数据确认。
 
 ### 2026-10-13 · T-0006 CI 方案的干净环境试跑

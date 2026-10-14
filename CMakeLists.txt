@@ -18,7 +18,8 @@ endif()
 if(MSVC)
   add_compile_options(/W4 /WX)
 else()
-  add_compile_options(-Wall -Wextra -Werror -Wno-unused-parameter)
+  add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-Wall> $<$<COMPILE_LANGUAGE:C,CXX>:-Wextra> $<$<COMPILE_LANGUAGE:C,CXX>:-Werror>
+                      $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-unused-parameter>)  # not for nvcc: its -Werror takes a value
 endif()
 
 set(MQDE_DATA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/data" CACHE PATH "Default data directory")

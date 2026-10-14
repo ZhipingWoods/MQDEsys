@@ -1,0 +1,160 @@
+// Built with --fmad=false: a fused multiply-add rounds once where the scalar path rounds twice.
+#include <cuda_runtime.h>
+
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+
+#include "quant_cuda_impl.h"
+
+namespace {
+
+struct GP {
+  float scale, zero;
+};
+
+__device__ __forceinline__ float rne(float v) { return rintf(v); }  // ties to even, as std::nearbyint
+
+// Order of float operations is the numerical contract (ops.cpp params_from_range).
+__device__ GP params_from_range(float mn, float mx, int symmetric, float qmin, float qmax) {
+  if (symmetric) {
+    const float amax = fmaxf(fabsf(mn), fabsf(mx));
+    float scale = __fdiv_rn(amax, qmax);
+    if (!(scale > 0.0f)) scale = 1.0f;
+    return {scale, 0.0f};
+  }
+  mn = mn < 0.0f ? mn : 0.0f;  // std::min(mn, 0.0f)
+  mx = 0.0f < mx ? mx : 0.0f;  // std::max(mx, 0.0f)
+  float scale = __fdiv_rn(__fsub_rn(mx, mn), __fsub_rn(qmax, qmin));
+  if (!(scale > 0.0f)) scale = 1.0f;
+  float zero = rne(__fsub_rn(qmin, __fdiv_rn(mn, scale)));
+  zero = zero < qmin ? qmin : (qmax < zero ? qmax : zero);  // std::clamp
+  return {scale, zero};
+}
+
+__device__ __forceinline__ float qdq1(float v, GP p, float qmin, float qmax) {
+  float q = __fadd_rn(rne(__fdiv_rn(v, p.scale)), p.zero);
+  q = q < qmin ? qmin : (qmax < q ? qmax : q);  // std::clamp keeps a NaN
+  return __fmul_rn(__fsub_rn(q, p.zero), p.scale);
+}
+
+// One group = n_seg segments of seg_len floats, seg_stride apart (a per-tensor group is every row of the matrix).
+__global__ void calibrate(const float* x, float* scale, float* zero, int64_t n_groups, MqdeCudaQuantArgs a) {
+  const int64_t gi = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (gi >= n_groups) return;
+  const float* base;
+  int64_t n_seg, seg_len, seg_stride;
+  if (a.per_tensor) {
+    base = x;
+    n_seg = a.rows;
+    seg_len = a.cols;
+    seg_stride = a.cols;
+  } else {
+    const int64_t gpr = a.cols / a.group_cols;
+    base = x + (gi / gpr) * a.cols + (gi % gpr) * a.group_cols;
+    n_seg = 1;
+    seg_len = a.group_cols;
+    seg_stride = a.cols;
+  }
+  float mn = INFINITY, mx = -INFINITY;
+  for (int64_t s = 0; s < n_seg; ++s) {
+    const float* row = base + s * seg_stride;
+    for (int64_t c = 0; c < seg_len; ++c) {
+      const float v = row[c];
+      mn = v < mn ? v : mn;  // std::min(mn, v): a NaN never replaces
+      mx = mx < v ? v : mx;
+    }
+  }
+  GP best;
+  if (!isfinite(mn) || !isfinite(mx)) {
+    best = {1.0f, 0.0f};
+  } else {
+    best = params_from_range(mn, mx, a.symmetric, a.qmin, a.qmax);
+    if (a.mse) {
+      double best_err = INFINITY;
+      for (int i = 0; i <= a.grid; ++i) {
+        const float shrink = __fsub_rn(1.0f, __fdiv_rn(__fmul_rn(static_cast<float>(i), __fsub_rn(1.0f, a.maxshrink)),
+                                                       static_cast<float>(a.grid)));
+        const GP p = params_from_range(__fmul_rn(mn, shrink), __fmul_rn(mx, shrink), a.symmetric, a.qmin, a.qmax);
+        double err = 0.0;
+        for (int64_t s = 0; s < n_seg; ++s) {
+          const float* row = base + s * seg_stride;
+          for (int64_t c = 0; c < seg_len; ++c) {
+            const double d = __dsub_rn(static_cast<double>(qdq1(row[c], p, a.qmin, a.qmax)), static_cast<double>(row[c]));
+            err = __dadd_rn(err, __dmul_rn(d, d));
+          }
+        }
+        if (err < best_err) {
+          best_err = err;
+          best = p;
+        }
+      }
+    }
+  }
+  scale[gi] = best.scale;
+  if (zero) zero[gi] = best.zero;
+}
+
+__global__ void qdq(const float* x, float* out, const float* scale, const float* zero, MqdeCudaQuantArgs a) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (i >= a.rows * a.cols) return;
+  const int64_t gi = a.per_tensor ? 0 : (i / a.cols) * (a.cols / a.group_cols) + (i % a.cols) / a.group_cols;
+  out[i] = qdq1(x[i], {scale[gi], zero ? zero[gi] : 0.0f}, a.qmin, a.qmax);
+}
+
+struct Dev {
+  float *x = nullptr, *out = nullptr, *scale = nullptr, *zero = nullptr;
+  ~Dev() {
+    cudaFree(x);
+    cudaFree(out);
+    cudaFree(scale);
+    cudaFree(zero);
+  }
+};
+
+int fail(char* err, size_t n, const char* what, cudaError_t e) {
+  std::snprintf(err, n, "%s: %s", what, cudaGetErrorString(e));
+  return 1;
+}
+
+}  // namespace
+
+int mqde_cuda_device_count() {
+  int n = 0;
+  return cudaGetDeviceCount(&n) == cudaSuccess ? n : 0;
+}
+
+int mqde_cuda_fake_quant(const float* x, float* out, float* scale, float* zero, const MqdeCudaQuantArgs& a,
+                         double* kernel_ms, char* err, size_t errlen) {
+  const int64_t n = a.rows * a.cols;
+  const int64_t groups = a.per_tensor ? 1 : a.rows * (a.cols / a.group_cols);
+  Dev d;
+  cudaError_t e;
+#define CK(call, what) \
+  if ((e = (call)) != cudaSuccess) return fail(err, errlen, what, e)
+  CK(cudaMalloc(&d.x, n * sizeof(float)), "cudaMalloc x");
+  CK(cudaMalloc(&d.out, n * sizeof(float)), "cudaMalloc out");
+  CK(cudaMalloc(&d.scale, groups * sizeof(float)), "cudaMalloc scale");
+  if (zero) CK(cudaMalloc(&d.zero, groups * sizeof(float)), "cudaMalloc zero");
+  CK(cudaMemcpy(d.x, x, n * sizeof(float), cudaMemcpyHostToDevice), "copy in");
+  cudaEvent_t t0, t1;
+  cudaEventCreate(&t0);
+  cudaEventCreate(&t1);
+  cudaEventRecord(t0);
+  calibrate<<<static_cast<unsigned>((groups + 127) / 128), 128>>>(d.x, d.scale, d.zero, groups, a);
+  CK(cudaGetLastError(), "calibrate launch");
+  qdq<<<static_cast<unsigned>((n + 255) / 256), 256>>>(d.x, d.out, d.scale, d.zero, a);
+  CK(cudaGetLastError(), "qdq launch");
+  cudaEventRecord(t1);
+  CK(cudaEventSynchronize(t1), "kernels");
+  float ms = 0;
+  cudaEventElapsedTime(&ms, t0, t1);
+  cudaEventDestroy(t0);
+  cudaEventDestroy(t1);
+  if (kernel_ms) *kernel_ms = ms;
+  CK(cudaMemcpy(out, d.out, n * sizeof(float), cudaMemcpyDeviceToHost), "copy out");
+  CK(cudaMemcpy(scale, d.scale, groups * sizeof(float), cudaMemcpyDeviceToHost), "copy scale");
+  if (zero) CK(cudaMemcpy(zero, d.zero, groups * sizeof(float), cudaMemcpyDeviceToHost), "copy zero");
+#undef CK
+  return 0;
+}

@@ -12,6 +12,9 @@
 
 #include "mqde/quant/ops.h"
 #include "quant_kernels.h"
+#ifdef MQDE_QUANT_CUDA
+#include "quant_cuda.h"
+#endif
 
 using namespace mqde::quant;
 namespace k = mqde::quant::kernels;
@@ -61,5 +64,26 @@ int main(int argc, char** argv) {
     if (!scalar && base > 0) std::printf("        %.1fx faster than scalar\n", base / sec);
   }
   k::force(nullptr);
+#ifdef MQDE_QUANT_CUDA
+  if (mqde::quant::cuda::available()) {
+    std::vector<float> g(w.size());
+    for (int rep = 0; rep < 2; ++rep) {  // the first call pays for context creation
+      const auto t0 = std::chrono::steady_clock::now();
+      auto r = mqde::quant::cuda::fake_quant(w.data(), rows, cols, s, g.data());
+      const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+      if (!r) {
+        std::printf("cuda    failed: %s\n", r.error().message.c_str());
+        return 2;
+      }
+      const bool same = std::memcmp(ref.data(), g.data(), g.size() * sizeof(float)) == 0;
+      bad += !same;
+      std::printf("cuda    %7.3f s total, %.1f ms kernels  %s%s\n", sec, mqde::quant::cuda::last_kernel_ms(),
+                  same ? "bit-identical" : "DIFFERS",
+                  rep == 0 ? "  (first call: includes context creation)" : "");
+    }
+  } else {
+    std::printf("cuda    no device\n");
+  }
+#endif
   return bad ? 1 : 0;
 }
