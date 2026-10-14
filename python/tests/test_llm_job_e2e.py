@@ -36,7 +36,7 @@ def job_env(monkeypatch: pytest.MonkeyPatch) -> None:
     g = torch.Generator().manual_seed(7)
     monkeypatch.setattr(llm_job, "HFCausalLM", fake_hf)
     monkeypatch.setattr(llm_job, "calib_batches",
-                        lambda tok, n, s, seed=0: [torch.randint(0, VOCAB, (1, s), generator=g) for _ in range(n)])
+                        lambda tok, n, s, seed=0, **kw: [torch.randint(0, VOCAB, (1, s), generator=g) for _ in range(n)])
     monkeypatch.setattr(llm_job, "eval_ids", lambda tok: torch.randint(0, VOCAB, (4096,), generator=g))
 
 
@@ -322,3 +322,75 @@ def test_data_free_rtn_has_weight_distributions_but_no_activation_histogram(job_
     rep = LLMJob(spec(tmp_path), job_dir=tmp_path / "j2").run()
     for lay in rep["recipes"]["W4A16"]["layers"]:
         assert lay["w_hist"] is not None and lay["act_hist"] is None and lay["act_absmax"] is None
+
+
+# ---------------------------------------------------------------- calibration data the user chose
+class _CharTok:
+    """One token per character (modulo the tiny model's vocabulary), so any text file tokenizes."""
+
+    def __call__(self, text: str, return_tensors: str = "pt"):  # type: ignore[no-untyped-def]
+        from types import SimpleNamespace
+
+        return SimpleNamespace(input_ids=torch.tensor([[ord(c) % VOCAB for c in text]]))
+
+
+def test_the_spec_reads_the_calibration_dataset_from_yaml(tmp_path: Path) -> None:
+    y = tmp_path / "j.yaml"
+    y.write_text(yaml.safe_dump({"model": {"path": "<tiny>"}, "quant": {"recipe": ["w4a16"]}, "calibration": {"dataset": "/data/my_corpus", "n_samples": 8}}))
+    assert LLMJobSpec.from_yaml(y).calib_dataset == "/data/my_corpus"
+    y.write_text(yaml.safe_dump({"model": {"path": "<tiny>"}, "quant": {"recipe": ["w4a16"]}}))
+    assert LLMJobSpec.from_yaml(y).calib_dataset == "wikitext-2-raw-v1:train", "unchanged default"
+
+
+def test_the_job_calibrates_on_the_named_source_and_records_what_it_read(job_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake(tok, n, s, seed=0, source="?", info=None):  # type: ignore[no-untyped-def]
+        seen["source"] = source
+        if info is not None:
+            info.update(dataset=source, files=3, chars=1234, tokens=987, truncated=False)
+        return [torch.randint(0, VOCAB, (1, s)) for _ in range(n)]
+
+    monkeypatch.setattr(llm_job, "calib_batches", fake)
+    rep = LLMJob(spec(tmp_path, calib_dataset="/data/corpus"), job_dir=tmp_path / "j").run()
+    assert seen["source"] == "/data/corpus"
+    assert rep["data"]["calib"] == {"dataset": "/data/corpus", "files": 3, "chars": 1234, "tokens": 987, "truncated": False, "n": 4, "seq_len": 32}
+
+
+def test_the_default_calibration_is_still_reported_as_wikitext(job_env: None, tmp_path: Path) -> None:
+    rep = LLMJob(spec(tmp_path), job_dir=tmp_path / "j").run()
+    assert rep["data"]["calib"]["dataset"] == "wikitext-2 train"
+
+
+def test_a_real_text_file_changes_what_gptq_learns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # the real loader on two different corpora, the real GPTQ: the quantized model must depend on the calibration text
+    def fake_hf(path: str, device: str = "cpu", **kw: object):  # type: ignore[no-untyped-def]
+        ad = _tiny.tiny()
+        ad.path = path
+        ad.tokenizer = _CharTok()
+        return ad
+
+    g = torch.Generator().manual_seed(7)
+    monkeypatch.setattr(llm_job, "HFCausalLM", fake_hf)
+    monkeypatch.setattr(llm_job, "eval_ids", lambda tok: torch.randint(0, VOCAB, (4096,), generator=torch.Generator().manual_seed(9)))
+    a, b = tmp_path / "a.txt", tmp_path / "b.txt"
+    a.write_text("the quick brown fox jumps over the lazy dog. " * 80)
+    b.write_text("".join(chr(33 + (i * 7919) % 90) for i in range(3600)))
+    ppl = {}
+    for name, f in (("a", a), ("b", b)):
+        rep = LLMJob(spec(tmp_path, algorithm="gptq", calib_dataset=str(f), calib_seq_len=64), job_dir=tmp_path / f"j{name}").run()
+        assert rep["data"]["calib"]["dataset"] == str(f) and rep["data"]["calib"]["files"] == 1
+        ppl[name] = rep["recipes"]["W4A16"]["eval"]["fake_quant_wo_kv"]["ppl"]
+    assert ppl["a"] != ppl["b"], "GPTQ gave the same result on two different calibration texts: the source was ignored"
+
+
+def test_a_missing_calibration_path_fails_the_job_at_calib_prepare_and_names_the_path(job_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from mqde.data import text as T
+
+    monkeypatch.setattr(llm_job, "calib_batches", T.calib_batches)
+    job = LLMJob(spec(tmp_path, calib_dataset=str(tmp_path / "nope")), job_dir=tmp_path / "j")
+    with pytest.raises(FileNotFoundError, match="nope"):
+        job.run()
+    rep = json.loads((tmp_path / "j" / "report.json").read_text())
+    assert [x["stage"] for x in rep["stages"] if x["status"] == "failed"] == ["calib_prepare"]
+    assert "nope" in rep["error"]

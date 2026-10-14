@@ -1,0 +1,137 @@
+import { useEffect, useState } from "react";
+import { api, BuiltinDataset, DatasetInfo, fmtBytes } from "../api";
+import { useDebounced } from "../hooks";
+
+/** What kind of data the job reads: free text (LLM calibration) or a LeRobot v3 directory (VLA / VLM images). */
+export type DatasetKind = "text" | "lerobot";
+
+interface Props {
+  /** "text": wikitext-2 or a local text file / directory. "lerobot": synthetic or a LeRobot v3 directory. */
+  kind: DatasetKind;
+  role: "calibration" | "evaluation";
+  value: string;
+  onChange: (v: string) => void;
+  /** Tells the form whether it may be submitted: false while a typed path is not usable. */
+  onValid?: (ok: boolean) => void;
+  testid: string;
+  label: string;
+}
+
+const CUSTOM = "__custom__";
+
+const describe = (i: DatasetInfo): string => {
+  if (i.builtin) return "内置数据集";
+  const fmts = Object.entries(i.formats ?? {})
+    .map(([k, v]) => `${k}×${v}`)
+    .join(" ");
+  const n = `${i.files}${i.files_capped ? "+" : ""}`;
+  return i.kind === "dir"
+    ? `目录 · ${n} 个${fmts ? "可读" : ""}文件 · ${fmtBytes(i.bytes)}${fmts ? ` · ${fmts}` : ""}`
+    : `文件 · ${fmtBytes(i.bytes)}${fmts ? ` · ${fmts}` : ""}`;
+};
+
+/** Pick a built-in dataset or give a path on the server; a typed path is checked against the server as it is typed. */
+export function DatasetPicker({ kind, role, value, onChange, onValid, testid, label }: Props) {
+  const [list, setList] = useState<{ builtin: BuiltinDataset[]; roots: string[] } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api.datasets().then(
+      (d) => alive && setList({ builtin: d.builtin, roots: d.allowed_roots }),
+      () => alive && setList({ builtin: [], roots: [] }),
+    );
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const options = (list?.builtin ?? []).filter((b) => b.roles.includes(role) && (kind === "text" ? b.kind === "text" : b.kind === "vision"));
+  const [custom, setCustom] = useState(false);
+  // a value that is not a built-in is a path (it may arrive late: derived from another job, or the list loads after it)
+  useEffect(() => {
+    if (list && value !== "" && !options.some((b) => b.id === value)) setCustom(true);
+  }, [value, list]); // eslint-disable-line react-hooks/exhaustive-deps
+  const selected = custom ? CUSTOM : value;
+
+  const typed = useDebounced(custom ? value.trim() : "", 350);
+  const [info, setInfo] = useState<{ path: string; res?: DatasetInfo; err?: string } | null>(null);
+  useEffect(() => {
+    if (!typed) {
+      setInfo(null);
+      return;
+    }
+    let alive = true;
+    api.inspectDataset(typed, kind).then(
+      (res) => alive && setInfo({ path: typed, res }),
+      (e: Error) => alive && setInfo({ path: typed, err: e.message }),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [typed, kind]);
+
+  const pending = custom && (value.trim() === "" || info?.path !== value.trim());
+  const ok = !custom || (!pending && !!info?.res?.usable);
+  useEffect(() => {
+    onValid?.(ok);
+  }, [ok]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const chosen = options.find((b) => b.id === value);
+  const roots = list?.roots ?? [];
+  return (
+    <div className="field grow" data-testid={`${testid}-picker`}>
+      <label>{label}</label>
+      <select
+        value={selected}
+        data-testid={`${testid}-select`}
+        onChange={(e) => {
+          if (e.target.value === CUSTOM) {
+            setCustom(true);
+            onChange("");
+          } else {
+            setCustom(false);
+            onChange(e.target.value);
+          }
+        }}
+      >
+        {options.map((b) => (
+          <option key={b.id} value={b.id}>
+            {b.label}
+            {b.available ? "" : "（本机没有）"}
+          </option>
+        ))}
+        <option value={CUSTOM}>{kind === "text" ? "本地文件或目录…" : "LeRobot v3 目录…"}</option>
+      </select>
+      {!custom && chosen && !chosen.available && (
+        <p className="note warn" data-testid={`${testid}-unavailable`}>
+          服务器上找不到这个数据集：{chosen.reason}。可以改用本地文件或目录。
+        </p>
+      )}
+      {custom && (
+        <>
+          <input
+            value={value}
+            placeholder={kind === "text" ? "服务器上的路径：.txt .md .jsonl .json .parquet 文件，或装有它们的目录" : "服务器上的 LeRobot v3 目录"}
+            onChange={(e) => onChange(e.target.value)}
+            data-testid={testid}
+          />
+          <p className={`note ${pending || ok ? "" : "warn"}`} data-testid={`${testid}-status`}>
+            {value.trim() === ""
+              ? "填一个路径。"
+              : pending
+                ? "检查中…"
+                : info?.err
+                  ? /outside allowed roots|403/i.test(info.err)
+                    ? `路径不在服务器允许的目录里${roots.length ? `（${roots.join("、")}）` : ""}。`
+                    : info.err
+                  : info?.res?.usable
+                    ? `✓ ${describe(info.res)}`
+                    : `✗ ${info?.res?.reason ?? "不可用"}`}
+          </p>
+          {kind === "text" && role === "calibration" && (
+            <p className="note muted">目录会递归读取，按路径排序，最多读前 5000 万字符；窗口随机取自拼接后的全文。.jsonl / .json / .parquet 取 text 字段。</p>
+          )}
+          {roots.length > 0 && <p className="note muted">服务器允许的目录：{roots.join("、")}</p>}
+        </>
+      )}
+    </div>
+  );
+}

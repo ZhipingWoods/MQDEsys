@@ -284,6 +284,15 @@ export interface SweepPoint {
   ttft_ms?: { p50?: number; p90?: number; p99?: number }; tpot_ms?: { p50?: number; p90?: number; p99?: number };
   itl_ms?: { p50?: number; p90?: number; p99?: number };
 }
+/** T-0304 datasets: what the wizard may offer for calibration / evaluation, and what a typed path holds (metadata only). */
+export interface BuiltinDataset { id: string; label: string; kind: "text" | "vision"; roles: ("calibration" | "evaluation")[]; available: boolean; reason?: string }
+export interface DatasetList { builtin: BuiltinDataset[]; allowed_roots: string[] }
+export interface DatasetInfo {
+  builtin?: boolean; id?: string;
+  kind?: "missing" | "file" | "dir"; files?: number; files_capped?: boolean; bytes?: number; formats?: Record<string, number>;
+  usable: boolean; reason?: string;
+}
+
 export interface ConcurrencySweep {
   points: SweepPoint[]; peak: SweepPoint | null; max_ttft_p99_ms?: number;
   saturation: { concurrency: number; reason: "throughput" | "ttft" | "single-level" | "not-reached"; next_gain_pct: number | null } | null;
@@ -720,6 +729,8 @@ export const api = {
   plan: (model: string, q: Partial<FitQuery>) => req<FitPlan>("POST", "/fit:plan", { model, ...q }),
   claim: (model: string, hardware: string, min_tps: number) => req<ClaimBounds>("POST", "/fit:claim", { model, hardware, min_tps }),
   installed: () => req<InstalledIndex>("GET", "/installed"),
+  datasets: () => req<DatasetList>("GET", "/datasets"),
+  inspectDataset: (path: string, kind: "text" | "lerobot") => req<DatasetInfo>("GET", `/datasets/inspect?path=${encodeURIComponent(path)}&kind=${kind}`),
   catalog: (search = "", provider = "", capability = "", limit = 100, include_demoted = false) =>
     req<{
       updated_at: string; total: number; demoted: number; models: CatalogModel[];

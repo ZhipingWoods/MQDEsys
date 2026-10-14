@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { deriveFromJob, DeriveStep, DERIVE_STEPS, Rule } from "../derive";
 import { Advice, AdviceObjective, api, CatalogModel, DownloadStatus, fmtBytes, RuntimeParams } from "../api";
+import { DatasetPicker } from "../components/DatasetPicker";
 import { DEFAULT_DATASET, DEFAULT_LLM, DEFAULT_MODEL, DEFAULT_VLM, useAsync, useDebounced } from "../hooks";
 import { Meter } from "./Fit";
 
@@ -76,7 +77,13 @@ export default function NewJobPage() {
   const [lmTasks, setLmTasks] = useState("gsm8k");
   const [lmLimit, setLmLimit] = useState(50);
   const [lmShots, setLmShots] = useState(5);
-  const [dataset, setDataset] = useState(DEFAULT_DATASET);
+  const [dataset, setDataset] = useState(DEFAULT_DATASET); // VLA / VLM: where calibration samples come from
+  const [evalDataset, setEvalDataset] = useState(DEFAULT_DATASET); // VLA / VLM: where evaluation samples come from (may differ)
+  const [calibText, setCalibText] = useState("wikitext-2-raw-v1:train"); // LLM: calibration text (built-in, or a server path)
+  // a typed path the server cannot read blocks submitting; each picker reports whether its value is fine
+  const [calibTextOk, setCalibTextOk] = useState(true);
+  const [calibVisionOk, setCalibVisionOk] = useState(true);
+  const [evalVisionOk, setEvalVisionOk] = useState(true);
   const [maxNewTokens, setMaxNewTokens] = useState(24); // VLM: longest answer generated per question
   const [nCalib, setNCalib] = useState(32);
   const [nEval, setNEval] = useState(24);
@@ -109,6 +116,8 @@ export default function NewJobPage() {
   const [deployBackend, setDeployBackend] = useState<"none" | "vllm" | "llamacpp" | "sglang">("none");
 
   const kind = kindOf(domain);
+  // only the pickers this kind shows count; a deploy job (B2) has no calibration data at all
+  const dataOk = artifact ? true : kind === "llm" ? calibTextOk : calibVisionOk && evalVisionOk;
   const currentDomain = domainsQ.data?.find((d) => d.id === domain);
   const blocked = currentDomain != null && currentDomain.pipeline_status !== "implemented";
 
@@ -122,6 +131,8 @@ export default function NewJobPage() {
     setNEval(k === "vlm" ? 12 : 24);
     setMaxNewTokens(24);
     setDataset(k === "vlm" ? "synthetic" : DEFAULT_DATASET);
+    setEvalDataset(k === "vlm" ? "synthetic" : DEFAULT_DATASET);
+    setCalibText("wikitext-2-raw-v1:train");
     setNoQuant(false);
     setQuantizeOnly(false);
     setGroupSizeOverride("");
@@ -202,7 +213,7 @@ export default function NewJobPage() {
         if (!det.job) throw new Error(`作业 ${fromJob} 没有 job.yaml，无法派生`);
         const d = deriveFromJob(det.job, fromStep, {
           domain, name, model, picked, algorithm, groupSizeOverride, action, actStatic, kv, kvMethod, keepEnds, downBits,
-          inheritedRules: [], nCalib, seqLen, dataset, nEval, windows, maxNewTokens, attribution, quantizeOnly, quantDevice,
+          inheritedRules: [], nCalib, seqLen, dataset, evalDataset, calibText, nEval, windows, maxNewTokens, attribution, quantizeOnly, quantDevice,
           evalDevice, hw, deployBackend, useVllm, vllmUtil, useSglang, sglangMem, useSweep, sweepLevels, sweepBudget, useLmEval, lmTasks, lmLimit, lmShots, gguf,
           exportFmts, sens, probe, probeExact,
         });
@@ -212,7 +223,7 @@ export default function NewJobPage() {
         setAlgorithm(d.algorithm); setGroupSizeOverride(d.groupSizeOverride); setAdvancedOpen(d.groupSizeOverride !== "");
         setAction(d.action); setActStatic(d.actStatic); setKv(d.kv); setKvMethod(d.kvMethod); setKeepEnds(d.keepEnds);
         setDownBits(d.downBits); setInheritedRules(d.inheritedRules); setNCalib(d.nCalib); setSeqLen(d.seqLen);
-        setDataset(d.dataset); setNEval(d.nEval); setWindows(d.windows); setMaxNewTokens(d.maxNewTokens);
+        setDataset(d.dataset); setEvalDataset(d.evalDataset); setCalibText(d.calibText); setNEval(d.nEval); setWindows(d.windows); setMaxNewTokens(d.maxNewTokens);
         setAttribution(d.attribution); setQuantizeOnly(d.quantizeOnly); setQuantDevice(d.quantDevice); setEvalDevice(d.evalDevice);
         setHw(d.hw); setDeployBackend(d.deployBackend); setUseVllm(d.useVllm); setVllmUtil(d.vllmUtil); setUseSglang(d.useSglang);
         setSglangMem(d.sglangMem); setUseSweep(d.useSweep); setSweepLevels(d.sweepLevels); setSweepBudget(d.sweepBudget); setUseLmEval(d.useLmEval); setLmTasks(d.lmTasks); setLmLimit(d.lmLimit); setLmShots(d.lmShots);
@@ -292,7 +303,7 @@ export default function NewJobPage() {
           },
           calibration: { dataset, n_samples: nCalib },
           evaluation: {
-            dataset,
+            dataset: evalDataset,
             n_samples: nEval,
             max_new_tokens: maxNewTokens,
             attribution: quantizeOnly ? false : attribution,
@@ -308,7 +319,7 @@ export default function NewJobPage() {
           quant: { recipe: picked, algorithm, ...(action ? { also_quantize: ["action"] } : {}), ...(groupSizeOverride !== "" ? { group_size: Number(groupSizeOverride) } : {}) },
           calibration: { dataset, n_samples: nCalib },
           evaluation: {
-            dataset,
+            dataset: evalDataset,
             n_samples: nEval,
             concurrency: [1, 4, 16, 64],
             attribution: quantizeOnly ? false : attribution,
@@ -329,7 +340,7 @@ export default function NewJobPage() {
             ...(groupSizeOverride !== "" ? { group_size: Number(groupSizeOverride) } : {}),
           },
           ...(quantDevice !== evalDevice ? { quant_device: quantDevice } : {}),
-          calibration: { dataset: "wikitext-2-raw-v1:train", n_samples: nCalib, seq_len: seqLen },
+          calibration: { dataset: calibText, n_samples: nCalib, seq_len: seqLen },
           evaluation: {
             dataset: "wikitext-2-raw-v1:test",
             seq_len: seqLen,
@@ -435,7 +446,7 @@ export default function NewJobPage() {
           1: `${domain.toUpperCase()} · ${model.split("/").pop() || "—"}`,
           2: algorithm === "recipe" ? "按配方默认" : algorithm,
           3: artifact ? "沿用父作业产物" : picked.map((x) => x.toUpperCase()).join("、") || "—",
-          4: kind === "llm" ? (artifact ? `${windows} 窗口 × ${seqLen}` : `${windows} 窗口 × ${seqLen} · 量化 ${quantDevice.toUpperCase()} / 评估 ${evalDevice.toUpperCase()}`) : `${dataset.split("/").pop()} · ${nEval} 样本`,
+          4: kind === "llm" ? (artifact ? `${windows} 窗口 × ${seqLen}` : `${windows} 窗口 × ${seqLen} · 量化 ${quantDevice.toUpperCase()} / 评估 ${evalDevice.toUpperCase()}`) : `${dataset.split("/").pop()}${evalDataset !== dataset ? ` → ${evalDataset.split("/").pop()}` : ""} · ${nEval} 样本`,
           5: `${profiles.data?.find((p) => p.id === hw)?.name ?? hw}${kind === "llm" && deployBackend !== "none" ? ` · ${deployBackend}` : ""}`,
         }}
       />
@@ -704,12 +715,24 @@ export default function NewJobPage() {
         ) : kind !== "llm" ? (
           <>
             <div className="form-row">
-              <div className="field grow">
-                <label>
-                  {kind === "vlm" ? "数据集（synthetic：程序绘制的图形场景，答案已知；或 LeRobot v3 目录：真实图像，以未量化模型自己的回答为参照）" : "数据集（LeRobot v3 目录，或 synthetic）"}
-                </label>
-                <input value={dataset} onChange={(e) => setDataset(e.target.value)} data-testid="dataset-path" />
-              </div>
+              <DatasetPicker
+                kind="lerobot"
+                role="calibration"
+                label={kind === "vlm" ? "校准数据（synthetic：程序绘制的图形场景；或 LeRobot v3 目录：真实图像）" : "校准数据（synthetic，或 LeRobot v3 目录）"}
+                value={dataset}
+                onChange={setDataset}
+                onValid={setCalibVisionOk}
+                testid="dataset-path"
+              />
+              <DatasetPicker
+                kind="lerobot"
+                role="evaluation"
+                label={kind === "vlm" ? "评估数据（答案已知的 synthetic 可算准确率；真实图像以未量化模型自己的回答为参照）" : "评估数据（可与校准数据不同；相同来源时自动切成互不重叠的两份）"}
+                value={evalDataset}
+                onChange={setEvalDataset}
+                onValid={setEvalVisionOk}
+                testid="eval-dataset-path"
+              />
               <div className="field">
                 <label>校准样本</label>
                 <input type="number" value={nCalib} min={1} onChange={(e) => setNCalib(Number(e.target.value))} />
@@ -733,9 +756,10 @@ export default function NewJobPage() {
         ) : (
           <>
             <div className="form-row">
+              <DatasetPicker kind="text" role="calibration" label="校准数据" value={calibText} onChange={setCalibText} onValid={setCalibTextOk} testid="calib-dataset" />
               <div className="field">
-                <label>校准样本（wikitext-2 train）</label>
-                <input type="number" value={nCalib} min={1} onChange={(e) => setNCalib(Number(e.target.value))} />
+                <label>校准样本（窗口数）</label>
+                <input type="number" value={nCalib} min={1} onChange={(e) => setNCalib(Number(e.target.value))} data-testid="calib-n" />
               </div>
               <div className="field">
                 <label>序列长度</label>
@@ -904,11 +928,11 @@ export default function NewJobPage() {
       )}
       <div className="card" style={{ display: show(6) ? undefined : "none" }} data-testid="step-confirm">
         <h2>⑥ 确认提交 · JobSpec 预览</h2>
-        {!singlePage && <StepSummary rows={[["领域 / 模型", `${domain.toUpperCase()} · ${model}`], ["算法 / 配方", artifact ? `沿用父作业产物 ${artifact.format === "gguf" ? `GGUF ${artifact.type}` : `${artifact.recipe} · ${artifact.format}`}` : `${algorithm === "recipe" ? "按配方默认" : algorithm} · ${picked.map((x) => x.toUpperCase()).join("、")}`], ["评估", kind === "llm" ? `wikitext-2 · ${windows} 窗口 × ${seqLen}${quantizeOnly ? " · 仅量化不评测" : ""}` : `${dataset} · ${nEval} 样本${kind === "vlm" ? ` · 最长回答 ${maxNewTokens}` : ""}`], ["设备", kind === "llm" ? (artifact ? (isGguf ? evalDevice.toUpperCase() : "GPU 池") : `量化 ${quantDevice.toUpperCase()} · 评估 ${evalDevice.toUpperCase()}`) : "GPU 池"], ["部署", kind === "llm" && deployBackend !== "none" ? `${deployBackend}${exportFmts.length ? ` · 导出 ${exportFmts.join("/")}` : ""}${gguf.length ? ` · GGUF ${gguf.join("/")}` : ""}` : "不部署"]]} />}
+        {!singlePage && <StepSummary rows={[["领域 / 模型", `${domain.toUpperCase()} · ${model}`], ["算法 / 配方", artifact ? `沿用父作业产物 ${artifact.format === "gguf" ? `GGUF ${artifact.type}` : `${artifact.recipe} · ${artifact.format}`}` : `${algorithm === "recipe" ? "按配方默认" : algorithm} · ${picked.map((x) => x.toUpperCase()).join("、")}`], ["校准数据", kind === "llm" ? `${calibText === "wikitext-2-raw-v1:train" ? "wikitext-2 train" : calibText} · ${nCalib} 段 × ${seqLen}` : `${dataset} · ${nCalib} 样本`], ["评估", kind === "llm" ? `wikitext-2 · ${windows} 窗口 × ${seqLen}${quantizeOnly ? " · 仅量化不评测" : ""}` : `${evalDataset} · ${nEval} 样本${kind === "vlm" ? ` · 最长回答 ${maxNewTokens}` : ""}`], ["设备", kind === "llm" ? (artifact ? (isGguf ? evalDevice.toUpperCase() : "GPU 池") : `量化 ${quantDevice.toUpperCase()} · 评估 ${evalDevice.toUpperCase()}`) : "GPU 池"], ["部署", kind === "llm" && deployBackend !== "none" ? `${deployBackend}${exportFmts.length ? ` · 导出 ${exportFmts.join("/")}` : ""}${gguf.length ? ` · GGUF ${gguf.join("/")}` : ""}` : "不部署"]]} />}
         <pre className="log" style={{ height: "auto", maxHeight: 240 }}>
           {JSON.stringify(job, null, 2)}
         </pre>
-        <button disabled={busy || blocked || picked.length === 0 || (useSweep && !levelsOk)} onClick={submit} title={useSweep && !levelsOk ? "并发档格式不对" : undefined}>
+        <button disabled={busy || blocked || picked.length === 0 || (useSweep && !levelsOk) || !dataOk} onClick={submit} title={useSweep && !levelsOk ? "并发档格式不对" : !dataOk ? "校准 / 评估数据的路径还不能用（见第④步）" : undefined}>
           {busy ? "提交中…" : blocked ? "该领域尚未支持提交" : "提交作业"}
         </button>
       </div>

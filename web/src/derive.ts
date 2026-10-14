@@ -29,7 +29,9 @@ export interface Derived {
   inheritedRules: Rule[]; // mixed-precision rules the wizard has no control for (e.g. a dynamic-quant skip list)
   nCalib: number;
   seqLen: number;
-  dataset: string;
+  dataset: string; // VLA / VLM calibration data
+  evalDataset: string; // VLA / VLM evaluation data
+  calibText: string; // LLM calibration text
   nEval: number;
   windows: number;
   maxNewTokens: number;
@@ -97,6 +99,8 @@ export function deriveFromJob(job: any, step: DeriveStep, d: Derived): Derived {
     nCalib: c.n_samples ?? d.nCalib,
     seqLen: c.seq_len ?? e.seq_len ?? d.seqLen,
     dataset: c.dataset && type !== "llm" ? c.dataset : d.dataset,
+    evalDataset: e.dataset && type !== "llm" ? e.dataset : c.dataset && type !== "llm" ? c.dataset : d.evalDataset,
+    calibText: c.dataset && type === "llm" ? c.dataset : d.calibText,
     nEval: e.n_samples ?? d.nEval,
     windows: e.max_windows ?? d.windows,
     maxNewTokens: e.max_new_tokens ?? d.maxNewTokens,

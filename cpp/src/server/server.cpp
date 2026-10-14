@@ -12,6 +12,7 @@
 #include <httplib.h>
 
 #include "advice.h"
+#include "datasets.h"
 #include "backend_envs.h"
 #include "gguf.h"
 #include "job_runner.h"
@@ -599,6 +600,24 @@ Result<void> serve(const ServerOptions& o) {
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
     return ext == ".gguf";
   };
+  // ---------------- datasets (what the wizard may offer for calibration / evaluation) ----------------
+  svr.Get("/api/v1/datasets", [&](const httplib::Request&, httplib::Response& res) {
+    send_json(res, {{"builtin", builtin_datasets()}, {"allowed_roots", o.allowed_roots}});
+  });
+  // Metadata about ONE path the user typed (never a listing, never content): does it exist, how much is readable. The path has
+  // to be inside an allowed root, like every other path the server is asked about.
+  svr.Get("/api/v1/datasets/inspect", [&](const httplib::Request& req, httplib::Response& res) {
+    const auto path = req.get_param_value("path");
+    const auto kind = req.has_param("kind") ? req.get_param_value("kind") : std::string("text");
+    if (path.empty()) return send_error(res, 400, "invalid_argument", "path is required");
+    if (kind != "text" && kind != "lerobot")
+      return send_error(res, 400, "invalid_argument", "kind must be 'text' or 'lerobot'");
+    if (is_builtin_dataset(path)) return send_json(res, {{"builtin", true}, {"id", path}, {"usable", true}});
+    if (!path_allowed(o.allowed_roots, path))
+      return send_error(res, 403, "forbidden", "path is outside allowed roots (--allow)");
+    send_json(res, to_json(kind == "lerobot" ? inspect_lerobot_dataset(path) : inspect_text_dataset(path)));
+  });
+
   svr.Get("/api/v1/gguf", [&](const httplib::Request&, httplib::Response& res) {
     std::vector<fs::path> found;
     for (const auto& r : o.allowed_roots) {
@@ -1256,6 +1275,36 @@ Result<void> serve(const ServerOptions& o) {
       const auto pj = job["artifact"].value("job", std::string());
       if (!fs::is_regular_file(o.runs_dir / pj / "report.json"))
         return send_error(res, 400, "invalid_argument", fmt::format("artifact.job: job {} not found", pj));
+    }
+    // The data the job names has to be something the executor can read: say so now, not minutes into the job. Built-ins
+    // (synthetic, wikitext-2) are resolved by the executor itself and are not checked here.
+    {
+      Json bad = Json::array();
+      auto check = [&](const char* field, const char* ptr, bool lerobot) {
+        const auto v = job.value(Json::json_pointer(ptr), Json());
+        if (!v.is_string() || v.get<std::string>().empty() || is_builtin_dataset(v.get<std::string>())) return;
+        const auto path = v.get<std::string>();
+        const auto info = lerobot ? inspect_lerobot_dataset(path) : inspect_text_dataset(path);
+        if (!info.usable)
+          bad.push_back({{"field", field},
+                         {"message", fmt::format("{}: {}", path, info.reason)},
+                         {"suggestion", lerobot ? "use 'synthetic' or a LeRobot v3 directory"
+                                                : "name a text file (.txt .md .jsonl .json .parquet) or a directory of them, or use the built-in wikitext-2"}});
+      };
+      const auto mt = job.value("/model/type"_json_pointer, std::string());
+      if (mt == "llm") check("calibration.dataset", "/calibration/dataset", false);
+      if (mt == "vla" || mt == "vlm") {
+        check("calibration.dataset", "/calibration/dataset", true);
+        check("evaluation.dataset", "/evaluation/dataset", true);
+      }
+      if (!bad.empty()) {
+        std::vector<std::string> lines;
+        for (const auto& p : bad) lines.push_back(fmt::format("{}: {}", p["field"].get<std::string>(), p["message"].get<std::string>()));
+        res.status = 400;
+        res.set_content(Json{{"code", "invalid_argument"}, {"message", fmt::format("{}", fmt::join(lines, "; "))}, {"problems", bad}}.dump(),
+                        "application/json");
+        return;
+      }
     }
     // ?dry_run=1: everything above (schema, planner, the artifact's job) without queueing anything
     if (req.has_param("dry_run")) return send_json(res, {{"valid", true}});

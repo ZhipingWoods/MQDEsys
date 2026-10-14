@@ -28,7 +28,7 @@ from typing import Any
 import torch
 import yaml
 
-from mqde.data.text import calib_batches, eval_ids
+from mqde.data.text import BUILTIN_CALIB, calib_batches, eval_ids
 from mqde.eval.logits_probe import capture_reference, compare_to_reference, split_windows
 from mqde.eval.ppl import perplexity
 from mqde.models.hf_llm import HFCausalLM
@@ -54,6 +54,7 @@ class LLMJobSpec:
     algorithm: str = "recipe"
     calib_samples: int = 32
     calib_seq_len: int = 512
+    calib_dataset: str = BUILTIN_CALIB  # wikitext-2 train, or a text file / directory (mqde.data.text)
     eval_seq_len: int = 512
     eval_windows: int = 40
     device: str = "cpu"  # deploy.device: shared fallback for quant_device/eval_device when they are not set
@@ -120,6 +121,7 @@ class LLMJobSpec:
             algorithm=str(q.get("algorithm", "recipe")),
             calib_samples=int(c.get("n_samples", 32)),
             calib_seq_len=int(c.get("seq_len", 512)),
+            calib_dataset=str(c.get("dataset") or BUILTIN_CALIB),
             eval_seq_len=int(e.get("seq_len", 512)),
             eval_windows=int(e.get("max_windows", 40)),
             device=dep_device,
@@ -556,9 +558,13 @@ class LLMJob:
                     self.ev.log(f"group_size override ignored for {r.name}: granularity is {r.weight.granularity}, not per_group")
         ad = self._stage("inspect", lambda: HFCausalLM(s.model_path, device=s.quant_device))
         self.report["model"] = {"path": s.model_path, "blocks": len(ad.get_blocks()), "linears": len(ad.qmodel.units)}
-        prep = lambda: (calib_batches(ad.tokenizer, s.calib_samples, s.calib_seq_len, s.seed), eval_ids(ad.tokenizer))  # noqa: E731
-        cal, ids = self._stage("calib_prepare", prep)
-        self.report["data"] = {"calib": {"dataset": "wikitext-2 train", "n": len(cal), "seq_len": s.calib_seq_len},
+        calib_info: dict[str, Any] = {}
+        prep = lambda: (calib_batches(ad.tokenizer, s.calib_samples, s.calib_seq_len, s.seed, source=s.calib_dataset, info=calib_info),  # noqa: E731
+                        eval_ids(ad.tokenizer))
+        cal, ids = self._stage("calib_prepare", prep, s.calib_dataset)
+        # the default keeps its familiar label; a named source is reported as given, with what was actually read from it
+        calib_report = {"dataset": "wikitext-2 train"} if s.calib_dataset == BUILTIN_CALIB else calib_info
+        self.report["data"] = {"calib": {**calib_report, "n": len(cal), "seq_len": s.calib_seq_len},
                                "eval": {"dataset": "wikitext-2 test", "windows": s.eval_windows, "seq_len": s.eval_seq_len}}
         probe_windows, probe_ref = None, None
         base: dict[str, float] | None = None
@@ -683,6 +689,7 @@ def main() -> None:
     ap.add_argument("--kv-method", default=None, choices=sorted(kvq.KV_REGISTRY))
     ap.add_argument("--eval-windows", type=int)
     ap.add_argument("--calib-samples", type=int)
+    ap.add_argument("--calib-dataset", help="calibration text: a file (.txt .md .jsonl .json .parquet) or a directory of them; default wikitext-2 train")
     ap.add_argument("--mixed-precision", help="inline JSON or a YAML/JSON file: {rules: [{match, bits, skip}]}")
     ap.add_argument("--export", help="comma separated: gptq, awq, compressed-tensors")
     ap.add_argument("--sensitivity", choices=["block", "type"])
@@ -705,7 +712,7 @@ def main() -> None:
     if a.device is not None:
         spec.device = spec.quant_device = spec.eval_device = a.device
     for k, v in {"model_path": a.model, "algorithm": a.algorithm, "quant_device": a.quant_device, "eval_device": a.eval_device,
-                 "act_static": a.act_static, "eval_windows": a.eval_windows, "calib_samples": a.calib_samples,
+                 "act_static": a.act_static, "eval_windows": a.eval_windows, "calib_samples": a.calib_samples, "calib_dataset": a.calib_dataset,
                  "kv_method": a.kv_method}.items():
         if v is not None:
             setattr(spec, k, v)
