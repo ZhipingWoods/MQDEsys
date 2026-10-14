@@ -25,6 +25,12 @@ interface Props {
 
 const CUSTOM = "__custom__";
 
+/** What an older server (before /api/v1/datasets) can be assumed to offer: it cannot be asked, and it does not check paths either. */
+const STATIC_BUILTINS: BuiltinDataset[] = [
+  { id: "wikitext-2-raw-v1:train", label: "wikitext-2（train 切分）", kind: "text", roles: ["calibration"], available: true },
+  { id: "synthetic", label: "synthetic（程序生成的图文样本）", kind: "vision", roles: ["calibration", "evaluation"], available: true },
+];
+
 const describe = (i: DatasetInfo): string => {
   if (i.builtin) return "内置数据集";
   const fmts = Object.entries(i.formats ?? {})
@@ -38,12 +44,12 @@ const describe = (i: DatasetInfo): string => {
 
 /** Pick a built-in dataset or give a path on the server; a typed path is checked against the server as it is typed. */
 export function DatasetPicker({ kind, role, value, onChange, onValid, testid, label, defaultValue }: Props) {
-  const [list, setList] = useState<{ builtin: BuiltinDataset[]; roots: string[] } | null>(null);
+  const [list, setList] = useState<{ builtin: BuiltinDataset[]; roots: string[]; legacy?: boolean } | null>(null);
   useEffect(() => {
     let alive = true;
     api.datasets().then(
       (d) => alive && setList({ builtin: d.builtin, roots: d.allowed_roots }),
-      () => alive && setList({ builtin: [], roots: [] }),
+      () => alive && setList({ builtin: STATIC_BUILTINS, roots: [], legacy: true }), // an older server: no way to ask, so no way to check
     );
     return () => {
       alive = false;
@@ -62,7 +68,7 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
   const typed = useDebounced(custom ? value.trim() : "", 350);
   const [info, setInfo] = useState<{ path: string; res?: DatasetInfo; err?: string } | null>(null);
   useEffect(() => {
-    if (!typed) {
+    if (!typed || list?.legacy) {
       setInfo(null);
       return;
     }
@@ -74,10 +80,10 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
     return () => {
       alive = false;
     };
-  }, [typed, kind]);
+  }, [typed, kind, list?.legacy]);
 
   useEffect(() => {
-    if (!defaultValue || touched || value !== defaultValue.path || info?.path !== value) return;
+    if (!defaultValue || touched || legacy || value !== defaultValue.path || info?.path !== value) return;
     if (info.err || (info.res && !info.res.usable)) {
       setFellBack(defaultValue.path);
       setCustom(false);
@@ -85,8 +91,11 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
     }
   }, [info]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const pending = custom && (value.trim() === "" || info?.path !== value.trim());
-  const ok = !custom || (!pending && !!info?.res?.usable);
+  const legacy = !!list?.legacy;
+  const pending = custom && !legacy && (value.trim() === "" || info?.path !== value.trim());
+  // an older server cannot say whether a path is readable: the path is accepted (it still has to be non-empty) and the
+  // submit-time check, if the server has one, decides
+  const ok = !custom || (legacy ? value.trim() !== "" : !pending && !!info?.res?.usable);
   useEffect(() => {
     onValid?.(ok);
   }, [ok]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -143,7 +152,9 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
           <p className={`note ${pending || ok ? "" : "warn"}`} data-testid={`${testid}-status`}>
             {value.trim() === ""
               ? "填一个路径。"
-              : pending
+              : legacy
+                ? "这台服务器的版本较旧，不能预先检查路径；提交时才会知道能不能读。"
+                : pending
                 ? "检查中…"
                 : info?.err
                   ? /outside allowed roots|403/i.test(info.err)

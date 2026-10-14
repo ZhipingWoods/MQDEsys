@@ -219,6 +219,23 @@ try {
   check('deriving a job whose data has since gone: the missing path is shown and blocks submitting, not silently swapped for synthetic',
     (await page.getByTestId('eval-dataset-path').inputValue()) === path.join(root, 'gone') && await submit.isDisabled() && (await page.getByTestId('eval-dataset-path-fellback').count()) === 0, await status('eval-dataset-path-status'));
 
+  // ---- an older server (before /api/v1/datasets): it cannot be asked, so nothing is pre-checked, but nothing is blocked either
+  await page.route('**/api/v1/datasets**', (r) => r.fulfill({ status: 404, contentType: 'application/json', body: '{"code":"not_found","message":"not found"}' }));
+  await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
+  await page.getByTestId('domain-tab-llm').click();
+  await page.getByTestId('model-path').fill(MODEL);
+  await page.getByTestId('calib-dataset-select').waitFor({ timeout: 10000 });
+  const legacyOpts = await page.getByTestId('calib-dataset-select').locator('option').allInnerTexts();
+  check('older server: the picker still offers wikitext-2 and a path, and the form can be submitted', legacyOpts.length === 2 && (await page.getByTestId('calib-dataset-select').inputValue()) === 'wikitext-2-raw-v1:train' && await submit.isEnabled(), JSON.stringify(legacyOpts));
+  await page.getByTestId('calib-dataset-select').selectOption({ label: '本地文件或目录…' });
+  check('older server: an empty path is still not acceptable', /填一个路径/.test(await status('calib-dataset-status')) && await submit.isDisabled());
+  await page.getByTestId('calib-dataset').fill(CORPUS);
+  check('older server: a typed path is accepted without a check, and the page says it could not check', /版本较旧/.test(await status('calib-dataset-status')) && await submit.isEnabled() && (await preview()).calibration.dataset === CORPUS, await status('calib-dataset-status'));
+  await page.getByTestId('domain-tab-vla').click();
+  await page.getByTestId('dataset-path').waitFor({ timeout: 10000 });
+  check('older server: the VLA default is left as it is (there is nothing to check it against), and submitting is possible', (await page.getByTestId('dataset-path-fellback').count()) === 0 && await submit.isEnabled());
+  await page.unroute('**/api/v1/datasets**');
+
   check('no page errors', errors.length === 0, errors.slice(0, 2).join(' | '));
   failed = results.some((r) => !r);
 } catch (e) {

@@ -112,6 +112,17 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 ---
 
 
+### 2026-10-14 · 校准数据可选 / 部署后端三张卡 / 报告可视化（来自用户三条反馈）
+- **状态**：已提交本地，待 4090 全门禁后推送；生产 18080 需重启才有新端点（见下）
+- **1 校准数据**：LLM 作业原来无视 `calibration.dataset`（写死 wikitext-2）。现在 `mqde.data.text` 读 wikitext-2 train 或本地文件/目录（.txt .md .jsonl .json .parquet，递归，路径序，5000 万字符上限），报告记录读了什么；server 新增 `GET /api/v1/datasets`、`GET /api/v1/datasets/inspect`（单个路径的元数据，同一套路径沙箱，不返回内容），提交时数据读不了就 400；向导里 `DatasetPicker`（边输入边检查、不信旧结果、默认值读不了时回落 synthetic 并说明）；VLA/VLM 的校准与评估数据分开选（执行器本来就支持）。真机：同一 GPTQ W4A16，wikitext 校准 PPL 20.655（+14.1%），用 9060 token 的 markdown 校准 23.877（+31.9%）——数据确实传到了量化器（混了领域与语料大小，不是干净消融）。
+- **2 部署后端**：部署步骤里 llama.cpp / vLLM / SGLang 三张卡（各自说明服务什么格式、跑在哪、测什么、本机是否已装及版本，可多选来对比；复用产物时是单选）。原来是一个默认“不部署”的下拉框。
+- **3 报告**：读了 evalscope 的 web / evaluator / report（结论见下），做了其中可用现有数据实现的三项：每个配方对 ARCHITECTURE §11.4 预算的结论（方向感知）、逐窗口复盘（每个 PPL 窗口的损失：散点、变化分布、变化最大的窗口及其文本；`perplexity()` 现在多返回 `window_nll`，PPL 数值不变）、块→注意力/MLP→模块的旭日图（颜色=SQNR），外加“这次运行有没跑完整的部分”横幅。
+- **evalscope 学到的、还没做的**：指标语义表（方向/单位/范围）贯穿所有表与图；跨作业的基线对比矩阵（delta 按方向着色）；逐请求的部署记录与散点；自包含 HTML 导出带目录；对比页的多选托盘。
+- **校验**：pytest 640（开发环境）/ 613（干净环境），ruff、mypy 干净；ctest 372（GCC）；web e2e：dataset_picker 46、backend_cards 27、report_review 34，并把 derive / wizard_steps / sweep_ui / newjob_wizard 移植到卡片；变异：校准（Python 20、UI/服务器 20）、报告 23、卡片与格式规则 21，逐个看过幸存者（等价的已写明）。
+- **发现的坑**：①我自己的变异脚本一度用“替换第一处 false”恢复文件，改坏了另一行；现在用整文件备份。②macOS 没有 `timeout`，e2e 跑批第一次全是 rc=127，不是通过。③ssh 子 shell 里 `conda activate` 没初始化会静默失败却写下“done”。④`hal_metal.bandwidth_is_in_the_range_of_unified_memory_and_is_stable_between_runs` 在 `ctest -j8` 过载时偶发失败（疑为之前那次没抓到名字的那个），未修。
+- **需要人工决策 / L2**：`cpp/CMakeLists.txt`（server 库加 datasets.cpp）；两个新 REST 端点（仓库里没有 api/openapi.yaml 可登记）；`schemas/job_spec.schema.json` 未改（`calibration.dataset` 本来就是字符串；`custom_samples` 仍然没有任何阶段消费）。
+- **重启生产 18080**：新前端依赖 `/api/v1/datasets`；旧二进制没有，所以选择器对旧服务器有降级路径（见下一条）。
+
 ### 2026-10-14 · T-0406 CUDA GPTQ / AWQ 打包
 - **状态**：T-0406 PARTIAL（剩 AVX-512、Marlin/GGUF 的 GPU 打包、接入 Python 作业）
 - **AWQ（同日追加）**：`quant::cuda::pack_awq`，4 位的输出交错 [0,2,4,6,1,3,5,7] 由设备函数 `awq_source` 给出，其余位宽直排；与 CPU 逐字段一致，含两边都拒绝的形状（out*bits 不是 32 的倍数）；变异 13/13（外加 1 个故意放的空操作对照）；ctest 371（CUDA）/ 358 / 362。

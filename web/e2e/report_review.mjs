@@ -104,7 +104,10 @@ try {
   const nameColor = await colorOf(page.getByTestId('verdict-W4A8').locator('td b'));
   const improved = await text('verdict-delta-W8A16');
   const goodColor = await colorOf(page.getByTestId('verdict-delta-W8A16'));
-  check('a recipe whose PPL went DOWN is shown with a minus sign, and coloured unlike one that went up', /^-\d/.test(improved) && goodColor !== (await colorOf(page.getByTestId('verdict-delta-W4A8'))) && goodColor !== nameColor, improved);
+  // what the two design tokens resolve to in this browser, so "good" and "bad" are checked as themselves, not just as "different"
+  const tokenColor = (name) => page.evaluate((n) => { const e = document.createElement('span'); e.style.color = `var(${n})`; document.body.appendChild(e); const c = getComputedStyle(e).color; e.remove(); return c; }, name);
+  check('a recipe whose PPL went DOWN is shown with a minus sign, in the "good" colour', /^-\d/.test(improved) && goodColor === (await tokenColor('--good-text')) && goodColor !== nameColor, `${improved} ${goodColor}`);
+  check('one whose PPL went UP is in the "critical" colour, never the good one', (await colorOf(page.getByTestId('verdict-delta-W4A8'))) === (await tokenColor('--critical')) && (await tokenColor('--critical')) !== (await tokenColor('--good-text')));
   check('a PPL that went up (worse) is coloured as a warning, not like ordinary text', (await colorOf(page.getByTestId('verdict-delta-W4A8'))) !== nameColor && (await colorOf(page.getByTestId('verdict-delta-W4A16'))) === (await colorOf(page.getByTestId('verdict-delta-W4A8'))));
   check('the strip names the section of the architecture the budgets come from', /§11\.4/.test(await text('verdict-strip')));
 
