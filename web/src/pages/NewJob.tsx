@@ -592,7 +592,7 @@ export default function NewJobPage() {
                 }
                 setAlgorithm(a.algorithm || "recipe");
                 setHw(a.hardware);
-                if (kind === "llm") setDeployBackend(a.backend === "vllm" ? "vllm" : "none");
+                if (kind === "llm") (a.backend === "vllm" ? toggleBackend("vllm", true) : setDeployBackend("none")); // the same path the cards use: flags, format and warnings all follow
               }}
             />
             </div>
