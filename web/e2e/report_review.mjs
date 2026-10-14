@@ -67,7 +67,9 @@ const mkjob = (id, report, name) => { const d = path.join(runs, id); fs.mkdirSyn
   fs.writeFileSync(path.join(d, 'report.json'), JSON.stringify({ ...report, job_id: id }));
   fs.writeFileSync(path.join(d, 'events.jsonl'), JSON.stringify({ type: 'job_state', state: 'SUCCEEDED', seq: 1, ts: 1 }) + '\n');
   fs.writeFileSync(path.join(d, 'job.yaml'), `metadata: {name: ${name}}\nmodel: {type: llm, path: ${MODEL}}\nquant: {recipe: [w4a16]}\noutput_dir: ${runs}\n`); };
-const NEW = '20261014-000000-repnew', OLD = '20261014-000000-repold', BAD = '20261014-000000-repbad';
+const NEW = '20261014-000000-repnew', OLD = '20261014-000000-repold', BAD = '20261014-000000-repbad', SAM = '20261014-000000-repsam';
+const pasted = JSON.parse(JSON.stringify(full)); pasted.data.calib = { dataset: 'custom_samples', samples: 2, chars: 1500, tokens: 410, truncated: false, n: 32, seq_len: 512 };
+mkjob(SAM, pasted, 'rep-pasted');
 mkjob(NEW, full, 'rep-new'); mkjob(OLD, old, 'rep-old'); mkjob(BAD, broken, 'rep-bad');
 
 const port = await freePort();
@@ -113,6 +115,13 @@ try {
 
   const calibTile = (await page.getByText('校准', { exact: true }).first().locator('xpath=..').innerText()).replace(/\s+/g, ' ');
   check('the calibration tile says what was read from a user-named corpus: where, how many files, how many tokens', /notes/.test(calibTile) && /3 个文件/.test(calibTile) && /2400 token/.test(calibTile), calibTile);
+
+  await page.goto(`${base_}/jobs/${SAM}`, { waitUntil: 'load' });
+  await page.getByTestId('verdict-strip').waitFor({ timeout: 15000 });
+  const samTile = (await page.getByText('校准', { exact: true }).first().locator('xpath=..').innerText()).replace(/\s+/g, ' ');
+  check('a job calibrated on pasted text says so: how many pasted samples and how many tokens, not a file count', /2 段粘贴的文本/.test(samTile) && /410 token/.test(samTile) && !/个文件/.test(samTile), samTile);
+  await page.goto(`${base_}/jobs/${NEW}`, { waitUntil: 'load' });
+  await page.getByTestId('verdict-strip').waitFor({ timeout: 15000 });
 
   // ---------------------------------------------------------------- the window review
   await page.getByTestId('window-review').waitFor({ timeout: 15000 });
