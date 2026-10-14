@@ -112,8 +112,9 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 ---
 
 
-### 2026-10-14 · T-0406 CUDA GPTQ 打包
-- **状态**：T-0406 PARTIAL（剩 AVX-512、AWQ/Marlin/GGUF 的 GPU 打包、接入 Python 作业）
+### 2026-10-14 · T-0406 CUDA GPTQ / AWQ 打包
+- **状态**：T-0406 PARTIAL（剩 AVX-512、Marlin/GGUF 的 GPU 打包、接入 Python 作业）
+- **AWQ（同日追加）**：`quant::cuda::pack_awq`，4 位的输出交错 [0,2,4,6,1,3,5,7] 由设备函数 `awq_source` 给出，其余位宽直排；与 CPU 逐字段一致，含两边都拒绝的形状（out*bits 不是 32 的倍数）；变异 13/13（外加 1 个故意放的空操作对照）；ctest 371（CUDA）/ 358 / 362。
 - **本次完成**：`quant::cuda::pack_gptq`：qweight / qzeros（v1 存 zero−1）/ fp16 scales 都与 CPU 逐字段一致；位流抽成设备函数 `stream_word`，pack_bits 与 GPTQ 共用。fp16 转换没有用 `__float2half_rn`（它对 NaN 的编码可能不同），移植了 CPU 的同一套算法。
 - **校验**：ctest 370（CUDA 构建）/ 358 / Mac 另跑；变异 15/17，余下 1 个等价 + 1 个故意放的空操作对照。
 - **前端**：无改动。

@@ -396,6 +396,47 @@ TEST(quant_cuda, pack_gptq_converts_scales_to_fp16_exactly_like_the_cpu_for_ever
   }
 }
 
+TEST(quant_cuda, pack_awq_matches_the_cpu_packer_field_by_field) {
+  NEED_GPU();
+  namespace pack = mqde::quant::pack;
+  std::mt19937 rng(6);
+  struct Shape {
+    int64_t out, in, group;
+  };
+  // 4 bit is the interleaved layout; the other widths are the plain stream. out * bits must be a multiple of
+  // 32; `in` is free.
+  for (int bits : {2, 3, 4, 8})
+    for (Shape sh : {Shape{32, 128, 32}, Shape{64, 96, 32}, Shape{96, 100, 50}, Shape{32, 7, 7},
+                     Shape{128, 64, 64}, Shape{40, 64, 32}}) {
+      const bool ok = (sh.out * bits) % 32 == 0;
+      const int64_t groups = sh.in / sh.group;
+      std::vector<uint8_t> codes(static_cast<size_t>(sh.out * sh.in)),
+          zeros(static_cast<size_t>(sh.out * groups));
+      std::vector<float> scales(zeros.size());
+      const uint32_t mask = (1u << bits) - 1u;
+      for (auto& c : codes) c = static_cast<uint8_t>(rng() & mask);
+      for (auto& z : zeros) z = static_cast<uint8_t>(rng() & mask);
+      std::normal_distribution<float> d(0.0f, 0.02f);
+      for (auto& v : scales) v = d(rng);
+      auto ref = pack::pack_awq(codes.data(), zeros.data(), scales.data(), sh.out, sh.in, sh.group, bits);
+      auto got = mqde::quant::cuda::pack_awq(codes.data(), zeros.data(), scales.data(), sh.out, sh.in,
+                                             sh.group, bits);
+      const std::string what = std::to_string(bits) + " bit [" + std::to_string(sh.out) + "," +
+                               std::to_string(sh.in) + "] g" + std::to_string(sh.group);
+      ASSERT_EQ(static_cast<bool>(ref), static_cast<bool>(got))
+          << what << ": the two packers disagree on whether the shape is valid";
+      EXPECT_EQ(ok, static_cast<bool>(got)) << what;
+      if (!ref) continue;
+      EXPECT_EQ(ref->qweight, got->qweight) << what;
+      EXPECT_EQ(ref->qzeros, got->qzeros) << what;
+      EXPECT_EQ(ref->scales, got->scales) << what;
+      EXPECT_EQ(ref->qweight_rows, got->qweight_rows) << what;
+      EXPECT_EQ(ref->qweight_cols, got->qweight_cols) << what;
+      EXPECT_EQ(ref->qzeros_rows, got->qzeros_rows) << what;
+      EXPECT_EQ(ref->qzeros_cols, got->qzeros_cols) << what;
+    }
+}
+
 TEST(quant_cuda, pack_gptq_rejects_the_shapes_the_cpu_packer_rejects) {
   NEED_GPU();
   std::vector<uint8_t> codes(64 * 64, 0), zeros(64 * 2, 0);

@@ -33,3 +33,9 @@ int mqde_cuda_unpack_bits(const uint32_t* words, uint8_t* codes, int64_t count, 
 int mqde_cuda_pack_gptq(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out,
                         int64_t in, int64_t group_size, int bits, int v1, int32_t* qweight, int32_t* qzeros,
                         uint16_t* fp16_scales, double* kernel_ms, char* err, size_t errlen);
+
+// AWQ GEMM layout (pack.h pack_awq): qweight [in, out*bits/32], qzeros [groups, out*bits/32], scales fp16
+// [groups, out]; 4-bit words hold the outputs of each block of 8 in the order [0,2,4,6,1,3,5,7].
+int mqde_cuda_pack_awq(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out,
+                       int64_t in, int64_t group_size, int bits, int32_t* qweight, int32_t* qzeros,
+                       uint16_t* fp16_scales, double* kernel_ms, char* err, size_t errlen);

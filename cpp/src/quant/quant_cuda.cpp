@@ -107,4 +107,31 @@ Result<pack::IntPacked> pack_gptq(const uint8_t* codes, const uint8_t* zeros, co
   return p;
 }
 
+Result<pack::IntPacked> pack_awq(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out,
+                                 int64_t in, int64_t group_size, int bits) {
+  if (bits < 1 || bits > 8) return make_error(Errc::kInvalidArgument, "bits must be in [1, 8], got {}", bits);
+  if (out <= 0 || in <= 0) return make_error(Errc::kInvalidArgument, "empty weight [{}, {}]", out, in);
+  if (group_size <= 0 || in % group_size != 0)
+    return make_error(Errc::kInvalidArgument, "in_features {} is not divisible by group_size {}", in,
+                      group_size);
+  if ((out * bits) % 32 != 0)
+    return make_error(Errc::kInvalidArgument, "AWQ packing needs out*bits divisible by 32 (out={}, {} bit)",
+                      out, bits);
+  if (!available()) return make_error(Errc::kUnsupported, "no CUDA device");
+  const int64_t groups = in / group_size;
+  pack::IntPacked p;
+  p.qweight_rows = in;
+  p.qweight_cols = out * bits / 32;
+  p.qzeros_rows = groups;
+  p.qzeros_cols = p.qweight_cols;
+  p.qweight.assign(static_cast<size_t>(in * p.qweight_cols), 0);
+  p.qzeros.assign(static_cast<size_t>(groups * p.qzeros_cols), 0);
+  p.scales.assign(static_cast<size_t>(groups * out), 0);
+  char err[256] = {};
+  if (mqde_cuda_pack_awq(codes, zeros, scales, out, in, group_size, bits, p.qweight.data(), p.qzeros.data(),
+                         p.scales.data(), &g_last_ms, err, sizeof err) != 0)
+    return make_error(Errc::kInternal, "CUDA pack_awq: {}", err);
+  return p;
+}
+
 }  // namespace mqde::quant::cuda

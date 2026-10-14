@@ -180,6 +180,30 @@ __global__ void gptq_qzeros(const uint8_t* zeros, int32_t* qzeros, int64_t out, 
       out, c, bits));
 }
 
+// pack.cpp awq_interleave: with 4 bits, stream position j of a block of 8 holds output (j / 8) * 8 + {0,2,4,6,1,3,5,7}[j % 8]
+__device__ __forceinline__ int64_t awq_source(int64_t j, int bits) {
+  if (bits != 4) return j;
+  const int order = (j % 8) < 4 ? 2 * static_cast<int>(j % 8) : 2 * static_cast<int>(j % 8 - 4) + 1;
+  return (j / 8) * 8 + order;
+}
+
+// qweight[i * cols + c] = word c of the stream, over the outputs, of the codes of input i
+__global__ void awq_qweight(const uint8_t* codes, int32_t* qweight, int64_t out, int64_t in, int64_t cols, int bits) {
+  const int64_t t = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (t >= in * cols) return;
+  const int64_t i = t / cols, c = t % cols;
+  qweight[t] = static_cast<int32_t>(
+      stream_word([&](int64_t j) { return static_cast<uint32_t>(codes[awq_source(j, bits) * in + i]); }, out, c, bits));
+}
+
+__global__ void awq_qzeros(const uint8_t* zeros, int32_t* qzeros, int64_t out, int64_t groups, int64_t cols, int bits) {
+  const int64_t t = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (t >= groups * cols) return;
+  const int64_t g = t / cols, c = t % cols;
+  qzeros[t] = static_cast<int32_t>(
+      stream_word([&](int64_t j) { return static_cast<uint32_t>(zeros[awq_source(j, bits) * groups + g]); }, out, c, bits));
+}
+
 // pack.cpp fp32_to_fp16: the same branch-free round-to-nearest-even port (not __float2half_rn: NaN is the canonical 0x7E00)
 __device__ uint16_t fp32_to_fp16(float f) {
   const float scale_to_inf = 0x1.0p+112f;
@@ -379,6 +403,50 @@ int mqde_cuda_pack_gptq(const uint8_t* codes, const uint8_t* zeros, const float*
   if (kernel_ms) *kernel_ms = ms;
   CK(cudaMemcpy(qweight, dqw.p, rows * out * sizeof(int32_t), cudaMemcpyDeviceToHost), "copy qweight");
   CK(cudaMemcpy(qzeros, dqz.p, groups * zcols * sizeof(int32_t), cudaMemcpyDeviceToHost), "copy qzeros");
+  CK(cudaMemcpy(fp16_scales, d16.p, groups * out * sizeof(uint16_t), cudaMemcpyDeviceToHost), "copy fp16 scales");
+#undef CK
+  return 0;
+}
+
+int mqde_cuda_pack_awq(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out, int64_t in,
+                       int64_t group_size, int bits, int32_t* qweight, int32_t* qzeros, uint16_t* fp16_scales,
+                       double* kernel_ms, char* err, size_t errlen) {
+  const int64_t groups = in / group_size, cols = out * bits / 32;
+  Buf<uint8_t> dc, dz;
+  Buf<float> ds;
+  Buf<int32_t> dqw, dqz;
+  Buf<uint16_t> d16;
+  cudaError_t e;
+#define CK(call, what) \
+  if ((e = (call)) != cudaSuccess) return fail(err, errlen, what, e)
+  CK(cudaMalloc(&dc.p, out * in), "cudaMalloc codes");
+  CK(cudaMalloc(&dz.p, out * groups), "cudaMalloc zeros");
+  CK(cudaMalloc(&ds.p, out * groups * sizeof(float)), "cudaMalloc scales");
+  CK(cudaMalloc(&dqw.p, in * cols * sizeof(int32_t)), "cudaMalloc qweight");
+  CK(cudaMalloc(&dqz.p, groups * cols * sizeof(int32_t)), "cudaMalloc qzeros");
+  CK(cudaMalloc(&d16.p, groups * out * sizeof(uint16_t)), "cudaMalloc fp16 scales");
+  CK(cudaMemcpy(dc.p, codes, out * in, cudaMemcpyHostToDevice), "copy codes");
+  CK(cudaMemcpy(dz.p, zeros, out * groups, cudaMemcpyHostToDevice), "copy zeros");
+  CK(cudaMemcpy(ds.p, scales, out * groups * sizeof(float), cudaMemcpyHostToDevice), "copy scales");
+  cudaEvent_t t0, t1;
+  cudaEventCreate(&t0);
+  cudaEventCreate(&t1);
+  cudaEventRecord(t0);
+  awq_qweight<<<static_cast<unsigned>((in * cols + 255) / 256), 256>>>(dc.p, dqw.p, out, in, cols, bits);
+  CK(cudaGetLastError(), "qweight launch");
+  awq_qzeros<<<static_cast<unsigned>((groups * cols + 255) / 256), 256>>>(dz.p, dqz.p, out, groups, cols, bits);
+  CK(cudaGetLastError(), "qzeros launch");
+  gptq_scales<<<static_cast<unsigned>((groups * out + 255) / 256), 256>>>(ds.p, d16.p, out, groups);
+  CK(cudaGetLastError(), "scales launch");
+  cudaEventRecord(t1);
+  CK(cudaEventSynchronize(t1), "awq pack");
+  float ms = 0;
+  cudaEventElapsedTime(&ms, t0, t1);
+  cudaEventDestroy(t0);
+  cudaEventDestroy(t1);
+  if (kernel_ms) *kernel_ms = ms;
+  CK(cudaMemcpy(qweight, dqw.p, in * cols * sizeof(int32_t), cudaMemcpyDeviceToHost), "copy qweight");
+  CK(cudaMemcpy(qzeros, dqz.p, groups * cols * sizeof(int32_t), cudaMemcpyDeviceToHost), "copy qzeros");
   CK(cudaMemcpy(fp16_scales, d16.p, groups * out * sizeof(uint16_t), cudaMemcpyDeviceToHost), "copy fp16 scales");
 #undef CK
   return 0;
