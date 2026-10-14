@@ -220,6 +220,8 @@ try {
     (await page.getByTestId('eval-dataset-path').inputValue()) === path.join(root, 'gone') && await submit.isDisabled() && (await page.getByTestId('eval-dataset-path-fellback').count()) === 0, await status('eval-dataset-path-status'));
 
   // ---- an older server (before /api/v1/datasets): it cannot be asked, so nothing is pre-checked, but nothing is blocked either
+  let inspectCalls = 0;
+  page.on('request', (r) => { if (/\/api\/v1\/datasets\/inspect/.test(r.url())) inspectCalls++; });
   await page.route('**/api/v1/datasets**', (r) => r.fulfill({ status: 404, contentType: 'application/json', body: '{"code":"not_found","message":"not found"}' }));
   await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
   await page.getByTestId('domain-tab-llm').click();
@@ -230,7 +232,9 @@ try {
   await page.getByTestId('calib-dataset-select').selectOption({ label: '本地文件或目录…' });
   check('older server: an empty path is still not acceptable', /填一个路径/.test(await status('calib-dataset-status')) && await submit.isDisabled());
   await page.getByTestId('calib-dataset').fill(CORPUS);
+  await page.waitForTimeout(700); // longer than the picker's debounce: a check would have been sent by now
   check('older server: a typed path is accepted without a check, and the page says it could not check', /版本较旧/.test(await status('calib-dataset-status')) && await submit.isEnabled() && (await preview()).calibration.dataset === CORPUS, await status('calib-dataset-status'));
+  check('older server: no request is made to an endpoint that does not exist', inspectCalls === 0, `${inspectCalls} calls`);
   await page.getByTestId('domain-tab-vla').click();
   await page.getByTestId('dataset-path').waitFor({ timeout: 10000 });
   check('older server: the VLA default is left as it is (there is nothing to check it against), and submitting is possible', (await page.getByTestId('dataset-path-fellback').count()) === 0 && await submit.isEnabled());
