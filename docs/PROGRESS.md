@@ -145,7 +145,13 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - GGUF 的几种类型里 Q8_0 是最简单的一种（每 32 个元素一块，一个 fp16 scale + 32 个 int8 code，没有 k-quant 那种带子块的多级 scale），拿它作为第一个 GPU 化的 GGUF 类型：`quant::cuda::gguf_quantize_q8_0`/`gguf_dequantize_q8_0`，每线程一个块，同样的 amax→除法→除法→`roundf`（对应 CPU 的 `std::round`，都是四舍五入远离零，不是 rne）次序，复用已有的 `fp32_to_fp16` 设备函数（移植了 CPU 的无分支 RNE 算法），新增一个 `fp16_to_fp32` 设备函数（半精度转单精度是精确的位扩展，不存在舍入分歧，只要位操作抄对就行）。
 - **怎么验证的**：Mac 没有 CUDA，这段代码在 Mac 上完全不会被编译（`MQDE_WITH_CUDA` 默认关），没法本地跑。在 4090 上专门配置了一个新目录 `build/cuda-check`（`-DMQDE_WITH_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89`，`nvcc` 在 `/usr/local/cuda/bin`），不碰生产在用的 `build/dev`；代码先用 scp 直接传上去验证（避免没验证过的代码进 `main`），确认通过后才提交推送。
 - **校验**：新 `ctest -R gguf_q8_0`（2 项：与 CPU 逐位一致，含全零块、跨 block 不串 scale、随机正态分布数值；长度不是 32 的倍数被拒绝）；`quant_cuda` 全部 15 项、`build/cuda-check` 全量 392/392（含 HAL 插件，一开始只 build 了 `mqde_unit_tests` 这一个 target 漏了插件 `.so`，补 `cmake --build` 不带 `--target` 后全绿）；变异：把 `roundf` 改成直接截断（取整方向变了），新测试抓到，恢复后复跑绿。
-- **没做的**（如实记录，不是顺手就能扩展的）：Marlin 的 GPU 打包（16×16 分块+张量核心片段置换，和这里的"位流/块量化"完全是两类东西）；GGUF 的其余类型（q4_0/q5_0/iq4_nl 结构和 Q8_0 类似，理论上可以照搬这次的路子继续做；q2_k/q4_k 是带子块的 k-quant，复杂度更高，没有一起做）；把这条 GPU 路径接到 Python 作业——查了 `python/mqde/export/int_checkpoint.py`，它调用的 `core.pack_int` 吃的是已经搬到 CPU 的 numpy 数组（`layer_codes()` 在那之前就 `.cpu().numpy()` 了），真要用上 GPU 打包得把这条导出路径的张量一路留在 GPU 上、重新设计 pybind11 的内存边界，是对现有导出路径的结构性改动，这次没有顺手做。
+- **没做的**（如实记录，不是顺手就能扩展的）：Marlin 的 GPU 打包（16×16 分块+张量核心片段置换，和这里的"位流/块量化"完全是两类东西）；把这条 GPU 路径接到 Python 作业——查了 `python/mqde/export/int_checkpoint.py`，它调用的 `core.pack_int` 吃的是已经搬到 CPU 的 numpy 数组（`layer_codes()` 在那之前就 `.cpu().numpy()` 了），真要用上 GPU 打包得把这条导出路径的张量一路留在 GPU 上、重新设计 pybind11 的内存边界，是对现有导出路径的结构性改动，这次没有顺手做。
+
+### 2026-10-14 · T-0406 GGUF Q4_0/Q5_0 的 GPU 打包/反打包（同日追加）
+- Q4_0（2 字节 fp16 scale + 16 字节压缩的 4 位 code，`d = max/-8`，不是 `amax/-8`：符号要保留）、Q5_0（多一个 4 字节的 `qh` 存每个 code 的第 5 位）都照抄了 Q8_0 那一套手法（每线程一个 32 元素块），`quant::cuda::gguf_{quantize,dequantize}_{q4_0,q5_0}`。
+- Q5_0 的第 5 位打包/解包是这次最容易出错的地方：量化时 `qh` 第 `j` 位存 `xi0` 的第 5 位、第 `j+16` 位存 `xi1` 的第 5 位；反量化要把这两位分别移回第 4 位（`j` 位右移 `j` 再左移 4，`j+16` 位直接右移 `j+12` 就落在第 4 位，不用再左移）——照抄 CPU 的位运算，没有自己重新推一遍。
+- **校验**：新 `ctest -R gguf_q4_0_and_q5_0`（2 项，和 Q8_0 一样的夹具：普通块、全零块、与 CPU 自己的反量化器互相验证）；同样在 4090 的 `build/cuda-check` 临时目录验证（先 scp 未提交的代码上去跑通，再提交推送，推送后重新拉取、在干净目录上重新验证一遍）；`quant_cuda` 全部 17 项、`build/cuda-check` 全量 394/394；变异：把 Q5_0 反量化的移位量从 `j+12` 改成 `j+11`（第 5 位的位置错位一位），新测试抓到（输出变成全 -0，因为错位后第 5 位永远读到 0 且符号位计算也跟着错）。
+- 没有跟着做 `iq4_nl`（非线性码本 + 15 次迭代局部搜索，比这几个的仿射量化复杂一级，要先把 CPU 那套迭代逻辑在单线程里原样搬一遍，风险和耗时都高一档）或 `q2_k`/`q4_k`（带子块的 k-quant，同理），留着作为下一步候选。
 
 ### 2026-10-14 · T-0406 CUDA 位打包
 - **状态**：T-0406 PARTIAL（剩 AVX-512、GPTQ/AWQ/Marlin/GGUF 的 GPU 打包、接入 Python 作业）

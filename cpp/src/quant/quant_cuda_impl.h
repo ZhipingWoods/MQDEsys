@@ -47,3 +47,16 @@ int mqde_cuda_gguf_quantize_q8_0(const float* x, uint8_t* out, int64_t n, double
                                  size_t errlen);
 int mqde_cuda_gguf_dequantize_q8_0(const uint8_t* data, float* out, int64_t n, double* kernel_ms, char* err,
                                    size_t errlen);
+// GGUF Q4_0 (GgufType::kQ4_0): blocks of 32, a 2-byte fp16 scale + 16 bytes of packed 4-bit codes (18
+// bytes/block, BlockQ4_0). n must be a multiple of 32; out holds n/32*18 bytes.
+int mqde_cuda_gguf_quantize_q4_0(const float* x, uint8_t* out, int64_t n, double* kernel_ms, char* err,
+                                 size_t errlen);
+int mqde_cuda_gguf_dequantize_q4_0(const uint8_t* data, float* out, int64_t n, double* kernel_ms, char* err,
+                                   size_t errlen);
+// GGUF Q5_0 (GgufType::kQ5_0): blocks of 32, a 2-byte fp16 scale + 4 bytes holding each code's 5th bit +
+// 16 bytes of packed low 4 bits (22 bytes/block, BlockQ5_0). n must be a multiple of 32; out holds
+// n/32*22 bytes.
+int mqde_cuda_gguf_quantize_q5_0(const float* x, uint8_t* out, int64_t n, double* kernel_ms, char* err,
+                                 size_t errlen);
+int mqde_cuda_gguf_dequantize_q5_0(const uint8_t* data, float* out, int64_t n, double* kernel_ms, char* err,
+                                   size_t errlen);

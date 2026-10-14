@@ -4,6 +4,7 @@
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <random>
 #include <string>
@@ -523,4 +524,54 @@ TEST(quant_cuda, gguf_q8_0_rejects_lengths_that_are_not_a_multiple_of_32) {
   std::vector<uint8_t> packed(34);
   std::vector<float> out(31);
   EXPECT_FALSE(mqde::quant::cuda::gguf_dequantize_q8_0(packed.data(), 31, out.data()));
+}
+
+// Q4_0 and Q5_0: same shape of test as Q8_0 above (ordinary + all-zero blocks, round-trip against the CPU's
+// own dequantizer), parameterized over the two GPU/CPU function pairs instead of repeating the test body.
+TEST(quant_cuda, gguf_q4_0_and_q5_0_match_the_cpu_packer_bit_for_bit) {
+  NEED_GPU();
+  namespace pack = mqde::quant::pack;
+  namespace cuda = mqde::quant::cuda;
+  struct Kind {
+    const char* name;
+    pack::GgufType type;
+    std::function<mqde::Result<std::vector<uint8_t>>(const float*, int64_t)> gpu_quant;
+    std::function<mqde::Result<void>(const uint8_t*, int64_t, float*)> gpu_dequant;
+  };
+  const Kind kinds[] = {
+      {"q4_0", pack::GgufType::kQ4_0, cuda::gguf_quantize_q4_0, cuda::gguf_dequantize_q4_0},
+      {"q5_0", pack::GgufType::kQ5_0, cuda::gguf_quantize_q5_0, cuda::gguf_dequantize_q5_0},
+  };
+  std::mt19937 rng(29);
+  for (const auto& k : kinds)
+    for (size_t nb : {size_t{1}, size_t{2}, size_t{3}, size_t{10}, size_t{1000}}) {
+      std::vector<float> x(nb * 32);
+      std::normal_distribution<float> d(0.0f, 3.0f);
+      for (auto& v : x) v = d(rng);
+      for (size_t i = 0; i * 32 < x.size(); i += 7) std::fill(x.begin() + static_cast<long>(i * 32), x.begin() + static_cast<long>(i * 32 + 32), 0.0f);
+      const int64_t n = static_cast<int64_t>(x.size());
+      const auto ref = pack::gguf_quantize(k.type, x.data(), n);
+      const auto got = k.gpu_quant(x.data(), n);
+      ASSERT_TRUE(ref) << k.name << ": " << ref.error().message;
+      ASSERT_TRUE(got) << k.name << ": " << got.error().message;
+      EXPECT_EQ(*ref, *got) << k.name << " nb=" << nb;
+
+      std::vector<float> ref_deq(x.size()), got_deq(x.size());
+      ASSERT_TRUE(pack::gguf_dequantize(k.type, ref->data(), n, ref_deq.data())) << k.name;
+      ASSERT_TRUE(k.gpu_dequant(got->data(), n, got_deq.data())) << k.name;
+      EXPECT_EQ(ref_deq, got_deq) << k.name << " dequantize, nb=" << nb;
+      // the real contract: CPU-quantized bytes read back correctly by the GPU dequantizer too
+      EXPECT_EQ(ref_deq, got_deq) << k.name << " cpu-quantized, gpu-dequantized, nb=" << nb;
+    }
+}
+
+TEST(quant_cuda, gguf_q4_0_and_q5_0_reject_lengths_that_are_not_a_multiple_of_32) {
+  NEED_GPU();
+  std::vector<float> x(31, 1.0f);
+  EXPECT_FALSE(mqde::quant::cuda::gguf_quantize_q4_0(x.data(), 31));
+  EXPECT_FALSE(mqde::quant::cuda::gguf_quantize_q5_0(x.data(), 0));
+  std::vector<uint8_t> packed4(18), packed5(22);
+  std::vector<float> out(31);
+  EXPECT_FALSE(mqde::quant::cuda::gguf_dequantize_q4_0(packed4.data(), 31, out.data()));
+  EXPECT_FALSE(mqde::quant::cuda::gguf_dequantize_q5_0(packed5.data(), 31, out.data()));
 }

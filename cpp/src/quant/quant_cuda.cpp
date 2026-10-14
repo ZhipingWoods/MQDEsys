@@ -155,4 +155,46 @@ Result<void> gguf_dequantize_q8_0(const uint8_t* data, int64_t n, float* out) {
   return {};
 }
 
+Result<std::vector<uint8_t>> gguf_quantize_q4_0(const float* x, int64_t n) {
+  if (n <= 0 || n % 32 != 0)
+    return make_error(Errc::kInvalidArgument, "gguf_quantize_q4_0: n ({}) must be a positive multiple of 32", n);
+  if (!available()) return make_error(Errc::kUnsupported, "no CUDA device");
+  std::vector<uint8_t> out(static_cast<size_t>(n / 32 * 18));
+  char err[256] = {};
+  if (mqde_cuda_gguf_quantize_q4_0(x, out.data(), n, &g_last_ms, err, sizeof err) != 0)
+    return make_error(Errc::kInternal, "CUDA gguf_quantize_q4_0: {}", err);
+  return out;
+}
+
+Result<void> gguf_dequantize_q4_0(const uint8_t* data, int64_t n, float* out) {
+  if (n <= 0 || n % 32 != 0)
+    return make_error(Errc::kInvalidArgument, "gguf_dequantize_q4_0: n ({}) must be a positive multiple of 32", n);
+  if (!available()) return make_error(Errc::kUnsupported, "no CUDA device");
+  char err[256] = {};
+  if (mqde_cuda_gguf_dequantize_q4_0(data, out, n, &g_last_ms, err, sizeof err) != 0)
+    return make_error(Errc::kInternal, "CUDA gguf_dequantize_q4_0: {}", err);
+  return {};
+}
+
+Result<std::vector<uint8_t>> gguf_quantize_q5_0(const float* x, int64_t n) {
+  if (n <= 0 || n % 32 != 0)
+    return make_error(Errc::kInvalidArgument, "gguf_quantize_q5_0: n ({}) must be a positive multiple of 32", n);
+  if (!available()) return make_error(Errc::kUnsupported, "no CUDA device");
+  std::vector<uint8_t> out(static_cast<size_t>(n / 32 * 22));
+  char err[256] = {};
+  if (mqde_cuda_gguf_quantize_q5_0(x, out.data(), n, &g_last_ms, err, sizeof err) != 0)
+    return make_error(Errc::kInternal, "CUDA gguf_quantize_q5_0: {}", err);
+  return out;
+}
+
+Result<void> gguf_dequantize_q5_0(const uint8_t* data, int64_t n, float* out) {
+  if (n <= 0 || n % 32 != 0)
+    return make_error(Errc::kInvalidArgument, "gguf_dequantize_q5_0: n ({}) must be a positive multiple of 32", n);
+  if (!available()) return make_error(Errc::kUnsupported, "no CUDA device");
+  char err[256] = {};
+  if (mqde_cuda_gguf_dequantize_q5_0(data, out, n, &g_last_ms, err, sizeof err) != 0)
+    return make_error(Errc::kInternal, "CUDA gguf_dequantize_q5_0: {}", err);
+  return {};
+}
+
 }  // namespace mqde::quant::cuda
