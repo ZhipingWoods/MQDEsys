@@ -4,7 +4,7 @@
 
 ## 1. 现状
 
-- **wheel 的一半已经有了**：`python/pyproject.toml` 已经用 `scikit-build-core` 构建 `mqde` Python 包和 `_core` 扩展（`cmake.source-dir = ".."`，`-DMQDE_WITH_PYTHON=ON`）。**缺的是服务本体**：`mqde`（命令行 + `mqde serve`）是 C++ 可执行文件，不在 wheel 里；`data/`（配方、硬件库、模型家族、兼容矩阵）和 `web/dist`（前端）也不在。没有它们，装了 wheel 也跑不起 `mqde serve`，也没有 `mqde estimate`。
+- **wheel 的大半已经有了**：`python/pyproject.toml` 用 `scikit-build-core` 构建 `mqde` Python 包和 `_core` 扩展，`cpp/CMakeLists.txt` 的 `install(TARGETS mqde DESTINATION mqde/bin)` 还把 C++ 命令行 `mqde` 装进了 wheel（见文末实测，原稿说“不在 wheel 里”是错的）。**缺的是**：`data/`（配方、硬件库、模型家族、兼容矩阵）和 `web/dist`（前端）不在 wheel 里，二进制找数据目录用的是编译时写死的构建树绝对路径，没有 console script，扩展靠 RPATH 指向构建环境的 conda 目录。装了 wheel 的机器上 `mqde recipes` 会因找不到数据目录而失败。
 - **没有 `deploy/` 目录**；4090 和 Mac 上都装有 docker，但仓库里没有 Dockerfile。
 - 服务有几个必须随发行版带上的运行时事实（都来自本轮真机经验）：
   - GCC ≥ 12 才能编（系统 g++ 11 编不过 `std::async`）；C++20（`std::expected`）。
@@ -37,3 +37,18 @@
 2. 批准 `cibuildwheel` 作为构建期依赖（需另写 ADR）吗？还是先只发源码包 + conda 配方？
 3. aarch64 先不做可以吗？
 4. 确认 Docker 方案依赖 ADR-0005 的 token（先批 ADR-0005，再做镜像）。
+
+## 实测：现有 wheel（2026-10-14，4090，`mqde-ci` 环境）
+
+`pip wheel python/ --no-deps`：**44 秒**，`mqde-0.2.0-cp311-cp311-linux_x86_64.whl`（2.1 MB，62 个文件）；装进新 venv 后 `import mqde._core` 成功，`mqde/bin/mqde --version` 输出 `mqde 0.1.0`。不通过或要处理的：
+
+| 现象 | 影响 |
+|---|---|
+| 标签是 `linux_x86_64`，不是 `manylinux` | PyPI 不收；要 `auditwheel`/`cibuildwheel` |
+| `_core` 与 `mqde` 二进制动态链接 conda 里的 `libyaml-cpp.so.0.8`、`libfmt.so.12`、`libstdc++`，RPATH 写死 `/root/miniconda3/envs/mqde-ci/lib` | 在这台机器上能 import 只因为那个目录还在；换机器会找不到库（**没有**在没有该目录的机器上验证，这里是读 `ldd`/`readelf` 的结论） |
+| `MQDE_DEFAULT_DATA_DIR` 编进二进制的是构建树的 `data/` 绝对路径 | `MQDE_DATA_DIR=/nonexistent mqde recipes` → `error: [not_found] data directory '/nonexistent/recipes' missing`；换机器装 wheel 即如此 |
+| wheel 里混进了 `_core.cpython-312-darwin.so`（Mac 构建物） | 来自我 rsync 到 4090 的工作树；`*.so` 在 `.gitignore` 里，干净 clone 不会有，但 `wheel.packages = ["mqde"]` 会打包目录里任何文件，从脏树构建会泄漏 |
+| 没有 console script（要 `python -m` 才能用 Python 部分，`mqde` 二进制不在 PATH） | 第 3 节第 1 点 |
+
+没验证：manylinux 构建、macOS wheel、wheel 里带 `data/` 与 `web/dist` 后的运行。
+

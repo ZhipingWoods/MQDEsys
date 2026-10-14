@@ -112,6 +112,12 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 ---
 
 
+### 2026-10-14 · T-1202 现有 wheel 的实测（写进打包方案）
+- **状态**：方案仍 Proposed（未启用）；只改了方案文档
+- **本次完成**：4090 干净环境 `pip wheel python/` 44 秒出 2.1 MB wheel，新 venv 里 `import mqde._core` 与 `mqde/bin/mqde` 都能跑；纠正方案里“服务二进制不在 wheel 里”的错误（CMake 已经装进去了）；列出真正缺的：manylinux 标签、conda 库的 RPATH、编进二进制的数据目录绝对路径、没有 console script、脏树里的 `.so` 会泄漏进 wheel。
+- **没验证**：没有在没有 conda 目录的机器上装过；manylinux / macOS wheel。
+- **前端**：无改动。
+
 ### 2026-10-13 · T-0406 量化内核 SIMD（AVX2 / NEON）+ T-R13 Compare 页性能对比
 - **状态**：T-0406 PARTIAL；T-R13 Compare 页卡片已提交 `5f056c2`
 - **本次完成**：整数量化的 min/max、MSE 误差、qdq 三个内层循环做成运行时分派（scalar / AVX2 / NEON），与 scalar 逐位一致；4090 上 4096×4096 MSE 标定 1.34 s → 0.42 s。Compare 页新增“服务吞吐 vs 并发”卡片，真机 vLLM + SGLang 数据验证，并因此修了“未饱和”被显示成 16 的错误。
