@@ -158,15 +158,56 @@ try {
   await page.getByTestId('recipe-w4a8').click();
   await page.getByTestId('backend-toggle-vllm').uncheck();
 
-  // the usual order of a person at the form: switch a backend on first, type the model path afterwards
+  // two cards switched on one straight after the other (as happens over a slower link): the first one's work must not be lost.
+  // Only a 4-bit recipe, so the planner's answer (awq) differs from the default left behind (gptq) and the two can be told apart.
+  await page.getByTestId('recipe-w2a16').click();
+  await page.getByTestId('recipe-w4a8').click();
+  await page.getByTestId('backend-toggle-vllm').check();
+  await page.getByTestId('backend-toggle-llamacpp').check();  // no wait in between
+  await formatsAre(['awq']);
+  check('vLLM then llama.cpp switched on back to back: the export is still the planner\'s own answer (awq), not the default left behind when the first computation was cancelled', JSON.stringify((await preview()).export?.formats) === '["awq"]' && !!(await deploy()).vllm && !!(await deploy()).llamacpp);
+  await page.getByTestId('recipe-w2a16').click();
+  await formatsAre(['gptq']);
+  await page.getByTestId('serve-warnings').waitFor({ timeout: 10000 });
+  check('and the warning that vLLM cannot serve the 2-bit recipe is there as well, whichever order the cards were clicked', /W2A16/.test(await text('serve-warnings')));
+  await page.getByTestId('backend-toggle-sglang').check();
+  await page.getByTestId('backend-toggle-llamacpp').uncheck();
+  await until(() => document.querySelectorAll('[data-testid="serve-warnings"] li').length === 2);
+  const both = await text('serve-warnings');
+  check('with SGLang on too, each backend that cannot serve the 2-bit recipe is named, with its own reason', /vLLM/.test(both) && /SGLang/.test(both) && /gptq_marlin|Unknown quantization/i.test(both), both.slice(0, 200));
+  await page.getByTestId('backend-toggle-vllm').uncheck();
+  await page.getByTestId('backend-toggle-sglang').uncheck();
+  await page.getByTestId('recipe-w4a8').click();
+
+  // the usual order of a person at the form: switch a backend on first, type the model path afterwards. With only a 4-bit recipe the
+  // planner's answer (awq) differs from the fallback (gptq), so this shows the planner WAS asked even though the server could not
+  // validate a job with no readable model path yet (it is asked again with a path the server allows)
+  await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
+  await page.getByTestId('domain-tab-llm').click();
+  await page.getByTestId('recipe-w2a16').click();
+  await page.getByTestId('recipe-w4a8').click();
+  await page.getByTestId('backend-toggle-vllm').check();
+  await formatsAre(['awq']);
+  await page.getByTestId('model-path').fill(MODEL);
+  v = await dry();
+  check('turning vLLM on BEFORE the model path is typed still gets the planner\'s answer (awq) and ends with a job the server accepts', v.status === 200 && JSON.stringify((await preview()).export?.formats) === '["awq"]', `${v.status} ${v.body.slice(0, 120)}`);
+  await page.getByTestId('backend-toggle-vllm').uncheck();
+
+  // an older server cannot be asked which path it allows, and refuses a job with an unreadable model path before looking at the
+  // formats: the planner cannot look, and the choice is GPTQ (the one format that takes every weight width). The default format is
+  // already gptq, so first make it awq by hand: only an actual decision can turn it back.
+  await page.route('**/api/v1/datasets**', (r) => r.fulfill({ status: 404, contentType: 'application/json', body: '{"code":"not_found","message":"not found"}' }));
   await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
   await page.getByTestId('domain-tab-llm').click();
   await page.getByTestId('backend-toggle-vllm').check();
   await formatsAre(['gptq']);
-  await page.getByTestId('model-path').fill(MODEL);
-  v = await dry();
-  check('turning vLLM on BEFORE the model path is typed (the server cannot validate such a job yet) still ends with an export the server accepts', v.status === 200 && JSON.stringify((await preview()).export?.formats) === '["gptq"]', `${v.status} ${v.body.slice(0, 120)}`);
-  await page.getByTestId('backend-toggle-vllm').uncheck();
+  await page.getByTestId('export-chip-awq').first().click();
+  await page.getByTestId('export-chip-gptq').first().click();
+  await formatsAre(['awq']);
+  await page.getByTestId('recipe-w2a16').click();  // a change of recipes makes the page decide the format again
+  await formatsAre(['gptq']);
+  check('when the planner cannot look (older server, no readable model path) the page falls back to GPTQ, and does not leave the hand-picked awq that would be refused', JSON.stringify((await preview()).export?.formats) === '["gptq"]');
+  await page.unroute('**/api/v1/datasets**');
 
   // ---------------------------------------------------------------- quantize-only
   await page.getByTestId('opt-quantize-only').check();

@@ -172,13 +172,14 @@ export default function NewJobPage() {
     api.datasets().then((d) => setAllowedRoots(d.allowed_roots), () => setAllowedRoots(null));
   }, []);
   const [servingNotes, setServingNotes] = useState<{ recipe: string; backend: string; reason: string }[]>([]);
+  // A: what depends on the PRIMARY backend (the one last turned on): the suggestion shown on the card, llama.cpp's default GGUF type,
+  // and the reset when every backend is off. Which formats to export is not decided here (see B): it must not depend on click order.
   useEffect(() => {
     if (deployBackend === "none") {
       setUseVllm(false);
       setUseSglang(false);
       setGguf([]);
       setSuggestion(null);
-      setServingNotes([]);
       return;
     }
     if (kind !== "llm" || !primaryRecipe) {
@@ -186,68 +187,72 @@ export default function NewJobPage() {
       return;
     }
     let alive = true;
-    // The export format has to work for EVERY recipe the job quantizes (AWQ cannot export a 2-bit recipe, the server rejects the job),
-    // so ask about each one; the primary recipe's answer is what the card shows.
-    const asked = picked.filter((r) => r !== "bf16");
-    if (!asked.length) asked.push(primaryRecipe);
-    Promise.all(asked.map((r) => api.exportSuggestion(r, deployBackend, hw)))
-      .then((all) => {
+    api
+      .exportSuggestion(primaryRecipe, deployBackend, hw)
+      .then((s) => {
         if (!alive) return;
-        const s = all[Math.max(0, asked.indexOf(primaryRecipe))];
         setSuggestion(s);
-        if (keepParentDeploy.current) {
-          keepParentDeploy.current = false;
-          return;
-        }
-        // Turning deployment on does not depend on there being a format to suggest (e.g. a bf16/no-quant
-        // recipe legitimately has no export format but can still be served as-is).
-        // Several backends can be on at once (to compare them): turning one on never turns another off.
-        if (deployBackend === "vllm" || deployBackend === "sglang") {
-          const otherHfOn = deployBackend === "vllm" ? useSglang : useVllm;
-          if (deployBackend === "vllm") setUseVllm(true);
-          else setUseSglang(true);
-          // Recipes this backend cannot serve at all: say which, and why (the job still exports them; that stage will not work)
-          setServingNotes(all.flatMap((x, i) => (x.verdict === "unsupported" ? [{ recipe: asked[i], backend: deployBackend, reason: x.reason }] : [])));
-          // The format must be one the planner accepts for EVERY recipe (AWQ cannot export a 2-bit one): try each recipe's own
-          // suggestion first, then the usual ones, and keep the first the planner's own dry run does not refuse on /export/formats.
-          const wanted = [...all.filter((x) => x.verdict !== "unsupported").map((x) => x.format), s.format, "gptq", "awq", "compressed-tensors"].filter(Boolean);
-          const candidates = [...new Set(wanted)];
-          // "the planner spoke" = it validated the job (it answers with JSON-pointer fields like /export/formats); the path sandbox's
-          // 403 and a network error say nothing about the formats
-          const spoke = (r: Awaited<ReturnType<typeof api.dryRun>>) => r.ok || r.problems.some((p) => p.field.startsWith("/"));
-          const ask = async (c: string) => {
-            const base = job as unknown as Record<string, unknown> & { model: Record<string, unknown> };
-            let r = await api.dryRun({ ...base, export: { formats: [c] } });
-            // The user may not have typed a model path yet (or typed one the server may not read): ask again with a path it does allow
-            if (!spoke(r) && allowedRoots?.length) r = await api.dryRun({ ...base, model: { ...base.model, path: allowedRoots[0] }, export: { formats: [c] } });
-            return spoke(r) ? r : null;
-          };
-          (async () => {
-            let format = candidates[0];
-            for (const c of candidates) {
-              const r = await ask(c);
-              if (r === null) {
-                format = "gptq"; // the planner could not look: GPTQ is the one format that takes every weight width
-                break;
-              }
-              if (r.ok || !r.problems.some((p) => p.field === "/export/formats")) {
-                format = c;
-                break;
-              }
-            }
-            if (!alive || !format) return;
-            // the chosen format replaces the default; it is added to the other backend's only when that one is also on
-            setExportFmts((f) => (otherHfOn ? (f.includes(format) ? f : [...f, format]) : [format]));
-          })();
-        } else if (deployBackend === "llamacpp") {
-          if (s.format) setGguf((g) => (g.length ? g : ["q4_k"]));
-        }
+        if (deployBackend === "llamacpp" && s.format) setGguf((g) => (g.length ? g : ["q4_k"]));
       })
       .catch(() => alive && setSuggestion(null));
     return () => {
       alive = false;
     };
-  }, [deployBackend, primaryRecipe, pickedKey, hw, kind]);
+  }, [deployBackend, primaryRecipe, hw, kind]);
+
+  // B: what depends on the SET of vLLM / SGLang backends that are on and the recipes picked, however they were clicked. The export
+  // format must be one the planner accepts for EVERY recipe (AWQ cannot export a 2-bit one), and a backend that cannot serve a
+  // picked recipe is named with the server's own reason (the job still exports it; that stage will not work).
+  const hfKey = `${useVllm ? "v" : ""}${useSglang ? "s" : ""}`;
+  useEffect(() => {
+    if (kind !== "llm" || artifact || !primaryRecipe || !hfKey) {
+      setServingNotes([]);
+      return;
+    }
+    let alive = true;
+    const asked = picked.filter((r) => r !== "bf16");
+    if (!asked.length) asked.push(primaryRecipe);
+    const backends = [useVllm && "vllm", useSglang && "sglang"].filter(Boolean) as ("vllm" | "sglang")[];
+    Promise.all(backends.flatMap((b) => asked.map((r) => api.exportSuggestion(r, b, hw).then((x) => ({ b, r, x })))))
+      .then(async (rows) => {
+        if (!alive) return;
+        setServingNotes(rows.filter((y) => y.x.verdict === "unsupported").map((y) => ({ recipe: y.r, backend: y.b, reason: y.x.reason })));
+        if (keepParentDeploy.current) {
+          keepParentDeploy.current = false; // a derived job keeps the export formats it had, once
+          return;
+        }
+        // each recipe's own suggestion first, then the usual formats; keep the first the planner's own dry run does not refuse on
+        // /export/formats. "The planner spoke" = it validated the job (JSON-pointer fields like /export/formats); the path sandbox's
+        // 403 and a network error say nothing about the formats.
+        const candidates = [...new Set([...rows.filter((y) => y.x.verdict !== "unsupported").map((y) => y.x.format), ...rows.map((y) => y.x.format), "gptq", "awq", "compressed-tensors"].filter(Boolean))];
+        const spoke = (r: Awaited<ReturnType<typeof api.dryRun>>) => r.ok || r.problems.some((p) => p.field.startsWith("/"));
+        const base = job as unknown as Record<string, unknown> & { model: Record<string, unknown> };
+        const ask = async (c: string) => {
+          let r = await api.dryRun({ ...base, export: { formats: [c] } });
+          // the user may not have typed a model path yet (or typed one the server may not read): ask again with a path it does allow
+          if (!spoke(r) && allowedRoots?.length) r = await api.dryRun({ ...base, model: { ...base.model, path: allowedRoots[0] }, export: { formats: [c] } });
+          return spoke(r) ? r : null;
+        };
+        let format = candidates[0];
+        for (const c of candidates) {
+          const r = await ask(c);
+          if (!alive) return;
+          if (r === null) {
+            format = "gptq"; // the planner could not look: GPTQ is the one format that takes every weight width
+            break;
+          }
+          if (r.ok || !r.problems.some((p) => p.field === "/export/formats")) {
+            format = c;
+            break;
+          }
+        }
+        if (alive && format) setExportFmts([format]);
+      })
+      .catch(() => alive && setServingNotes([]));
+    return () => {
+      alive = false;
+    };
+  }, [hfKey, pickedKey, hw, kind, !!artifact]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!fromJob) return;
@@ -263,7 +268,7 @@ export default function NewJobPage() {
           evalDevice, hw, deployBackend, useVllm, vllmUtil, useSglang, sglangMem, useSweep, sweepLevels, sweepBudget, useLmEval, lmTasks, lmLimit, lmShots, gguf,
           exportFmts, sens, probe, probeExact,
         });
-        keepParentDeploy.current = d.deployBackend !== "none";
+        keepParentDeploy.current = d.useVllm || d.useSglang; // only a vLLM / SGLang parent has export formats of its own to keep
         setDomain(d.domain); setName(d.name); setModel(d.model); setModelMode("custom");
         setNoQuant(d.picked.length === 1 && d.picked[0] === "bf16"); setPicked(d.picked);
         setAlgorithm(d.algorithm); setGroupSizeOverride(d.groupSizeOverride); setAdvancedOpen(d.groupSizeOverride !== "");
