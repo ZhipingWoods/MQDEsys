@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, DeployJobReport, fmt, fmtBytes, gib, JobListItem, JobReport, llamaSpeed, LLMJobReport, VLMJobReport } from "../api";
+import { ScoreMatrix } from "../components/ScoreMatrix";
+import { matrixEntries } from "../matrix";
 import { engineNote, servingRuns } from "../perf";
 import { baseOption, Chart, series, token } from "../charts";
 
@@ -121,6 +123,7 @@ function LLMCompare({ reps, deploys }: { reps: LLMJobReport[]; deploys: DeployJo
     [reps],
   );
   const recipes = [...new Set(pts.map((p) => p.recipe))];
+  const matrixList = useMemo(() => matrixEntries(reps), [reps]);
   const gg = reps.flatMap((r) => Object.values(r.llamacpp?.results ?? {}).map((x) => ({ r, x })));
   // T-1308: same recipe run on more than one real hardware (distinguished by the actually-measured
   // eval_device_name, not the submitted deploy.hardware label) -- throughput (stage wall-clock seconds)
@@ -173,6 +176,7 @@ function LLMCompare({ reps, deploys }: { reps: LLMJobReport[]; deploys: DeployJo
         />
         <p className="note">同一模型、同一评估窗口的作业才可直接比较。W2 崩溃点（PPL 上千）用对数纵轴显示。</p>
       </div>
+      <ScoreMatrix entries={matrixList} />
       <PerfCompare reps={[...reps, ...deploys]} />
       <div className="card table-wrap">
         <h2>各作业配方明细</h2>

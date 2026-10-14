@@ -30,10 +30,38 @@ export function pplVerdict(recipe: string, pct: number): PplVerdict {
   return { status: pct <= budget ? "pass" : "fail", pct, budget };
 }
 
-/** A change in a lower-is-better metric: negative is an improvement. */
-export function lowerIsBetterTone(pct: number): "good" | "bad" | "flat" {
+export type Direction = "lower" | "higher";
+
+/** A change of `pct` percent in a metric: is it better or worse? Direction-aware; a change under 0.05% is flat. */
+export function toneOf(direction: Direction, pct: number): "good" | "bad" | "flat" {
   if (Math.abs(pct) < 0.05) return "flat";
-  return pct < 0 ? "good" : "bad";
+  return (direction === "lower" ? pct < 0 : pct > 0) ? "good" : "bad";
+}
+
+/** A change in a lower-is-better metric: negative is an improvement. */
+export const lowerIsBetterTone = (pct: number) => toneOf("lower", pct);
+
+/** What a number in the cross-run score matrix means: which way is better, and how to print it. */
+export interface MetricSpec {
+  id: string;
+  label: string;
+  direction: Direction;
+  unit: string;
+  digits: number;
+}
+export const MATRIX_METRICS: MetricSpec[] = [
+  { id: "ppl", label: "PPL（W+A，伪量化）", direction: "lower", unit: "", digits: 3 },
+  { id: "ppl_kv", label: "PPL（+KV Cache）", direction: "lower", unit: "", digits: 3 },
+  { id: "real_ppl", label: "PPL（真实低比特权重）", direction: "lower", unit: "", digits: 3 },
+  { id: "served_ppl", label: "PPL（部署后，服务端）", direction: "lower", unit: "", digits: 3 },
+  { id: "tps", label: "服务吞吐", direction: "higher", unit: "tok/s", digits: 0 },
+  { id: "size_mib", label: "导出体积", direction: "lower", unit: "MiB", digits: 0 },
+];
+
+/** Percent change of x against a baseline b; null when there is nothing to compare with. */
+export function relChange(x: number, b: number): number | null {
+  if (!Number.isFinite(x) || !Number.isFinite(b) || b === 0) return null;
+  return (x / b - 1) * 100;
 }
 
 export const signedPct = (pct: number, digits = 2): string => `${pct > 0 ? "+" : ""}${pct.toFixed(digits)}%`;
