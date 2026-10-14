@@ -33,6 +33,7 @@ export interface Derived {
   evalDataset: string; // VLA / VLM evaluation data
   calibText: string; // LLM calibration text
   calibPaste: string; // LLM calibration text pasted into the form ("" = none): the samples joined by a blank line
+  evalTextDataset: string; // LLM evaluation text (built-in wikitext-2 test by default, or a server path)
   nEval: number;
   windows: number;
   maxNewTokens: number;
@@ -103,6 +104,7 @@ export function deriveFromJob(job: any, step: DeriveStep, d: Derived): Derived {
     evalDataset: e.dataset && type !== "llm" ? e.dataset : c.dataset && type !== "llm" ? c.dataset : d.evalDataset,
     calibText: c.dataset && type === "llm" ? c.dataset : d.calibText,
     calibPaste: type === "llm" && Array.isArray(c.custom_samples) && c.custom_samples.length ? c.custom_samples.join("\n\n") : "",
+    evalTextDataset: e.dataset && type === "llm" ? e.dataset : d.evalTextDataset,
     nEval: e.n_samples ?? d.nEval,
     windows: e.max_windows ?? d.windows,
     maxNewTokens: e.max_new_tokens ?? d.maxNewTokens,

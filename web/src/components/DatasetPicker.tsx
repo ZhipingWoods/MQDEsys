@@ -28,6 +28,7 @@ const CUSTOM = "__custom__";
 /** What an older server (before /api/v1/datasets) can be assumed to offer: it cannot be asked, and it does not check paths either. */
 const STATIC_BUILTINS: BuiltinDataset[] = [
   { id: "wikitext-2-raw-v1:train", label: "wikitext-2（train 切分）", kind: "text", roles: ["calibration"], available: true },
+  { id: "wikitext-2-raw-v1:test", label: "wikitext-2（test 切分，默认评估数据）", kind: "text", roles: ["evaluation"], available: true },
   { id: "synthetic", label: "synthetic（程序生成的图文样本）", kind: "vision", roles: ["calibration", "evaluation"], available: true },
 ];
 

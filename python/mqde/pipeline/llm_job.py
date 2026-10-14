@@ -28,7 +28,7 @@ from typing import Any
 import torch
 import yaml
 
-from mqde.data.text import BUILTIN_CALIB, calib_batches, eval_ids
+from mqde.data.text import BUILTIN_CALIB, BUILTIN_EVAL, calib_batches, eval_ids
 from mqde.eval.logits_probe import capture_reference, compare_to_reference, split_windows
 from mqde.eval.ppl import perplexity
 from mqde.models.hf_llm import HFCausalLM
@@ -58,6 +58,9 @@ class LLMJobSpec:
     calib_texts: list[str] | None = None  # text pasted into the form (calibration.custom_samples); wins over calib_dataset
     eval_seq_len: int = 512
     eval_windows: int = 40
+    # T-1304 leftover: wikitext-2 test by default (keeps PPL comparable across jobs, Compare.tsx groups by it
+    # along with windows/seq_len), or a text file / directory read the same way calibration data is.
+    eval_dataset: str = BUILTIN_EVAL
     device: str = "cpu"  # deploy.device: shared fallback for quant_device/eval_device when they are not set
     # T-1304/T-1306: quantize on one device, evaluate on another (e.g. calibration/GPTQ's sequential error
     # feedback on CPU for determinism, PPL/export on GPU for speed). Each independently falls back to
@@ -126,6 +129,7 @@ class LLMJobSpec:
             calib_texts=_custom_samples(c.get("custom_samples")),
             eval_seq_len=int(e.get("seq_len", 512)),
             eval_windows=int(e.get("max_windows", 40)),
+            eval_dataset=str(e.get("dataset") or BUILTIN_EVAL),
             device=dep_device,
             # top-level quant_device / evaluation.device (schemas/job_spec.schema.json, T-1305): each falls
             # back to deploy.device, so a job that only sets deploy.device gets both equal to it.
@@ -574,14 +578,19 @@ class LLMJob:
         ad = self._stage("inspect", lambda: HFCausalLM(s.model_path, device=s.quant_device))
         self.report["model"] = {"path": s.model_path, "blocks": len(ad.get_blocks()), "linears": len(ad.qmodel.units)}
         calib_info: dict[str, Any] = {}
+        eval_info: dict[str, Any] = {}
         prep = lambda: (calib_batches(ad.tokenizer, s.calib_samples, s.calib_seq_len, s.seed, source=s.calib_dataset, info=calib_info,  # noqa: E731
                                       texts=s.calib_texts),
-                        eval_ids(ad.tokenizer))
+                        eval_ids(ad.tokenizer, source=s.eval_dataset, info=eval_info))
         cal, ids = self._stage("calib_prepare", prep, "custom_samples" if s.calib_texts else s.calib_dataset)
         # the default keeps its familiar label; a named source is reported as given, with what was actually read from it
         calib_report = {"dataset": "wikitext-2 train"} if s.calib_dataset == BUILTIN_CALIB and not s.calib_texts else calib_info
+        # same for evaluation: the default is the fixed wikitext-2 test split (PPL is comparable across jobs that
+        # kept this default); a different choice carries its own files/chars/truncated so Compare.tsx knows not
+        # to lump it in with the default-dataset group (see matrix.ts grouping key)
+        eval_report = {"dataset": "wikitext-2 test"} if s.eval_dataset == BUILTIN_EVAL else eval_info
         self.report["data"] = {"calib": {**calib_report, "n": len(cal), "seq_len": s.calib_seq_len},
-                               "eval": {"dataset": "wikitext-2 test", "windows": s.eval_windows, "seq_len": s.eval_seq_len}}
+                               "eval": {**eval_report, "windows": s.eval_windows, "seq_len": s.eval_seq_len}}
         if previews := self._window_previews(ad, ids):
             self.report["data"]["eval"]["previews"] = previews
         probe_windows, probe_ref = None, None
@@ -718,6 +727,8 @@ def main() -> None:
     ap.add_argument("--calib-samples", type=int)
     ap.add_argument("--calib-dataset", help="calibration text: a file (.txt .md .jsonl .json .parquet) or a directory of them; "
                     "default wikitext-2 train")
+    ap.add_argument("--eval-dataset", help="evaluation text, same format as --calib-dataset; default wikitext-2 test "
+                    "(keeps PPL comparable across jobs -- a non-default choice is recorded in the report)")
     ap.add_argument("--mixed-precision", help="inline JSON or a YAML/JSON file: {rules: [{match, bits, skip}]}")
     ap.add_argument("--export", help="comma separated: gptq, awq, compressed-tensors")
     ap.add_argument("--sensitivity", choices=["block", "type"])
@@ -741,7 +752,7 @@ def main() -> None:
         spec.device = spec.quant_device = spec.eval_device = a.device
     for k, v in {"model_path": a.model, "algorithm": a.algorithm, "quant_device": a.quant_device, "eval_device": a.eval_device,
                  "act_static": a.act_static, "eval_windows": a.eval_windows, "calib_samples": a.calib_samples,
-                 "calib_dataset": a.calib_dataset,
+                 "calib_dataset": a.calib_dataset, "eval_dataset": a.eval_dataset,
                  "kv_method": a.kv_method}.items():
         if v is not None:
             setattr(spec, k, v)

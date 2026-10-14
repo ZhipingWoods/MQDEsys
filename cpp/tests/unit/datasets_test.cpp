@@ -167,6 +167,31 @@ TEST(datasets, the_builtin_list_reports_whether_wikitext_is_in_the_hf_cache) {
   ::unsetenv("HF_HUB_CACHE");
 }
 
+TEST(datasets, the_builtin_list_also_offers_the_wikitext_test_split_for_evaluation) {
+  const auto cache = fresh("hfcache_eval");
+  ::setenv("HF_HUB_CACHE", cache.c_str(), 1);
+  auto find = [](const mqde::Json& list, const std::string& id) {
+    for (const auto& e : list)
+      if (e.at("id") == id) return e;
+    return mqde::Json();
+  };
+  auto b = builtin_datasets();
+  auto test_entry = find(b, "wikitext-2-raw-v1:test");
+  ASSERT_FALSE(test_entry.is_null()) << "the test split must be listed, not just the train split";
+  EXPECT_EQ(test_entry.at("kind"), "text");
+  // evaluation only: it is read-only ground truth, never meant to be calibrated on
+  EXPECT_EQ(test_entry.at("roles"), mqde::Json::array({"evaluation"}));
+  EXPECT_FALSE(test_entry.at("available")) << "an empty cache";
+  write(cache / "datasets--wikitext" / "snapshots" / "abc" / "wikitext-2-raw-v1" /
+            "test-00000-of-00001.parquet",
+        "pq");
+  b = builtin_datasets();
+  EXPECT_TRUE(find(b, "wikitext-2-raw-v1:test").at("available"));
+  // the train split's availability is independent of the test split's
+  EXPECT_FALSE(find(b, "wikitext-2-raw-v1:train").at("available"));
+  ::unsetenv("HF_HUB_CACHE");
+}
+
 TEST(datasets, json_form_carries_every_field_the_ui_reads) {
   const auto d = fresh("json");
   write(d / "a.txt", "abc");

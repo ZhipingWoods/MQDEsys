@@ -88,8 +88,11 @@ export default function NewJobPage() {
   const [dataset, setDataset] = useState(DEFAULT_DATASET); // VLA / VLM: where calibration samples come from
   const [evalDataset, setEvalDataset] = useState(DEFAULT_DATASET); // VLA / VLM: where evaluation samples come from (may differ)
   const [calibText, setCalibText] = useState("wikitext-2-raw-v1:train"); // LLM: calibration text (built-in, or a server path)
+  // LLM: evaluation text (built-in wikitext-2 test by default -- keeps PPL comparable across jobs -- or a server path)
+  const [evalTextDataset, setEvalTextDataset] = useState("wikitext-2-raw-v1:test");
   // a typed path the server cannot read blocks submitting; each picker reports whether its value is fine
   const [calibTextOk, setCalibTextOk] = useState(true);
+  const [evalTextOk, setEvalTextOk] = useState(true);
   // LLM: text pasted straight into the form instead of a dataset (calibration.custom_samples); a blank line separates samples
   const [usePaste, setUsePaste] = useState(false);
   const [pasteText, setPasteText] = useState("");
@@ -130,7 +133,11 @@ export default function NewJobPage() {
   const backendEnv = useAsync(() => api.backendEnvs().then((r) => r.backends), []);
   const kind = kindOf(domain);
   // only the pickers this kind shows count; a deploy job (B2) has no calibration data at all
-  const dataOk = artifact ? true : kind === "llm" ? (usePaste ? pasteSamples.length > 0 : calibTextOk) : calibVisionOk && evalVisionOk;
+  const dataOk = artifact
+    ? true
+    : kind === "llm"
+      ? (usePaste ? pasteSamples.length > 0 : calibTextOk) && (quantizeOnly || evalTextOk)
+      : calibVisionOk && evalVisionOk;
   const currentDomain = domainsQ.data?.find((d) => d.id === domain);
   const blocked = currentDomain != null && currentDomain.pipeline_status !== "implemented";
 
@@ -275,7 +282,7 @@ export default function NewJobPage() {
         if (!det.job) throw new Error(`作业 ${fromJob} 没有 job.yaml，无法派生`);
         const d = deriveFromJob(det.job, fromStep, {
           domain, name, model, picked, algorithm, groupSizeOverride, action, actStatic, kv, kvMethod, keepEnds, downBits,
-          inheritedRules: [], nCalib, seqLen, dataset, evalDataset, calibText, calibPaste: pasteText, nEval, windows, maxNewTokens, attribution, quantizeOnly, quantDevice,
+          inheritedRules: [], nCalib, seqLen, dataset, evalDataset, calibText, calibPaste: pasteText, evalTextDataset, nEval, windows, maxNewTokens, attribution, quantizeOnly, quantDevice,
           evalDevice, hw, deployBackend, useVllm, vllmUtil, useSglang, sglangMem, useSweep, sweepLevels, sweepBudget, useLmEval, lmTasks, lmLimit, lmShots, gguf,
           exportFmts, sens, probe, probeExact,
         });
@@ -285,7 +292,7 @@ export default function NewJobPage() {
         setAlgorithm(d.algorithm); setGroupSizeOverride(d.groupSizeOverride); setAdvancedOpen(d.groupSizeOverride !== "");
         setAction(d.action); setActStatic(d.actStatic); setKv(d.kv); setKvMethod(d.kvMethod); setKeepEnds(d.keepEnds);
         setDownBits(d.downBits); setInheritedRules(d.inheritedRules); setNCalib(d.nCalib); setSeqLen(d.seqLen);
-        setDataset(d.dataset); setEvalDataset(d.evalDataset); setCalibText(d.calibText); setUsePaste(d.calibPaste !== ""); setPasteText(d.calibPaste); setNEval(d.nEval); setWindows(d.windows); setMaxNewTokens(d.maxNewTokens);
+        setDataset(d.dataset); setEvalDataset(d.evalDataset); setCalibText(d.calibText); setUsePaste(d.calibPaste !== ""); setPasteText(d.calibPaste); setEvalTextDataset(d.evalTextDataset); setNEval(d.nEval); setWindows(d.windows); setMaxNewTokens(d.maxNewTokens);
         setAttribution(d.attribution); setQuantizeOnly(d.quantizeOnly); setQuantDevice(d.quantDevice); setEvalDevice(d.evalDevice);
         setHw(d.hw); setDeployBackend(d.deployBackend); setUseVllm(d.useVllm); setVllmUtil(d.vllmUtil); setUseSglang(d.useSglang);
         setSglangMem(d.sglangMem); setUseSweep(d.useSweep); setSweepLevels(d.sweepLevels); setSweepBudget(d.sweepBudget); setUseLmEval(d.useLmEval); setLmTasks(d.lmTasks); setLmLimit(d.lmLimit); setLmShots(d.lmShots);
@@ -435,7 +442,7 @@ export default function NewJobPage() {
           ...(quantDevice !== evalDevice ? { quant_device: quantDevice } : {}),
           calibration: { dataset: calibText, n_samples: nCalib, seq_len: seqLen, ...(usePaste && pasteSamples.length ? { custom_samples: pasteSamples } : {}) },
           evaluation: {
-            dataset: "wikitext-2-raw-v1:test",
+            dataset: evalTextDataset,
             seq_len: seqLen,
             max_windows: windows,
             ...(quantDevice !== evalDevice ? { device: evalDevice } : {}),
@@ -861,10 +868,23 @@ export default function NewJobPage() {
                 <input type="number" value={seqLen} min={64} step={64} onChange={(e) => setSeqLen(Number(e.target.value))} />
               </div>
               <div className="field">
-                <label>PPL 窗口数（wikitext-2 test）</label>
-                <input type="number" value={windows} min={1} onChange={(e) => setWindows(Number(e.target.value))} />
+                <label>PPL 窗口数</label>
+                <input type="number" value={windows} min={1} onChange={(e) => setWindows(Number(e.target.value))} disabled={quantizeOnly} />
               </div>
             </div>
+            {!quantizeOnly && (
+              <div className="form-row">
+                <DatasetPicker
+                  kind="text"
+                  role="evaluation"
+                  label="评估数据（默认 wikitext-2 test：跟别的作业比 PPL 才有意义；换成别的来源，对比页只会跟同来源的作业放一起）"
+                  value={evalTextDataset}
+                  onChange={setEvalTextDataset}
+                  onValid={setEvalTextOk}
+                  testid="eval-dataset"
+                />
+              </div>
+            )}
             <div data-testid="calib-paste-section" style={{ marginBottom: 8 }}>
               <label className="small">
                 <input type="checkbox" checked={usePaste} onChange={(e) => setUsePaste(e.target.checked)} data-testid="calib-paste-toggle" /> 直接粘贴校准文本（代替上面的数据集）
@@ -1040,7 +1060,7 @@ export default function NewJobPage() {
       )}
       <div className="card" style={{ display: show(6) ? undefined : "none" }} data-testid="step-confirm">
         <h2>⑥ 确认提交 · JobSpec 预览</h2>
-        {!singlePage && <StepSummary rows={[["领域 / 模型", `${domain.toUpperCase()} · ${model}`], ["算法 / 配方", artifact ? `沿用父作业产物 ${artifact.format === "gguf" ? `GGUF ${artifact.type}` : `${artifact.recipe} · ${artifact.format}`}` : `${algorithm === "recipe" ? "按配方默认" : algorithm} · ${picked.map((x) => x.toUpperCase()).join("、")}`], ["校准数据", kind === "llm" ? `${usePaste && pasteSamples.length ? `粘贴的文本 ${pasteSamples.length} 段` : calibText === "wikitext-2-raw-v1:train" ? "wikitext-2 train" : calibText} · ${nCalib} 段 × ${seqLen}` : `${dataset} · ${nCalib} 样本`], ["评估", kind === "llm" ? `wikitext-2 · ${windows} 窗口 × ${seqLen}${quantizeOnly ? " · 仅量化不评测" : ""}` : `${evalDataset} · ${nEval} 样本${kind === "vlm" ? ` · 最长回答 ${maxNewTokens}` : ""}`], ["设备", kind === "llm" ? (artifact ? (isGguf ? evalDevice.toUpperCase() : "GPU 池") : `量化 ${quantDevice.toUpperCase()} · 评估 ${evalDevice.toUpperCase()}`) : "GPU 池"], ["部署", kind === "llm" && chosenBackends.length ? `${chosenBackends.join(" + ")}${exportFmts.length ? ` · 导出 ${exportFmts.join("/")}` : ""}${gguf.length ? ` · GGUF ${gguf.join("/")}` : ""}` : "不部署"]]} />}
+        {!singlePage && <StepSummary rows={[["领域 / 模型", `${domain.toUpperCase()} · ${model}`], ["算法 / 配方", artifact ? `沿用父作业产物 ${artifact.format === "gguf" ? `GGUF ${artifact.type}` : `${artifact.recipe} · ${artifact.format}`}` : `${algorithm === "recipe" ? "按配方默认" : algorithm} · ${picked.map((x) => x.toUpperCase()).join("、")}`], ["校准数据", kind === "llm" ? `${usePaste && pasteSamples.length ? `粘贴的文本 ${pasteSamples.length} 段` : calibText === "wikitext-2-raw-v1:train" ? "wikitext-2 train" : calibText} · ${nCalib} 段 × ${seqLen}` : `${dataset} · ${nCalib} 样本`], ["评估", kind === "llm" ? (quantizeOnly ? "仅量化不评测" : `${artifact ? "wikitext-2 test" : evalTextDataset === "wikitext-2-raw-v1:test" ? "wikitext-2 test" : evalTextDataset} · ${windows} 窗口 × ${seqLen}`) : `${evalDataset} · ${nEval} 样本${kind === "vlm" ? ` · 最长回答 ${maxNewTokens}` : ""}`], ["设备", kind === "llm" ? (artifact ? (isGguf ? evalDevice.toUpperCase() : "GPU 池") : `量化 ${quantDevice.toUpperCase()} · 评估 ${evalDevice.toUpperCase()}`) : "GPU 池"], ["部署", kind === "llm" && chosenBackends.length ? `${chosenBackends.join(" + ")}${exportFmts.length ? ` · 导出 ${exportFmts.join("/")}` : ""}${gguf.length ? ` · GGUF ${gguf.join("/")}` : ""}` : "不部署"]]} />}
         <pre className="log" style={{ height: "auto", maxHeight: 240 }}>
           {JSON.stringify(job, null, 2)}
         </pre>

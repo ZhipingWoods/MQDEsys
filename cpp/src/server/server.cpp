@@ -1294,7 +1294,10 @@ Result<void> serve(const ServerOptions& o) {
                                                   "directory of them, or use the built-in wikitext-2"}});
       };
       const auto mt = job.value("/model/type"_json_pointer, std::string());
-      if (mt == "llm") check("calibration.dataset", "/calibration/dataset", false);
+      if (mt == "llm") {
+        check("calibration.dataset", "/calibration/dataset", false);
+        check("evaluation.dataset", "/evaluation/dataset", false);
+      }
       if (mt == "vla" || mt == "vlm") {
         check("calibration.dataset", "/calibration/dataset", true);
         check("evaluation.dataset", "/evaluation/dataset", true);

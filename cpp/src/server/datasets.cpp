@@ -158,19 +158,27 @@ bool is_builtin_dataset(const std::string& id) {
 }
 
 Json builtin_datasets() {
-  const bool wiki = wikitext_in_cache("train");
-  Json wikitext = {{"id", "wikitext-2-raw-v1:train"},
-                   {"label", "wikitext-2（train 切分）"},
-                   {"kind", "text"},
-                   {"roles", Json::array({"calibration"})},
-                   {"available", wiki}};
-  if (!wiki) wikitext["reason"] = "not in this server's Hugging Face datasets cache (datasets--wikitext)";
+  const bool wiki_train = wikitext_in_cache("train");
+  Json wikitext_train = {{"id", "wikitext-2-raw-v1:train"},
+                         {"label", "wikitext-2（train 切分）"},
+                         {"kind", "text"},
+                         {"roles", Json::array({"calibration"})},
+                         {"available", wiki_train}};
+  if (!wiki_train) wikitext_train["reason"] = "not in this server's Hugging Face datasets cache (datasets--wikitext)";
+  const bool wiki_test = wikitext_in_cache("test");
+  // evaluation only, never calibration: it is the fixed ground truth the PPL protocol compares runs against
+  Json wikitext_test = {{"id", "wikitext-2-raw-v1:test"},
+                        {"label", "wikitext-2（test 切分，默认评估数据）"},
+                        {"kind", "text"},
+                        {"roles", Json::array({"evaluation"})},
+                        {"available", wiki_test}};
+  if (!wiki_test) wikitext_test["reason"] = "not in this server's Hugging Face datasets cache (datasets--wikitext)";
   Json synthetic = {{"id", "synthetic"},
                     {"label", "synthetic（程序生成的图文样本）"},
                     {"kind", "vision"},
                     {"roles", Json::array({"calibration", "evaluation"})},
                     {"available", true}};
-  return Json::array({wikitext, synthetic});
+  return Json::array({wikitext_train, wikitext_test, synthetic});
 }
 
 }  // namespace mqde::server

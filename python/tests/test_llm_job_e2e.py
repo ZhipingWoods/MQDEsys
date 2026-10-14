@@ -37,7 +37,7 @@ def job_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(llm_job, "HFCausalLM", fake_hf)
     monkeypatch.setattr(llm_job, "calib_batches",
                         lambda tok, n, s, seed=0, **kw: [torch.randint(0, VOCAB, (1, s), generator=g) for _ in range(n)])
-    monkeypatch.setattr(llm_job, "eval_ids", lambda tok: torch.randint(0, VOCAB, (4096,), generator=g))
+    monkeypatch.setattr(llm_job, "eval_ids", lambda tok, **kw: torch.randint(0, VOCAB, (4096,), generator=g))
 
 
 def spec(tmp_path: Path, **kw: object) -> LLMJobSpec:
@@ -367,6 +367,51 @@ def test_the_default_calibration_is_still_reported_as_wikitext(job_env: None, tm
     assert rep["data"]["calib"]["dataset"] == "wikitext-2 train"
 
 
+def test_the_default_evaluation_is_still_wikitext_test_and_a_named_source_is_recorded(
+    job_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake(tok, max_tokens=None, source="?", info=None):  # type: ignore[no-untyped-def]
+        seen["source"] = source
+        if info is not None:
+            info.update(dataset=source, files=2, chars=321, tokens=222, truncated=False)
+        return torch.randint(0, VOCAB, (4096,))
+
+    monkeypatch.setattr(llm_job, "eval_ids", fake)
+    # default: never asked for an eval_dataset, so it must still read (and report) the built-in test split
+    rep = LLMJob(spec(tmp_path), job_dir=tmp_path / "j1").run()
+    assert seen["source"] == "wikitext-2-raw-v1:test"
+    assert rep["data"]["eval"]["dataset"] == "wikitext-2 test"
+
+    # a named source: read it (not the built-in), and the report carries exactly what was read, not a fixed label
+    rep2 = LLMJob(spec(tmp_path, eval_dataset="/data/eval-corpus"), job_dir=tmp_path / "j2").run()
+    assert seen["source"] == "/data/eval-corpus"
+    assert rep2["data"]["eval"] == {
+        "dataset": "/data/eval-corpus", "files": 2, "chars": 321, "tokens": 222, "truncated": False,
+        "windows": 4, "seq_len": 64,
+    }
+
+
+def test_a_named_evaluation_source_is_actually_read_by_the_real_loader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # the real eval_ids / load_text_source, not a fake: a named eval file must change what gets evaluated, not just
+    # be a label -- same guarantee the calibration-source tests already pin for calib_dataset
+    def fake_hf(path: str, device: str = "cpu", **kw: object):  # type: ignore[no-untyped-def]
+        ad = _tiny.tiny()
+        ad.path = path
+        ad.tokenizer = _CharTok()
+        return ad
+
+    corpus = tmp_path / "eval.txt"
+    corpus.write_text("the quick brown fox jumps over the lazy dog. " * 400)
+    monkeypatch.setattr(llm_job, "HFCausalLM", fake_hf)
+    monkeypatch.setattr(llm_job, "calib_batches", lambda tok, n, s, seed=0, **kw: [torch.randint(0, VOCAB, (1, s)) for _ in range(n)])
+    rep = LLMJob(spec(tmp_path, eval_dataset=str(corpus), eval_windows=2, eval_seq_len=16), job_dir=tmp_path / "j").run()
+    assert rep["data"]["eval"]["dataset"] == str(corpus)
+    assert rep["data"]["eval"]["files"] == 1
+    assert rep["data"]["eval"]["tokens"] > 0
+
+
 def test_a_real_text_file_changes_what_gptq_learns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # the real loader on two different corpora, the real GPTQ: the quantized model must depend on the calibration text
     def fake_hf(path: str, device: str = "cpu", **kw: object):  # type: ignore[no-untyped-def]
@@ -376,7 +421,7 @@ def test_a_real_text_file_changes_what_gptq_learns(tmp_path: Path, monkeypatch: 
         return ad
 
     monkeypatch.setattr(llm_job, "HFCausalLM", fake_hf)
-    monkeypatch.setattr(llm_job, "eval_ids", lambda tok: torch.randint(0, VOCAB, (4096,), generator=torch.Generator().manual_seed(9)))
+    monkeypatch.setattr(llm_job, "eval_ids", lambda tok, **kw: torch.randint(0, VOCAB, (4096,), generator=torch.Generator().manual_seed(9)))
     a, b = tmp_path / "a.txt", tmp_path / "b.txt"
     a.write_text("the quick brown fox jumps over the lazy dog. " * 80)
     b.write_text("".join(chr(33 + (i * 7919) % 90) for i in range(3600)))
@@ -430,7 +475,7 @@ def test_the_report_names_each_window_with_a_text_preview_when_the_tokenizer_can
 
     monkeypatch.setattr(llm_job, "HFCausalLM", fake_hf)
     monkeypatch.setattr(llm_job, "calib_batches", lambda tok, n, s, seed=0, **kw: [torch.randint(0, VOCAB, (1, s)) for _ in range(n)])
-    monkeypatch.setattr(llm_job, "eval_ids", lambda tok: torch.arange(4096) % VOCAB)
+    monkeypatch.setattr(llm_job, "eval_ids", lambda tok, **kw: torch.arange(4096) % VOCAB)
     rep = LLMJob(spec(tmp_path, eval_windows=3, eval_seq_len=64), job_dir=tmp_path / "j").run()
     pv = rep["data"]["eval"]["previews"]
     assert len(pv) == 3 and all(isinstance(x, str) and x for x in pv)
@@ -484,7 +529,7 @@ def test_pasted_text_changes_what_gptq_learns(tmp_path: Path, monkeypatch: pytes
         return ad
 
     monkeypatch.setattr(llm_job, "HFCausalLM", fake_hf)
-    monkeypatch.setattr(llm_job, "eval_ids", lambda tok: torch.randint(0, VOCAB, (4096,), generator=torch.Generator().manual_seed(9)))
+    monkeypatch.setattr(llm_job, "eval_ids", lambda tok, **kw: torch.randint(0, VOCAB, (4096,), generator=torch.Generator().manual_seed(9)))
     ppl = {}
     texts = {"a": "the quick brown fox jumps over the lazy dog. " * 80, "b": "".join(chr(33 + (i * 7919) % 90) for i in range(3600))}
     for name, text in texts.items():

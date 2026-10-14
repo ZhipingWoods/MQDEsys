@@ -164,6 +164,34 @@ try {
   const y = fs.readFileSync(path.join(runs, jid, 'job.yaml'), 'utf8');
   check('the server accepted the job and stored the chosen calibration path', y.includes(`dataset: ${CORPUS}`) && /type: llm/.test(y), y.split('\n').filter((l) => /dataset/.test(l)).join(' | '));
 
+  // ---- LLM evaluation data: same picker pattern as calibration, default wikitext-2 test (T-1304 leftover)
+  await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
+  await page.getByTestId('model-path').fill(MODEL);
+  await page.getByTestId('eval-dataset-select').waitFor({ timeout: 10000 });
+  check('LLM: there is an evaluation data choice, wikitext-2 test by default', (await page.getByTestId('eval-dataset-select').inputValue()) === 'wikitext-2-raw-v1:test' && (await preview()).evaluation.dataset === 'wikitext-2-raw-v1:test');
+  await page.getByTestId('eval-dataset-unavailable').waitFor({ timeout: 10000 });
+  check('and it warns when wikitext-2 is not on this server too, same as calibration', /找不到/.test(await status('eval-dataset-unavailable')) && await submit.isEnabled());
+  const evalOpts = await page.getByTestId('eval-dataset-select').locator('option').allInnerTexts();
+  check('the evaluation picker only offers roles that include evaluation: no calibration-only built-in listed here', !evalOpts.some((o) => /train/.test(o)) && /test/.test(evalOpts[0]), JSON.stringify(evalOpts));
+  await page.getByTestId('eval-dataset-select').selectOption({ label: '本地文件或目录…' });
+  await page.getByTestId('eval-dataset').fill(CORPUS);
+  await until(() => /✓/.test(document.querySelector('[data-testid="eval-dataset-status"]')?.textContent ?? ''));
+  check('a directory works for evaluation too, and only evaluation.dataset changed (calibration is untouched)', (await preview()).evaluation.dataset === CORPUS && (await preview()).calibration.dataset === 'wikitext-2-raw-v1:train', JSON.stringify(await preview()));
+  await page.getByTestId('eval-dataset').fill(path.join(root, 'nope'));
+  await until(() => /✗.*does not exist/.test(document.querySelector('[data-testid="eval-dataset-status"]')?.textContent ?? ''));
+  check('an unreadable evaluation path blocks submitting, same as calibration', await submit.isDisabled(), await status('eval-dataset-status'));
+  await page.getByTestId('eval-dataset-select').selectOption('wikitext-2-raw-v1:test');
+  await page.getByTestId('opt-quantize-only').check();
+  check('quantize-only hides the evaluation-data picker entirely (there is no eval stage to feed)', (await page.getByTestId('eval-dataset-select').count()) === 0 && await submit.isEnabled());
+  await page.getByTestId('opt-quantize-only').uncheck();
+  await page.getByTestId('eval-dataset-select').selectOption({ label: '本地文件或目录…' });
+  await page.getByTestId('eval-dataset').fill(CORPUS);
+  await until(() => /✓/.test(document.querySelector('[data-testid="eval-dataset-status"]')?.textContent ?? ''));
+  await submit.click();
+  await page.waitForURL(/\/jobs\//, { timeout: 15000 });
+  const yEval = fs.readFileSync(path.join(runs, page.url().split('/jobs/')[1], 'job.yaml'), 'utf8');
+  check('the server stored the chosen evaluation path', yEval.includes(`dataset: ${CORPUS}`) && /evaluation:/.test(yEval), yEval.split('\n').filter((l) => /dataset|evaluation/.test(l)).join(' | '));
+
   // ---- VLM: calibration and evaluation data are chosen separately
   await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
   await page.getByTestId('domain-tab-vlm').click();

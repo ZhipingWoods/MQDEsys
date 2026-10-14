@@ -126,6 +126,13 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **需要人工决策 / L2**：`cpp/CMakeLists.txt`（server 库加 datasets.cpp）；两个新 REST 端点（仓库里没有 api/openapi.yaml 可登记）；`schemas/job_spec.schema.json` 未改（`calibration.dataset` 本来就是字符串；`custom_samples` 仍然没有任何阶段消费）。
 - **重启生产 18080**：新前端依赖 `/api/v1/datasets`；旧二进制没有，所以选择器对旧服务器有降级路径（见下一条）。
 
+### 2026-10-14 · LLM 评估数据集可选（T-1304 最后一项遗留）
+- **状态**：已提交本地，待 4090 全门禁后推送
+- 原来 LLM 作业的评估数据写死 wikitext-2 test（`mqde.data.text.eval_ids` 不接受来源）。现在 `eval_ids(source=...)` 复用校准同一套加载逻辑（`load_text_source`，内部统一了 `load_calib_text`），默认仍是 `wikitext-2-raw-v1:test`（跨作业 PPL 可比），也可以指到服务器上的文件/目录；`GET /api/v1/datasets` 把 test 切分单独列出（`role: evaluation`，不是 calibration），server 提交时对 LLM 的 `evaluation.dataset` 也做可读性校验（原来只查 calibration.dataset）；向导里加了 `eval-dataset` 选择器（跟校准数据同一个 `DatasetPicker`），`quantizeOnly` 时隐藏（没有评估阶段）；`derive.ts` 带回 `evalTextDataset`。
+- **对比矩阵的坑**：如果换了评估语料，PPL 就不能跟默认语料的作业放一张表比——`matrix.ts` 的分组键原来是“模型+窗口数+序列长度”，现在非默认语料会带上语料名额外分组，默认语料的作业分组标签不变（不破坏已有展示）。
+- **校验**：pytest 585（Mac venv，排除本机缺 PIL 的 VLM 模块）；新增两个单测：默认仍读 wikitext test、换成本地文件后真的读了它（不是只换标签）；ctest 381（Mac）；新 C++ 测试 `the_builtin_list_also_offers_the_wikitext_test_split_for_evaluation`（mutation：去掉 test 切分列表项，测试抓到）；web e2e 全量 24 个文件绿（`dataset_picker.mjs` 77、`score_matrix.mjs` 32，新增的分组用例 mutation 验证：去掉语料名后缀导致 TS 编译报未用变量，等价于被抓到）。
+- **遗留**：VLA/VLM 已有的是“评估数据画廊卡片”概念（synthetic 或 LeRobot 目录），LLM 这边仍是路径输入框，不是画廊卡片——两者数据形状不同（文本 vs LeRobot parquet），没有强行统一。旧生产二进制（今天 20:07 前的 `build/dev/bin/mqde`）不认 `evaluation.dataset` 字段（对 LLM 作业会忽略，继续用它自己写死的 wikitext test），已在 4090 重新编译但生产未重启。
+
 ### 2026-10-14 · T-0406 CUDA GPTQ / AWQ 打包
 - **状态**：T-0406 PARTIAL（剩 AVX-512、Marlin/GGUF 的 GPU 打包、接入 Python 作业）
 - **AWQ（同日追加）**：`quant::cuda::pack_awq`，4 位的输出交错 [0,2,4,6,1,3,5,7] 由设备函数 `awq_source` 给出，其余位宽直排；与 CPU 逐字段一致，含两边都拒绝的形状（out*bits 不是 32 的倍数）；变异 13/13（外加 1 个故意放的空操作对照）；ctest 371（CUDA）/ 358 / 362。

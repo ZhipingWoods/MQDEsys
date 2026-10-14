@@ -10,7 +10,12 @@ export function matrixEntries(reps: LLMJobReport[]): MatrixEntry[] {
     const windows = r.baseline?.windows ?? r.data?.eval.windows;
     const seq = r.baseline?.seq_len ?? r.data?.eval.seq_len;
     if (windows == null || seq == null) continue; // how it was scored is unknown, so there is nothing it could be compared with
-    const protocol = `${windows} 窗口 × ${seq}`;
+    // a non-default evaluation corpus (T-1304 leftover: LLM jobs can now pick their own) is its own protocol --
+    // lumping a job scored on someone's uploaded text together with the default wikitext-2 test group would be
+    // a false comparison, so it only joins the default group when it used the default dataset
+    const evalDataset = r.data?.eval.dataset;
+    const nonDefault = evalDataset && evalDataset !== "wikitext-2 test" ? ` · ${evalDataset}` : "";
+    const protocol = `${windows} 窗口 × ${seq}${nonDefault}`;
     const g = `${model}|${protocol}`;
     if (r.baseline && !haveFp.has(g)) {
       haveFp.add(g);

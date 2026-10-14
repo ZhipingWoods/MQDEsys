@@ -19,6 +19,7 @@ from typing import Any
 import torch
 
 BUILTIN_CALIB = "wikitext-2-raw-v1:train"
+BUILTIN_EVAL = "wikitext-2-raw-v1:test"  # the default: a fixed split so PPL is comparable across jobs
 TEXT_SUFFIXES = (".txt", ".md", ".jsonl", ".json", ".parquet")
 # A corpus is read in path order until this many characters: tokenizing gigabytes to draw a few dozen windows helps nobody.
 MAX_CALIB_CHARS = 50_000_000
@@ -88,10 +89,15 @@ def _file_texts(path: Path) -> list[str]:
     return [t for t in table.column("text").to_pylist() if isinstance(t, str) and t.strip()]
 
 
-def load_calib_text(source: str = BUILTIN_CALIB) -> CalibText:
-    """The calibration corpus as one string. `source` is BUILTIN_CALIB or a path to a file / directory."""
-    if source == BUILTIN_CALIB:
-        t = wikitext_text("train")
+# Both the calibration and the evaluation built-in resolve to a wikitext-2 split read straight from the HF cache.
+_BUILTIN_SPLITS = {BUILTIN_CALIB: "train", BUILTIN_EVAL: "test"}
+
+
+def load_text_source(source: str) -> CalibText:
+    """A text corpus as one string, for either calibration or evaluation. `source` is a built-in id
+    (BUILTIN_CALIB / BUILTIN_EVAL) or a path to a file / directory (read the same way for both roles)."""
+    if source in _BUILTIN_SPLITS:
+        t = wikitext_text(_BUILTIN_SPLITS[source])
         return CalibText(t, 1, len(t), False)
     root = Path(source)
     if not root.exists():
@@ -127,6 +133,11 @@ def load_calib_text(source: str = BUILTIN_CALIB) -> CalibText:
     if not parts:
         raise ValueError(f"no readable text in '{source}' (supported: {', '.join(TEXT_SUFFIXES)})")
     return CalibText("\n\n".join(parts), used, chars, truncated)
+
+
+def load_calib_text(source: str = BUILTIN_CALIB) -> CalibText:
+    """Back-compat alias for `load_text_source`, defaulting to the calibration built-in."""
+    return load_text_source(source)
 
 
 def pasted_calib_text(texts: list[str]) -> CalibText:
@@ -179,6 +190,13 @@ def calib_batches(tokenizer: Any, n_samples: int = 32, seq_len: int = 512, seed:
     return [ids[s : s + seq_len].unsqueeze(0) for s in starts.tolist()]
 
 
-def eval_ids(tokenizer: Any, max_tokens: int | None = None) -> torch.Tensor:
-    ids = tokenizer(wikitext_text("test"), return_tensors="pt").input_ids[0]
+def eval_ids(tokenizer: Any, max_tokens: int | None = None, source: str = BUILTIN_EVAL,
+             info: dict[str, Any] | None = None) -> torch.Tensor:
+    """Token ids to evaluate PPL on. `source` is BUILTIN_EVAL (the default, for cross-job comparability) or
+    a path to a file / directory, read the same way calibration data is (mqde.data.text.load_text_source).
+    `info`, when given, is filled with what was read: dataset, files (or chars/truncated for a non-built-in)."""
+    corpus = load_text_source(source)
+    ids = tokenizer(corpus.text, return_tensors="pt").input_ids[0]
+    if info is not None:
+        info.update(dataset=source, chars=corpus.chars, tokens=int(ids.numel()), truncated=corpus.truncated, files=corpus.files)
     return ids[:max_tokens] if max_tokens else ids

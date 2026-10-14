@@ -41,11 +41,11 @@ const recipe = (name, algo, ppl, extra = {}) => {
   return r;
 };
 const serve = (served, tps) => ({ status: 'succeeded', served_ppl: served, load: { ok: 16, failed: 0, spec: { concurrency: 4, requests: 16, prompt_len: 256, n_predict: 64 }, output_tokens_per_s: tps } });
-const job = (id, model, windows, seq, base, recipes) => {
+const job = (id, model, windows, seq, base, recipes, evalDataset = 'wikitext-2 test') => {
   const rep = JSON.parse(JSON.stringify(fixture));
   rep.job_id = id; rep.spec = { ...rep.spec, name: id, model_path: `/m/${model}` };
   rep.baseline = { ppl: base, tokens: 1, windows, seq_len: seq, seconds: 1 };
-  rep.data = { calib: { dataset: 'wikitext-2 train', n: 1, seq_len: 1 }, eval: { dataset: 'wikitext-2 test', windows, seq_len: seq } };
+  rep.data = { calib: { dataset: 'wikitext-2 train', n: 1, seq_len: 1 }, eval: { dataset: evalDataset, windows, seq_len: seq } };
   rep.recipes = Object.fromEntries(recipes.map((r) => [r.recipe, r]));
   delete rep.llamacpp;
   const d = path.join(runs, id); fs.mkdirSync(d);
@@ -56,6 +56,9 @@ const job = (id, model, windows, seq, base, recipes) => {
 const A = '20261014-000000-mxa111', B = '20261014-000000-mxb222', E = '20261014-000000-mxe555', F = '20261014-000000-mxf666', G = '20261014-000000-mxg777';
 // the other groups get later ids, so the order the reports arrive in puts THEM first: the page must order groups itself
 const C = '20261014-000000-mzc333', D = '20261014-000000-mzd444', H = '20261014-000000-mzh888', I = '20261014-000000-mzi999';
+// J: same model and windows/seq_len as A's group, but a different evaluation corpus (T-1304 leftover: LLM jobs can
+// now name their own) -- a false comparison, so it must get its own group rather than join A/B/E/F/G's
+const J = '20261014-000000-mzj000';
 job(A, 'qwen', 40, 512, 18.10, [recipe('W4A16', 'gptq', 20.40, { pplKv: 20.35 }), recipe('W4A8', 'gptq', 21.80)]);
 job(B, 'qwen', 40, 512, 18.10, [recipe('W4A16', 'awq', 20.60, { export: { awq: { status: 'exported', bytes: 448 * MIB, real_ppl: 20.65, vllm: serve(20.70, 900) } } })]);
 job(E, 'qwen', 40, 512, 18.10, [recipe('W4A16', 'awq', 20.55, { export: { awq: { status: 'exported', bytes: 440 * MIB, real_ppl: 20.58, sglang: serve(20.60, 1500) } } })]);
@@ -73,6 +76,7 @@ job(C, 'llama', 40, 512, 8.50, [recipe('W4A16', 'gptq', 9.00)]);
   fs.writeFileSync(path.join(d, 'events.jsonl'), JSON.stringify({ type: 'job_state', state: 'SUCCEEDED', seq: 1, ts: 1 }) + '\n');
   fs.writeFileSync(path.join(d, 'job.yaml'), `metadata: {name: ${I}}\nmodel: {type: llm, path: /m/qwen}\nquant: {recipe: [w4a16]}\noutput_dir: ${runs}\n`); }
 job(D, 'qwen', 4, 256, 17.00, [recipe('W4A16', 'gptq', 19.00)]);
+job(J, 'qwen', 40, 512, 18.10, [recipe('W4A16', 'gptq', 21.00)], '/data/my-eval-corpus');
 const key = (id, r) => `${id}/${r}`;
 
 const port = await freePort();
@@ -103,7 +107,8 @@ try {
 
   // ---------------------------------------------------------------- groups: only comparable runs together
   const opts = await page.getByTestId('matrix-group').locator('option').allInnerTexts();
-  check('four groups: same model + protocol (6 columns, the biggest, first), another model, the same model under another protocol, a third model; the run with no protocol info is in none', opts.length === 4 && /qwen · 40 窗口 × 512（6 列）/.test(opts[0]) && opts.some((o) => /llama · 40 窗口 × 512（1 列）/.test(o)) && opts.some((o) => /qwen · 4 窗口 × 256（1 列）/.test(o)) && opts.some((o) => /mistral/.test(o)) && !opts.some((o) => /undefined/.test(o)), JSON.stringify(opts));
+  check('five groups: same model + protocol (6 columns, the biggest, first), another model, the same model under another protocol, a third model, the same model+protocol but a different evaluation corpus; the run with no protocol info is in none', opts.length === 5 && /qwen · 40 窗口 × 512（6 列）/.test(opts[0]) && opts.some((o) => /llama · 40 窗口 × 512（1 列）/.test(o)) && opts.some((o) => /qwen · 4 窗口 × 256（1 列）/.test(o)) && opts.some((o) => /mistral/.test(o)) && !opts.some((o) => /undefined/.test(o)), JSON.stringify(opts));
+  check('a non-default evaluation corpus is its own group, named, and does not join the default-dataset group', opts.some((o) => o.includes('/data/my-eval-corpus') && /40 窗口 × 512/.test(o) && /（1 列）/.test(o)), JSON.stringify(opts));
   const cols = await page.locator('[data-testid^="matrix-col-"]').allInnerTexts();
   check('the shown group is the biggest one, with its six columns and no column for the other models or protocol (nor the run with no protocol)', cols.length === 6 && !cols.some((c) => /MZI999/.test(c)) && !cols.some((c) => /llama|4 窗口/.test(c)), JSON.stringify(cols));
   check('the baseline defaults to the unquantized model', /原模型（未量化）/.test(await page.getByTestId('matrix-baseline').locator('option:checked').innerText()));
