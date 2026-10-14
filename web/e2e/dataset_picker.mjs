@@ -195,6 +195,13 @@ try {
   check('VLA: a path the user typed is never replaced by the fallback, even though it is unreadable: it is shown, and blocks submitting', (await page.getByTestId('dataset-path').inputValue()) === OUTSIDE && await submit.isDisabled() && (await page.getByTestId('dataset-path-fellback').count()) === 0);
   await page.getByTestId('dataset-path-select').selectOption('synthetic');
   check('choosing synthetic again unblocks it', await submit.isEnabled());
+  // path mode must not outlive the value that put the picker in it: switch domain after typing a path
+  await page.getByTestId('dataset-path-select').selectOption({ label: 'LeRobot v3 目录…' });
+  await page.getByTestId('dataset-path').fill(NOTLEROBOT);
+  await page.getByTestId('domain-tab-vlm').click();
+  check('after typing a path, switching domain puts the picker back on the new domain\'s built-in: no path box left over', (await page.getByTestId('dataset-path-select').inputValue()) === 'synthetic' && (await page.getByTestId('dataset-path').count()) === 0);
+  await page.getByTestId('domain-tab-vla').click();
+  await page.getByTestId('dataset-path-select').selectOption('synthetic');
   await page.getByTestId('eval-dataset-path-select').selectOption({ label: 'LeRobot v3 目录…' });
   await page.getByTestId('eval-dataset-path').fill(LEROBOT);
   await until(() => /✓/.test(document.querySelector('[data-testid="eval-dataset-path-status"]')?.textContent ?? ''));
