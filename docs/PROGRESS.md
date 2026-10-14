@@ -112,6 +112,13 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 ---
 
 
+### 2026-10-14 · T-0406 CUDA FP8
+- **状态**：T-0406 PARTIAL（剩 AVX-512、CUDA 位打包、接入 Python 作业）
+- **本次完成**：CUDA 量化器支持 FP8 E4M3/E5M2（`fp8_round` 的设备版 + 同一套每组一线程的标定），与 CPU scalar 逐位一致；新测试覆盖次正规数、平局、饱和、NaN/inf；变异 8/13，余下 5 个已逐个解释为等价变异，并用“两道饱和一起去掉”验证了它们只是单独等价。
+- **校验**：ctest 364（CUDA 构建）/ 358（4090 默认）/ 362（Mac）；`quant_bench` 的 CUDA 行仍 bit-identical（内核 3.4 ms）。
+- **观察到一次、没抓到名字**：Mac 上重编后第一次 `ctest -j8` 报失败，紧接着重跑与随后连续 6 次全过；不知道是哪个测试，没有复现。
+- **前端**：无改动（数值内核）。
+
 ### 2026-10-14 · T-1202 现有 wheel 的实测（写进打包方案）
 - **状态**：方案仍 Proposed（未启用）；只改了方案文档
 - **本次完成**：4090 干净环境 `pip wheel python/` 44 秒出 2.1 MB wheel，新 venv 里 `import mqde._core` 与 `mqde/bin/mqde` 都能跑；纠正方案里“服务二进制不在 wheel 里”的错误（CMake 已经装进去了）；列出真正缺的：manylinux 标签、conda 库的 RPATH、编进二进制的数据目录绝对路径、没有 console script、脏树里的 `.so` 会泄漏进 wheel。

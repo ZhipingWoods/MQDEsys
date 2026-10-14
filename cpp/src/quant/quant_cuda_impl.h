@@ -12,7 +12,9 @@ struct MqdeCudaQuantArgs {
   int mse;  // MSE grid search instead of min/max
   int grid;
   float maxshrink;
-  float qmin, qmax;
+  float qmin, qmax;  // integer formats
+  int fp8;           // 0 integer, 1 E4M3, 2 E5M2
+  float fp8_max;     // 448 / 57344
 };
 
 // All return 0 on success; otherwise they write a message into err[errlen].

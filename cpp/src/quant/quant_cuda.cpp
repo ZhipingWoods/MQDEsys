@@ -12,8 +12,6 @@ double last_kernel_ms() { return g_last_ms; }
 
 Result<void> fake_quant(const float* x, int64_t rows, int64_t cols, const QuantSpec& s, float* out,
                         QParams* qparams_out) {
-  if (s.fmt != NumFormat::kInt)
-    return make_error(Errc::kUnsupported, "the CUDA quantizer handles integer formats only");
   if (!s.enabled()) return make_error(Errc::kInvalidArgument, "quantization spec is disabled");
   if (rows <= 0 || cols <= 0) return make_error(Errc::kInvalidArgument, "empty tensor [{}, {}]", rows, cols);
   if (s.gran == Granularity::kPerGroup && cols % s.group_size != 0)
@@ -27,7 +25,8 @@ Result<void> fake_quant(const float* x, int64_t rows, int64_t cols, const QuantS
   qp.groups_per_row = qp.per_tensor ? 1 : cols / qp.group_cols;
   const size_t groups = qp.per_tensor ? 1 : static_cast<size_t>(rows * qp.groups_per_row);
   qp.scale.assign(groups, 1.0f);
-  const bool asym = !s.symmetric;
+  const bool is_int = s.fmt == NumFormat::kInt;
+  const bool asym = is_int && !s.symmetric;
   if (asym) qp.zero.assign(groups, 0.0f);
 
   MqdeCudaQuantArgs a{rows,
@@ -38,8 +37,10 @@ Result<void> fake_quant(const float* x, int64_t rows, int64_t cols, const QuantS
                       s.calib == CalibAlgo::kMse,
                       s.grid,
                       s.maxshrink,
-                      static_cast<float>(s.qmin()),
-                      static_cast<float>(s.qmax())};
+                      is_int ? static_cast<float>(s.qmin()) : 0.0f,
+                      is_int ? static_cast<float>(s.qmax()) : 0.0f,
+                      is_int ? 0 : (s.fmt == NumFormat::kFp8E4M3 ? 1 : 2),
+                      is_int ? 0.0f : s.fp8_max()};
   char err[256] = {};
   if (mqde_cuda_fake_quant(x, out, qp.scale.data(), asym ? qp.zero.data() : nullptr, a, &g_last_ms, err,
                            sizeof err) != 0)

@@ -15,8 +15,33 @@ struct GP {
 
 __device__ __forceinline__ float rne(float v) { return rintf(v); }  // ties to even, as std::nearbyint
 
+// ops.cpp fp8_round: nearest FP8 value, ties to even, saturating. ldexpf / frexpf are exact.
+__device__ float fp8_round(float v, int fp8) {
+  const int mbits = fp8 == 1 ? 3 : 2;
+  const int emin = fp8 == 1 ? -6 : -14;  // exponent of the smallest normal
+  const float fmax = fp8 == 1 ? 448.0f : 57344.0f;
+  if (isnan(v)) return v;
+  const float a = fabsf(v);
+  if (a == 0.0f) return v;
+  int e = 0;
+  frexpf(a, &e);
+  const int exp = max(e - 1, emin);
+  const float step = ldexpf(1.0f, exp - mbits);
+  float r = __fmul_rn(rne(__fdiv_rn(a, step)), step);
+  r = fmax < r ? fmax : r;  // std::min(r, fmax)
+  return copysignf(r, v);
+}
+
 // Order of float operations is the numerical contract (ops.cpp params_from_range).
-__device__ GP params_from_range(float mn, float mx, int symmetric, float qmin, float qmax) {
+__device__ GP params_from_range(float mn, float mx, const MqdeCudaQuantArgs& a) {
+  const int symmetric = a.symmetric;
+  const float qmin = a.qmin, qmax = a.qmax;
+  if (a.fp8) {
+    const float amax = fmaxf(fabsf(mn), fabsf(mx));
+    float scale = __fdiv_rn(amax, a.fp8_max);
+    if (!(scale > 0.0f)) scale = 1.0f;
+    return {scale, 0.0f};
+  }
   if (symmetric) {
     const float amax = fmaxf(fabsf(mn), fabsf(mx));
     float scale = __fdiv_rn(amax, qmax);
@@ -32,7 +57,14 @@ __device__ GP params_from_range(float mn, float mx, int symmetric, float qmin, f
   return {scale, zero};
 }
 
-__device__ __forceinline__ float qdq1(float v, GP p, float qmin, float qmax) {
+__device__ __forceinline__ float qdq1(float v, GP p, const MqdeCudaQuantArgs& a) {
+  const float qmin = a.qmin, qmax = a.qmax;
+  if (a.fp8) {
+    const float fm = a.fp8_max;
+    const float t = __fdiv_rn(v, p.scale);
+    const float c = t < -fm ? -fm : (fm < t ? fm : t);  // std::clamp keeps a NaN
+    return __fmul_rn(fp8_round(c, a.fp8), p.scale);
+  }
   float q = __fadd_rn(rne(__fdiv_rn(v, p.scale)), p.zero);
   q = q < qmin ? qmin : (qmax < q ? qmax : q);  // std::clamp keeps a NaN
   return __fmul_rn(__fsub_rn(q, p.zero), p.scale);
@@ -69,18 +101,18 @@ __global__ void calibrate(const float* x, float* scale, float* zero, int64_t n_g
   if (!isfinite(mn) || !isfinite(mx)) {
     best = {1.0f, 0.0f};
   } else {
-    best = params_from_range(mn, mx, a.symmetric, a.qmin, a.qmax);
+    best = params_from_range(mn, mx, a);
     if (a.mse) {
       double best_err = INFINITY;
       for (int i = 0; i <= a.grid; ++i) {
         const float shrink = __fsub_rn(1.0f, __fdiv_rn(__fmul_rn(static_cast<float>(i), __fsub_rn(1.0f, a.maxshrink)),
                                                        static_cast<float>(a.grid)));
-        const GP p = params_from_range(__fmul_rn(mn, shrink), __fmul_rn(mx, shrink), a.symmetric, a.qmin, a.qmax);
+        const GP p = params_from_range(__fmul_rn(mn, shrink), __fmul_rn(mx, shrink), a);
         double err = 0.0;
         for (int64_t s = 0; s < n_seg; ++s) {
           const float* row = base + s * seg_stride;
           for (int64_t c = 0; c < seg_len; ++c) {
-            const double d = __dsub_rn(static_cast<double>(qdq1(row[c], p, a.qmin, a.qmax)), static_cast<double>(row[c]));
+            const double d = __dsub_rn(static_cast<double>(qdq1(row[c], p, a)), static_cast<double>(row[c]));
             err = __dadd_rn(err, __dmul_rn(d, d));
           }
         }
@@ -99,7 +131,7 @@ __global__ void qdq(const float* x, float* out, const float* scale, const float*
   const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= a.rows * a.cols) return;
   const int64_t gi = a.per_tensor ? 0 : (i / a.cols) * (a.cols / a.group_cols) + (i % a.cols) / a.group_cols;
-  out[i] = qdq1(x[i], {scale[gi], zero ? zero[gi] : 0.0f}, a.qmin, a.qmax);
+  out[i] = qdq1(x[i], {scale[gi], zero ? zero[gi] : 0.0f}, a);
 }
 
 struct Dev {

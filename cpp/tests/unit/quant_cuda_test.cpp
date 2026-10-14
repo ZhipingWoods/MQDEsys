@@ -208,6 +208,51 @@ TEST(quant_cuda, groups_where_a_float_error_sum_would_pick_another_scale_still_m
   for (size_t i = 0; i < w.size(); ++i) ASSERT_TRUE(same(ref[i], got[i])) << i;
 }
 
+namespace {
+QuantSpec fp8_spec(NumFormat f, Granularity g, int64_t group, CalibAlgo c) {
+  QuantSpec s;
+  s.fmt = f;
+  s.bits = 8;
+  s.gran = g;
+  s.group_size = group;
+  s.calib = c;
+  return s;
+}
+}  // namespace
+
+TEST(quant_cuda, fp8_matches_the_scalar_path_bit_for_bit) {
+  NEED_GPU();
+  const int64_t rows = 40, cols = 192;
+  for (NumFormat f : {NumFormat::kFp8E4M3, NumFormat::kFp8E5M2})
+    for (auto [g, group] : {std::pair{Granularity::kPerChannel, int64_t{0}},
+                            {Granularity::kPerGroup, int64_t{64}},
+                            {Granularity::kPerTensor, int64_t{0}}})
+      for (CalibAlgo c : {CalibAlgo::kMinMax, CalibAlgo::kMse})
+        for (bool awkward : {false, true}) {
+          const auto sp = fp8_spec(f, g, group, c);
+          auto w = weights(static_cast<size_t>(rows * cols), 23, awkward);
+          // the range of FP8 is where the rounding differs from integers: subnormals, ties, saturation
+          const float fm = sp.fp8_max();
+          const float vals[] = {fm,      -fm,     fm * 1.01f, -fm * 3.0f, 0.001953125f, 0.0009765625f,
+                                1.0625f, 1.1875f, 17.0f,      18.0f,      1e-8f};
+          for (size_t i = 3; i < w.size(); i += 17)
+            w[i] = vals[i % (sizeof vals / sizeof *vals)] * (c == CalibAlgo::kMse ? 1.0f : 0.01f);
+          std::vector<float> ref, got(w.size());
+          QParams qr, qg;
+          cpu(w, rows, cols, sp, &ref, &qr);
+          auto r = mqde::quant::cuda::fake_quant(w.data(), rows, cols, sp, got.data(), &qg);
+          ASSERT_TRUE(r) << describe(sp) << ": " << r.error().message;
+          ASSERT_EQ(qr.scale.size(), qg.scale.size());
+          EXPECT_TRUE(qg.zero.empty()) << "FP8 has no zero point";
+          for (size_t i = 0; i < qr.scale.size(); ++i)
+            ASSERT_TRUE(same(qr.scale[i], qg.scale[i]))
+                << describe(sp) << (awkward ? " awkward" : "") << " scale " << i;
+          for (size_t i = 0; i < w.size(); ++i)
+            ASSERT_TRUE(same(ref[i], got[i])) << describe(sp) << (awkward ? " awkward" : "") << " out " << i
+                                              << " x=" << w[i] << ": " << ref[i] << " vs " << got[i];
+        }
+}
+
 TEST(quant_cuda, works_in_place_and_a_group_of_only_nan_gets_scale_one) {
   NEED_GPU();
   const int64_t rows = 4, cols = 64;
@@ -228,10 +273,6 @@ TEST(quant_cuda, works_in_place_and_a_group_of_only_nan_gets_scale_one) {
 TEST(quant_cuda, bad_input_is_an_error_not_a_crash) {
   NEED_GPU();
   std::vector<float> w(10, 1.0f), out(10);
-  QuantSpec fp8;
-  fp8.fmt = NumFormat::kFp8E4M3;
-  fp8.bits = 8;
-  EXPECT_FALSE(mqde::quant::cuda::fake_quant(w.data(), 1, 10, fp8, out.data()));
   EXPECT_FALSE(mqde::quant::cuda::fake_quant(
       w.data(), 1, 10, spec(4, false, Granularity::kPerGroup, 4, CalibAlgo::kMinMax), out.data()));
   EXPECT_FALSE(mqde::quant::cuda::fake_quant(
