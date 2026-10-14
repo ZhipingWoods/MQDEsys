@@ -53,13 +53,25 @@ const job = (id, model, windows, seq, base, recipes) => {
   fs.writeFileSync(path.join(d, 'events.jsonl'), JSON.stringify({ type: 'job_state', state: 'SUCCEEDED', seq: 1, ts: 1 }) + '\n');
   fs.writeFileSync(path.join(d, 'job.yaml'), `metadata: {name: ${id}}\nmodel: {type: llm, path: /m/${model}}\nquant: {recipe: [w4a16]}\noutput_dir: ${runs}\n`);
 };
-const A = '20261014-000000-mxa111', B = '20261014-000000-mxb222', E = '20261014-000000-mxe555', C = '20261014-000000-mxc333', D = '20261014-000000-mxd444', F = '20261014-000000-mxf666';
+const A = '20261014-000000-mxa111', B = '20261014-000000-mxb222', E = '20261014-000000-mxe555', F = '20261014-000000-mxf666', G = '20261014-000000-mxg777';
+// the other groups get later ids, so the order the reports arrive in puts THEM first: the page must order groups itself
+const C = '20261014-000000-mzc333', D = '20261014-000000-mzd444', H = '20261014-000000-mzh888', I = '20261014-000000-mzi999';
 job(A, 'qwen', 40, 512, 18.10, [recipe('W4A16', 'gptq', 20.40, { pplKv: 20.35 }), recipe('W4A8', 'gptq', 21.80)]);
 job(B, 'qwen', 40, 512, 18.10, [recipe('W4A16', 'awq', 20.60, { export: { awq: { status: 'exported', bytes: 448 * MIB, real_ppl: 20.65, vllm: serve(20.70, 900) } } })]);
 job(E, 'qwen', 40, 512, 18.10, [recipe('W4A16', 'awq', 20.55, { export: { awq: { status: 'exported', bytes: 440 * MIB, real_ppl: 20.58, sglang: serve(20.60, 1500) } } })]);
 // F differs from B by 0.005% in PPL: a change that small is neither better nor worse
 job(F, 'qwen', 40, 512, 18.10, [recipe('W4A16', 'rtn', 20.601)]);
+// G served nothing (0 tok/s): as a baseline there is nothing to divide by
+job(G, 'qwen', 40, 512, 18.10, [recipe('W4A16', 'rtn', 20.9, { export: { awq: { status: 'exported', bytes: 450 * MIB, vllm: serve(20.95, 0) } } })]);
+// H is the only run of its model, served by one engine only
+job(H, 'mistral', 40, 512, 7.00, [recipe('W4A16', 'gptq', 7.5, { export: { awq: { status: 'exported', bytes: 300 * MIB, vllm: serve(7.6, 1200) } } })]);
 job(C, 'llama', 40, 512, 8.50, [recipe('W4A16', 'gptq', 9.00)]);
+// I does not say how it scored PPL at all (no baseline, no evaluation record): it cannot be compared with anything
+{ const rep = JSON.parse(JSON.stringify(fixture)); rep.job_id = I; rep.spec = { ...rep.spec, name: I, model_path: '/m/qwen' }; delete rep.baseline; delete rep.data; delete rep.llamacpp;
+  rep.recipes = { W4A16: recipe('W4A16', 'rtn', 20.0) };
+  const d = path.join(runs, I); fs.mkdirSync(d); fs.writeFileSync(path.join(d, 'report.json'), JSON.stringify(rep));
+  fs.writeFileSync(path.join(d, 'events.jsonl'), JSON.stringify({ type: 'job_state', state: 'SUCCEEDED', seq: 1, ts: 1 }) + '\n');
+  fs.writeFileSync(path.join(d, 'job.yaml'), `metadata: {name: ${I}}\nmodel: {type: llm, path: /m/qwen}\nquant: {recipe: [w4a16]}\noutput_dir: ${runs}\n`); }
 job(D, 'qwen', 4, 256, 17.00, [recipe('W4A16', 'gptq', 19.00)]);
 const key = (id, r) => `${id}/${r}`;
 
@@ -91,10 +103,12 @@ try {
 
   // ---------------------------------------------------------------- groups: only comparable runs together
   const opts = await page.getByTestId('matrix-group').locator('option').allInnerTexts();
-  check('three groups: same model + protocol (5 columns), another model, same model under another protocol', opts.length === 3 && /qwen · 40 窗口 × 512（5 列）/.test(opts[0]) && opts.some((o) => /llama · 40 窗口 × 512（1 列）/.test(o)) && opts.some((o) => /qwen · 4 窗口 × 256（1 列）/.test(o)), JSON.stringify(opts));
+  check('four groups: same model + protocol (6 columns, the biggest, first), another model, the same model under another protocol, a third model; the run with no protocol info is in none', opts.length === 4 && /qwen · 40 窗口 × 512（6 列）/.test(opts[0]) && opts.some((o) => /llama · 40 窗口 × 512（1 列）/.test(o)) && opts.some((o) => /qwen · 4 窗口 × 256（1 列）/.test(o)) && opts.some((o) => /mistral/.test(o)) && !opts.some((o) => /undefined/.test(o)), JSON.stringify(opts));
   const cols = await page.locator('[data-testid^="matrix-col-"]').allInnerTexts();
-  check('the biggest group is shown first, with its five columns and no column for the other models or protocol', cols.length === 5 && !cols.some((c) => /llama|4 窗口/.test(c)), JSON.stringify(cols));
+  check('the shown group is the biggest one, with its six columns and no column for the other models or protocol (nor the run with no protocol)', cols.length === 6 && !cols.some((c) => /MZI999/.test(c)) && !cols.some((c) => /llama|4 窗口/.test(c)), JSON.stringify(cols));
   check('the baseline defaults to the unquantized model', /原模型（未量化）/.test(await page.getByTestId('matrix-baseline').locator('option:checked').innerText()));
+  const baseOpts = await page.getByTestId('matrix-baseline').locator('option').allInnerTexts();
+  check('the baseline list has the unquantized model ONCE and then each column (not one per job)', baseOpts.length === 7 && baseOpts.filter((o) => /原模型/.test(o)).length === 1, JSON.stringify(baseOpts.length));
 
   // ---------------------------------------------------------------- deltas against the unquantized model
   const exp1 = pct(20.40, 18.10);
@@ -124,6 +138,12 @@ try {
   check('the header marks which column is the baseline', /（基线）/.test(await txt(page.getByTestId(`matrix-col-${key(B, 'W4A16')}`))));
   check('"good" and "bad" are drawn in the design tokens\' green and red', (await colorOf(cell(E, 'W4A16', 'tps'))) === good && (await colorOf(cell(A, 'W4A8', 'ppl'))) === bad && good !== bad);
 
+  // a baseline that served nothing (0 tok/s): there is nothing to divide by, so the cells are "–", never "+Infinity%"
+  await page.getByTestId('matrix-baseline').selectOption(key(G, 'W4A16'));
+  check('baseline with 0 tok/s: the others\' throughput change is "–", not +Infinity%', (await txt(cell(B, 'W4A16', 'tps'))) === '–' && (await txt(cell(E, 'W4A16', 'tps'))) === '–', `${await txt(cell(B, 'W4A16', 'tps'))}`);
+  check('and the rows that do have a baseline still compare (B\'s PPL against G\'s 20.9)', (await txt(cell(B, 'W4A16', 'ppl'))) === signed(pct(20.60, 20.9)));
+  await page.getByTestId('matrix-baseline').selectOption(key(B, 'W4A16'));
+
   // ---------------------------------------------------------------- throughput from different engines is flagged
   const note = await txt(page.getByTestId('matrix-engine-note'));
   check('B served by vLLM and E by SGLang: the page says throughput across engines is not comparable', /vllm/.test(note) && /sglang/.test(note) && /不能直接比/.test(note), note);
@@ -134,6 +154,8 @@ try {
   check('another protocol is another table: one column, baseline back to the unquantized model, PPL +11.76% against 17.00', cols2.length === 1 && /原模型/.test(await page.getByTestId('matrix-baseline').locator('option:checked').innerText()) && (await txt(cell(D, 'W4A16', 'ppl'))) === signed(pct(19, 17)), await txt(cell(D, 'W4A16', 'ppl')));
   check('and the note names its protocol', /4 窗口 × 256/.test(await txt(page.getByTestId('score-matrix'))));
   check('no engine note when no two engines are in the table', (await page.getByTestId('matrix-engine-note').count()) === 0);
+  await page.getByTestId('matrix-group').selectOption({ label: 'mistral · 40 窗口 × 512（1 列）' });
+  check('a table whose throughput comes from ONE engine has no cross-engine warning', (await txt(cell(H, 'W4A16', 'tps'))) !== '' && (await page.getByTestId('matrix-engine-note').count()) === 0);
   await page.getByTestId('matrix-group').selectOption({ label: 'llama · 40 窗口 × 512（1 列）' });
   check('another model: its own baseline 8.50, PPL +5.88%, and none of the qwen numbers', (await txt(cell(C, 'W4A16', 'ppl'))) === signed(pct(9.0, 8.5)) && (await page.locator('[data-testid^="matrix-col-"]').count()) === 1);
   const yMatrix = (await page.getByTestId('score-matrix').boundingBox()).y, yDetail = (await page.getByRole('heading', { name: '各作业配方明细' }).boundingBox()).y;
