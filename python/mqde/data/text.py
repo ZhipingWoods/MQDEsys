@@ -96,7 +96,10 @@ def load_calib_text(source: str = BUILTIN_CALIB) -> CalibText:
     if not root.exists():
         raise FileNotFoundError(f"calibration data '{source}' not found")
     if root.is_dir():
-        files = sorted((p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in TEXT_SUFFIXES), key=lambda p: p.relative_to(root).as_posix())
+        files = sorted(
+            (p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in TEXT_SUFFIXES),
+            key=lambda p: p.relative_to(root).as_posix(),
+        )
     else:
         files = [root] if root.suffix.lower() in TEXT_SUFFIXES else []
     if not files:
@@ -135,7 +138,9 @@ def calib_batches(tokenizer: Any, n_samples: int = 32, seq_len: int = 512, seed:
     if info is not None:
         info.update(dataset=source, files=corpus.files, chars=corpus.chars, tokens=int(ids.numel()), truncated=corpus.truncated)
     if ids.numel() < seq_len + 2:
-        raise ValueError(f"calibration data '{source}' has {ids.numel()} tokens, fewer than one window of {seq_len} (needs at least {seq_len + 2})")
+        raise ValueError(
+            f"calibration data '{source}' has {ids.numel()} tokens, fewer than one window of {seq_len} (needs at least {seq_len + 2})"
+        )
     g = torch.Generator().manual_seed(seed)
     starts = torch.randint(0, ids.numel() - seq_len - 1, (n_samples,), generator=g)
     return [ids[s : s + seq_len].unsqueeze(0) for s in starts.tolist()]

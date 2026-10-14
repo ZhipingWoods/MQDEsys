@@ -219,7 +219,20 @@ class LLMJob:
         else:
             self.ev.emit("progress", value=(e["index"] + 1) / e["total"], msg=f"block {e['index'] + 1}/{e['total']}")
 
-    def _ppl(self, ad: HFCausalLM, ids: torch.Tensor, label: str) -> dict[str, float]:
+    def _window_previews(self, ad: HFCausalLM, ids: torch.Tensor) -> list[str]:
+        """The first words of each PPL window, so the report can say which text a window is. Empty when the tokenizer cannot decode."""
+        s = self.spec
+        n = min(ids.numel() // s.eval_seq_len, s.eval_windows)
+        out: list[str] = []
+        for i in range(n):
+            try:
+                text = ad.tokenizer.decode(ids[i * s.eval_seq_len : i * s.eval_seq_len + 48].tolist())
+            except Exception:
+                return []
+            out.append(" ".join(str(text).split())[:120])
+        return out
+
+    def _ppl(self, ad: HFCausalLM, ids: torch.Tensor, label: str) -> dict[str, Any]:
         s = self.spec
         def on_window(i: int, n: int) -> None:
             if i % 10 == 0:
@@ -349,7 +362,7 @@ class LLMJob:
             chk = self._stage("real_check", lambda: real_check(ad.model, d), f"{recipe}/{fmt}")
             chk.pop("per_layer")
 
-            def real_ppl() -> dict[str, float]:
+            def real_ppl() -> dict[str, Any]:
                 with use_real_weights(ad.model, d):
                     return self._ppl(ad, ids, f"{recipe}.real_{fmt}")
 
@@ -566,8 +579,10 @@ class LLMJob:
         calib_report = {"dataset": "wikitext-2 train"} if s.calib_dataset == BUILTIN_CALIB else calib_info
         self.report["data"] = {"calib": {**calib_report, "n": len(cal), "seq_len": s.calib_seq_len},
                                "eval": {"dataset": "wikitext-2 test", "windows": s.eval_windows, "seq_len": s.eval_seq_len}}
+        if previews := self._window_previews(ad, ids):
+            self.report["data"]["eval"]["previews"] = previews
         probe_windows, probe_ref = None, None
-        base: dict[str, float] | None = None
+        base: dict[str, Any] | None = None
         # T-1304/T-1306: quant_device/eval_device split. Moving only happens when they actually differ, so
         # an unmodified job (both equal to deploy.device) never calls HFCausalLM.to() at all -- same
         # single-device behavior as before this existed, bit-for-bit (see the BLAS-thread-count comment
@@ -637,7 +652,7 @@ class LLMJob:
                 kv_spec = _recipe_kv(recipe.name)
             kq = kvq.from_spec(kv_spec, s.kv_method, s.kv_granularity)
             if kq is not None:
-                def with_kv() -> dict[str, float]:
+                def with_kv() -> dict[str, Any]:
                     with kvq.kv_quant(ad.model, kq):
                         return self._ppl(ad, ids, f"{recipe.name}.fake_quant")
                 rep["eval"]["fake_quant"] = self._stage("eval_fake", with_kv, recipe.name)
@@ -689,7 +704,8 @@ def main() -> None:
     ap.add_argument("--kv-method", default=None, choices=sorted(kvq.KV_REGISTRY))
     ap.add_argument("--eval-windows", type=int)
     ap.add_argument("--calib-samples", type=int)
-    ap.add_argument("--calib-dataset", help="calibration text: a file (.txt .md .jsonl .json .parquet) or a directory of them; default wikitext-2 train")
+    ap.add_argument("--calib-dataset", help="calibration text: a file (.txt .md .jsonl .json .parquet) or a directory of them; "
+                    "default wikitext-2 train")
     ap.add_argument("--mixed-precision", help="inline JSON or a YAML/JSON file: {rules: [{match, bits, skip}]}")
     ap.add_argument("--export", help="comma separated: gptq, awq, compressed-tensors")
     ap.add_argument("--sensitivity", choices=["block", "type"])
@@ -712,7 +728,8 @@ def main() -> None:
     if a.device is not None:
         spec.device = spec.quant_device = spec.eval_device = a.device
     for k, v in {"model_path": a.model, "algorithm": a.algorithm, "quant_device": a.quant_device, "eval_device": a.eval_device,
-                 "act_static": a.act_static, "eval_windows": a.eval_windows, "calib_samples": a.calib_samples, "calib_dataset": a.calib_dataset,
+                 "act_static": a.act_static, "eval_windows": a.eval_windows, "calib_samples": a.calib_samples,
+                 "calib_dataset": a.calib_dataset,
                  "kv_method": a.kv_method}.items():
         if v is not None:
             setattr(spec, k, v)

@@ -222,6 +222,8 @@ export interface PplResult {
   windows: number;
   seq_len: number;
   seconds: number;
+  /** each window's own mean token loss (nats/token); absent in reports written before the per-window review existed */
+  window_nll?: number[];
 }
 
 /** report.json of mqde.pipeline.llm_job (kind === "llm"). */
@@ -447,7 +449,12 @@ export interface LLMJobReport {
   spec: { name: string; model_path: string; recipes: string[]; algorithm: string; act_static: string | null; kv_method: string; device: string; mixed_precision: unknown };
   stages: { stage: string; status: string; seconds?: number; error?: string }[];
   model?: { path: string; blocks: number; linears: number };
-  data?: { calib: { dataset: string; n: number; seq_len: number }; eval: { dataset: string; windows: number; seq_len: number } };
+  data?: {
+    /** `files` / `chars` / `tokens` / `truncated` say what was read when the calibration data is a user-named file or directory */
+    calib: { dataset: string; n: number; seq_len: number; files?: number; chars?: number; tokens?: number; truncated?: boolean };
+    /** `previews`: the first words of each PPL window, in window order (absent when the tokenizer could not decode) */
+    eval: { dataset: string; windows: number; seq_len: number; previews?: string[] };
+  };
   baseline?: PplResult;
   recipes?: Record<string, LLMRecipeReport>;
   env?: { torch: string; torch_threads: number; device?: string; quant_device?: string; eval_device?: string; quant_device_name?: string; eval_device_name?: string; hardware?: string };

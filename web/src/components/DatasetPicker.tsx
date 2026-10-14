@@ -15,6 +15,12 @@ interface Props {
   onValid?: (ok: boolean) => void;
   testid: string;
   label: string;
+  /**
+   * A default that only exists on some servers (the dev server's LeRobot path). While the user has not touched the field and this
+   * default turns out to be unreadable here, use `fallback` instead and say so; a path the user typed, or one that came from another
+   * job, is never swapped silently.
+   */
+  defaultValue?: { path: string; fallback: string };
 }
 
 const CUSTOM = "__custom__";
@@ -31,7 +37,7 @@ const describe = (i: DatasetInfo): string => {
 };
 
 /** Pick a built-in dataset or give a path on the server; a typed path is checked against the server as it is typed. */
-export function DatasetPicker({ kind, role, value, onChange, onValid, testid, label }: Props) {
+export function DatasetPicker({ kind, role, value, onChange, onValid, testid, label, defaultValue }: Props) {
   const [list, setList] = useState<{ builtin: BuiltinDataset[]; roots: string[] } | null>(null);
   useEffect(() => {
     let alive = true;
@@ -45,6 +51,8 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
   }, []);
   const options = (list?.builtin ?? []).filter((b) => b.roles.includes(role) && (kind === "text" ? b.kind === "text" : b.kind === "vision"));
   const [custom, setCustom] = useState(false);
+  const [touched, setTouched] = useState(false); // the user chose something: the default is no longer ours to replace
+  const [fellBack, setFellBack] = useState<string | null>(null); // the default we replaced, for the note
   // a value that is not a built-in is a path (it may arrive late: derived from another job, or the list loads after it)
   useEffect(() => {
     if (list && value !== "" && !options.some((b) => b.id === value)) setCustom(true);
@@ -68,6 +76,15 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
     };
   }, [typed, kind]);
 
+  useEffect(() => {
+    if (!defaultValue || touched || value !== defaultValue.path || info?.path !== value) return;
+    if (info.err || (info.res && !info.res.usable)) {
+      setFellBack(defaultValue.path);
+      setCustom(false);
+      onChange(defaultValue.fallback);
+    }
+  }, [info]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const pending = custom && (value.trim() === "" || info?.path !== value.trim());
   const ok = !custom || (!pending && !!info?.res?.usable);
   useEffect(() => {
@@ -83,6 +100,8 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
         value={selected}
         data-testid={`${testid}-select`}
         onChange={(e) => {
+          setTouched(true);
+          setFellBack(null);
           if (e.target.value === CUSTOM) {
             setCustom(true);
             onChange("");
@@ -100,6 +119,11 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
         ))}
         <option value={CUSTOM}>{kind === "text" ? "本地文件或目录…" : "LeRobot v3 目录…"}</option>
       </select>
+      {fellBack && !custom && (
+        <p className="note" data-testid={`${testid}-fellback`}>
+          默认的数据 {fellBack} 在这台服务器上用不了，已改用 {value}。要用别的，在上面选。
+        </p>
+      )}
       {!custom && chosen && !chosen.available && (
         <p className="note warn" data-testid={`${testid}-unavailable`}>
           服务器上找不到这个数据集：{chosen.reason}。可以改用本地文件或目录。
@@ -110,7 +134,10 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
           <input
             value={value}
             placeholder={kind === "text" ? "服务器上的路径：.txt .md .jsonl .json .parquet 文件，或装有它们的目录" : "服务器上的 LeRobot v3 目录"}
-            onChange={(e) => onChange(e.target.value)}
+            onChange={(e) => {
+              setTouched(true);
+              onChange(e.target.value);
+            }}
             data-testid={testid}
           />
           <p className={`note ${pending || ok ? "" : "warn"}`} data-testid={`${testid}-status`}>

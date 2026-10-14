@@ -3,6 +3,9 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, fmt, fmtBytes, LlamaCppDeploy, LlamaServe, llamaSpeed, LLMJobReport, LLMRecipeReport, Sensitivity, LmEval } from "../api";
 import { baseOption, Chart, series, token } from "../charts";
 import { Tile } from "./Estimate";
+import { LayerSunburst } from "../components/LayerSunburst";
+import { RunCompleteness, VerdictStrip } from "../components/VerdictStrip";
+import { WindowReview } from "../components/WindowReview";
 import { LayerAnalysis } from "./LayerAnalysis";
 import { SweepCard } from "./SweepCard";
 
@@ -33,6 +36,14 @@ export function ordered(rep: LLMJobReport): LLMRecipeReport[] {
   return Object.values(rep.recipes ?? {}).sort((a, b) => order.indexOf(a.recipe.toLowerCase()) - order.indexOf(b.recipe.toLowerCase()));
 }
 
+/** "wikitext-2 train", or for a user-named source: its path and how much of it was read. */
+function calibHint(rep: LLMJobReport): string | undefined {
+  const c = rep.data?.calib;
+  if (!c) return undefined;
+  if (c.tokens == null) return c.dataset;
+  return `${c.dataset.split("/").filter(Boolean).slice(-2).join("/")} · ${c.files ?? "?"} 个文件 · ${c.tokens} token${c.truncated ? "（已截断）" : ""}`;
+}
+
 export function LLMReportView({ rep, job, jobId }: { rep: LLMJobReport; job?: Record<string, unknown>; jobId?: string }) {
   const rs = ordered(rep);
   const [params, setParams] = useSearchParams();
@@ -47,7 +58,7 @@ export function LLMReportView({ rep, job, jobId }: { rep: LLMJobReport; job?: Re
         <div className="tiles">
           <Tile label="原模型 PPL（pretrain）" value={fmt(b.ppl, 3)} hint={`${rep.data?.eval.dataset ?? "wikitext-2 test"}`} />
           <Tile label="评估 token" value={`${b.tokens}`} hint={`${b.windows} 窗口 × ${b.seq_len}`} />
-          <Tile label="校准" value={`${rep.data?.calib.n ?? "–"} × ${rep.data?.calib.seq_len ?? "–"}`} hint={rep.data?.calib.dataset} />
+          <Tile label="校准" value={`${rep.data?.calib.n ?? "–"} × ${rep.data?.calib.seq_len ?? "–"}`} hint={calibHint(rep)} />
           <Tile label="模型" value={`${rep.model?.blocks ?? "–"} 块`} hint={`${rep.model?.linears ?? "–"} 个线性层 · ${rep.spec.device}`} />
         </div>
       )}
@@ -86,6 +97,8 @@ function Overview({ rep, rs }: { rep: LLMJobReport; rs: LLMRecipeReport[] }) {
   const hasKv = rs.some((r) => r.eval.fake_quant);
   return (
     <>
+      <RunCompleteness rep={rep} />
+      <VerdictStrip base={base} rs={rs} />
       <div className="card">
         <h2>困惑度（越低越好）· 三个评估位点</h2>
         <Chart
@@ -170,6 +183,16 @@ function Overview({ rep, rs }: { rep: LLMJobReport; rs: LLMRecipeReport[] }) {
           逐块顺序量化：第 i 块用已量化的 0..i-1 块的输出做校准（GPTQModel / LLMC 约定）。fake-quant 以浮点存储反量化权重，数值与真实低比特内核一致但不降低显存。
         </p>
       </div>
+      {rep.baseline?.window_nll ? (
+        <WindowReview
+          base={rep.baseline.window_nll}
+          recipes={rs.flatMap((r) => (r.eval.fake_quant_wo_kv.window_nll ? [{ name: r.recipe, nll: r.eval.fake_quant_wo_kv.window_nll }] : []))}
+          previews={rep.data?.eval.previews}
+          seqLen={rep.baseline.seq_len}
+        />
+      ) : (
+        <p className="note" data-testid="window-review-missing">这份报告没有逐窗口的损失（它是在逐窗口复盘出现之前跑的）；重跑即可得到。</p>
+      )}
       {rs.some((r) => r.export) && <ExportCard rs={rs} />}
       {rs.some((r) => r.logits) && <LogitsCard rep={rep} rs={rs} />}
       {rs.some((r) => Object.values(r.export ?? {}).some((e) => e.vllm)) && <ServeCard rs={rs} which="vllm" />}
@@ -521,6 +544,7 @@ export function RecipeErrorAnalysis({ r, base }: { r: LLMRecipeReport; base?: nu
         <Tile label="相对原模型" value={pct(r.summary.ppl_delta_pct)} hint={`算法 ${r.algorithm}`} />
         <Tile label="量化层数" value={`${r.layers.length}`} hint={`${wdesc(r)} · 跳过 ${r.skipped.length}`} />
       </div>
+      <LayerSunburst layers={r.layers} />
       <LayerAnalysis layers={r.layers} strip="model." />
     </>
   );

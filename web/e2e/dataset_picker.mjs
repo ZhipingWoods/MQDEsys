@@ -55,11 +55,13 @@ const mkjob = (id, yaml) => { const d = path.join(runs, id); fs.mkdirSync(d);
   fs.writeFileSync(path.join(d, 'report.json'), JSON.stringify(rep));
   fs.writeFileSync(path.join(d, 'events.jsonl'), JSON.stringify({ type: 'job_state', state: 'SUCCEEDED', seq: 1, ts: 1 }) + '\n');
   fs.writeFileSync(path.join(d, 'job.yaml'), yaml.join('\n') + '\n'); };
-const LLMJOB = '20261014-000000-dsllm', VLMJOB = '20261014-000000-dsvlm';
+const LLMJOB = '20261014-000000-dsllm', VLMJOB = '20261014-000000-dsvlm', VLMGONE = '20261014-000000-dsgone';
 mkjob(LLMJOB, ['metadata: {name: ds-llm}', `model: {type: llm, path: ${MODEL}}`, 'quant: {recipe: [w4a16]}', `calibration: {dataset: ${CORPUS}, n_samples: 8, seq_len: 128}`,
   'evaluation: {dataset: wikitext-2-raw-v1:test, seq_len: 128, max_windows: 4}', `output_dir: ${runs}`]);
 mkjob(VLMJOB, ['metadata: {name: ds-vlm}', `model: {type: vlm, path: ${MODEL}}`, 'quant: {recipe: [w4a16]}', 'calibration: {dataset: synthetic, n_samples: 8}',
   `evaluation: {dataset: ${LEROBOT}, n_samples: 6, max_new_tokens: 12}`, `output_dir: ${runs}`]);
+mkjob(VLMGONE, ['metadata: {name: ds-gone}', `model: {type: vlm, path: ${MODEL}}`, 'quant: {recipe: [w4a16]}', 'calibration: {dataset: synthetic, n_samples: 8}',
+  `evaluation: {dataset: ${path.join(root, 'gone')}, n_samples: 6, max_new_tokens: 12}`, `output_dir: ${runs}`]);
 
 const port = await freePort();
 const server = spawn(bin, ['serve', '--repo', repo, '--runs', runs, '--web', path.join(repo, 'web/dist'), '--python', path.join(here, 'fake_worker.py'),
@@ -179,15 +181,25 @@ try {
   const y2 = fs.readFileSync(path.join(runs, page.url().split('/jobs/')[1], 'job.yaml'), 'utf8');
   check('the server stored different calibration and evaluation data', /calibration:[\s\S]*dataset: synthetic/.test(y2) && y2.includes(`dataset: ${LEROBOT}`), y2.split('\n').filter((l) => /dataset/.test(l)).join(' | '));
 
-  // ---- VLA: the default data is a path on the dev server, outside this test's sandbox
+  // ---- VLA: the default data is a path on the dev server, which this server cannot read
   await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
   await page.getByTestId('domain-tab-vla').click();
-  await page.getByTestId('dataset-path').waitFor({ timeout: 10000 });
+  await page.getByTestId('dataset-path-fellback').waitFor({ timeout: 10000 });
+  await page.getByTestId('eval-dataset-path-fellback').waitFor({ timeout: 10000 });
+  j = await preview();
+  check('VLA: a default this server cannot read falls back to synthetic for both, says so, and the form is usable',
+    /用不了/.test(await status('dataset-path-fellback')) && /synthetic/.test(await status('dataset-path-fellback')) && j.calibration.dataset === 'synthetic' && j.evaluation.dataset === 'synthetic' && await submit.isEnabled(), await status('dataset-path-fellback'));
+  await page.getByTestId('dataset-path-select').selectOption({ label: 'LeRobot v3 目录…' });
+  await page.getByTestId('dataset-path').fill(OUTSIDE);
   await until(() => /不在服务器允许的目录/.test(document.querySelector('[data-testid="dataset-path-status"]')?.textContent ?? ''));
-  check('VLA: a default that this server may not read is explained, and submitting is blocked until another is chosen', await submit.isDisabled());
+  check('VLA: a path the user typed is never replaced by the fallback, even though it is unreadable: it is shown, and blocks submitting', (await page.getByTestId('dataset-path').inputValue()) === OUTSIDE && await submit.isDisabled() && (await page.getByTestId('dataset-path-fellback').count()) === 0);
   await page.getByTestId('dataset-path-select').selectOption('synthetic');
-  await page.getByTestId('eval-dataset-path-select').selectOption('synthetic');
-  check('choosing synthetic for both unblocks it', await submit.isEnabled() && (await preview()).evaluation.dataset === 'synthetic');
+  check('choosing synthetic again unblocks it', await submit.isEnabled());
+  await page.getByTestId('eval-dataset-path-select').selectOption({ label: 'LeRobot v3 目录…' });
+  await page.getByTestId('eval-dataset-path').fill(LEROBOT);
+  await until(() => /✓/.test(document.querySelector('[data-testid="eval-dataset-path-status"]')?.textContent ?? ''));
+  j = await preview();
+  check('VLA: the evaluation data can differ from the calibration data and reaches evaluation.dataset only', j.calibration.dataset === 'synthetic' && j.evaluation.dataset === LEROBOT, JSON.stringify([j.calibration, j.evaluation]));
 
   // ---- derive keeps what the parent used
   await page.goto(`${base}/new?mode=all&from=${LLMJOB}&step=eval`, { waitUntil: 'load' });
@@ -200,6 +212,12 @@ try {
   await until(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.evaluation?.dataset; } catch { return false; } });
   j = await preview();
   check('deriving a VLM job keeps calibration and evaluation data apart', j.calibration.dataset === 'synthetic' && j.evaluation.dataset === LEROBOT, JSON.stringify([j.calibration, j.evaluation]));
+  await page.goto(`${base}/new?mode=all&from=${VLMGONE}&step=eval`, { waitUntil: 'load' });
+  await page.getByTestId('derive-banner').waitFor({ timeout: 10000 });
+  await page.getByTestId('eval-dataset-path').waitFor({ timeout: 10000 });
+  await until(() => /✗/.test(document.querySelector('[data-testid="eval-dataset-path-status"]')?.textContent ?? ''));
+  check('deriving a job whose data has since gone: the missing path is shown and blocks submitting, not silently swapped for synthetic',
+    (await page.getByTestId('eval-dataset-path').inputValue()) === path.join(root, 'gone') && await submit.isDisabled() && (await page.getByTestId('eval-dataset-path-fellback').count()) === 0, await status('eval-dataset-path-status'));
 
   check('no page errors', errors.length === 0, errors.slice(0, 2).join(' | '));
   failed = results.some((r) => !r);

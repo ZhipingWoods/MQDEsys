@@ -217,6 +217,8 @@ tbody tr.clickable { cursor: pointer; }
 .error-box { border: 1px solid var(--critical); color: var(--critical); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px; background: color-mix(in srgb, var(--critical) 8%, transparent); }
 .note { color: var(--text-secondary); font-size: 12.5px; }
 .note li { margin: 3px 0; }
+.note.warn { color: var(--warning); }
+.note.muted { color: var(--text-muted); }
 .empty { padding: 28px; text-align: center; color: var(--text-muted); }
 
 /* meter bar (llmfit metric-track) */
@@ -313,3 +315,18 @@ table.matrix td.cell.light { color: #0b0b0b; }
 table.kv th { text-align: left; width: 120px; color: var(--text-muted); font-weight: 500; padding: 4px 8px 4px 0; vertical-align: top; }
 table.kv td { padding: 4px 0; }
 button.small { padding: 4px 10px; font-size: 12px; }
+
+/* deployment backends: one card each (llama.cpp / vLLM / SGLang), several can be on */
+.backend-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.backend-card { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 12px 14px; background: var(--surface-1); min-width: 0; }
+.backend-card.on { border-color: var(--accent); background: var(--accent-dim); }
+.backend-card.off { opacity: 0.55; }
+.backend-head { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; }
+.backend-name { flex: 1; }
+.backend-badge { font-size: 11px; font-weight: 500; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-muted); }
+.backend-badge.ok { background: color-mix(in srgb, var(--good) 14%, transparent); color: var(--good-text); border-color: transparent; }
+.backend-badge.warn { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); border-color: transparent; }
+.backend-facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 8px 0 0; font-size: 12px; }
+.backend-facts dt { color: var(--text-muted); }
+.backend-facts dd { margin: 0; color: var(--text-secondary, var(--text-primary)); overflow-wrap: anywhere; }
+.backend-options { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 8px; }

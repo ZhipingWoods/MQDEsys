@@ -60,7 +60,8 @@ def test_same_seed_same_windows_other_seed_other_windows(tmp_path):
 
 def test_jsonl_takes_the_text_field_or_a_bare_string_and_skips_records_without_text(tmp_path):
     p = tmp_path / "d.jsonl"
-    p.write_text("\n".join([json.dumps({"text": "alpha " * 30}), json.dumps({"id": 1}), json.dumps("beta " * 30), "", json.dumps({"text": ""})]))
+    lines = [json.dumps({"text": "alpha " * 30}), json.dumps({"id": 1}), json.dumps("beta " * 30), "", json.dumps({"text": ""})]
+    p.write_text("\n".join(lines))
     info: dict = {}
     T.calib_batches(CharTok(), 2, 20, source=str(p), info=info)
     assert info["chars"] == len("alpha " * 30) + len("beta " * 30) + len("\n\n")

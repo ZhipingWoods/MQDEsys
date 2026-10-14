@@ -6,6 +6,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -18,11 +19,12 @@ def perplexity(
     seq_len: int = 512,
     max_windows: int | None = None,
     progress: Callable[[int, int], None] | None = None,
-) -> dict[str, float]:
+) -> dict[str, Any]:
     n = ids.numel() // seq_len
     if max_windows:
         n = min(n, max_windows)
     nll, count = 0.0, 0
+    window_nll: list[float] = []  # each window's own mean token loss: the report's per-window review is drawn from it
     t0 = time.perf_counter()
     for i in range(n):
         w = ids[i * seq_len : (i + 1) * seq_len].unsqueeze(0)
@@ -30,6 +32,8 @@ def perplexity(
         loss = F.cross_entropy(logits[0, :-1], w[0, 1:].to(logits.device), reduction="sum")
         nll += float(loss)
         count += seq_len - 1
+        window_nll.append(float(loss) / (seq_len - 1))
         if progress:
             progress(i + 1, n)
-    return {"ppl": math.exp(nll / count), "tokens": count, "windows": n, "seq_len": seq_len, "seconds": time.perf_counter() - t0}
+    return {"ppl": math.exp(nll / count), "tokens": count, "windows": n, "seq_len": seq_len, "seconds": time.perf_counter() - t0,
+            "window_nll": window_nll}

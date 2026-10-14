@@ -722,6 +722,7 @@ export default function NewJobPage() {
                 value={dataset}
                 onChange={setDataset}
                 onValid={setCalibVisionOk}
+                defaultValue={fromJob ? undefined : { path: DEFAULT_DATASET, fallback: "synthetic" }}
                 testid="dataset-path"
               />
               <DatasetPicker
@@ -731,6 +732,7 @@ export default function NewJobPage() {
                 value={evalDataset}
                 onChange={setEvalDataset}
                 onValid={setEvalVisionOk}
+                defaultValue={fromJob ? undefined : { path: DEFAULT_DATASET, fallback: "synthetic" }}
                 testid="eval-dataset-path"
               />
               <div className="field">

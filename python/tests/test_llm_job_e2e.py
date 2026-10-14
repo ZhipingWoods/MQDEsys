@@ -336,13 +336,16 @@ class _CharTok:
 
 def test_the_spec_reads_the_calibration_dataset_from_yaml(tmp_path: Path) -> None:
     y = tmp_path / "j.yaml"
-    y.write_text(yaml.safe_dump({"model": {"path": "<tiny>"}, "quant": {"recipe": ["w4a16"]}, "calibration": {"dataset": "/data/my_corpus", "n_samples": 8}}))
+    base = {"model": {"path": "<tiny>"}, "quant": {"recipe": ["w4a16"]}}
+    y.write_text(yaml.safe_dump({**base, "calibration": {"dataset": "/data/my_corpus", "n_samples": 8}}))
     assert LLMJobSpec.from_yaml(y).calib_dataset == "/data/my_corpus"
-    y.write_text(yaml.safe_dump({"model": {"path": "<tiny>"}, "quant": {"recipe": ["w4a16"]}}))
+    y.write_text(yaml.safe_dump(base))
     assert LLMJobSpec.from_yaml(y).calib_dataset == "wikitext-2-raw-v1:train", "unchanged default"
 
 
-def test_the_job_calibrates_on_the_named_source_and_records_what_it_read(job_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_job_calibrates_on_the_named_source_and_records_what_it_read(
+    job_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     seen: dict[str, object] = {}
 
     def fake(tok, n, s, seed=0, source="?", info=None):  # type: ignore[no-untyped-def]
@@ -354,7 +357,9 @@ def test_the_job_calibrates_on_the_named_source_and_records_what_it_read(job_env
     monkeypatch.setattr(llm_job, "calib_batches", fake)
     rep = LLMJob(spec(tmp_path, calib_dataset="/data/corpus"), job_dir=tmp_path / "j").run()
     assert seen["source"] == "/data/corpus"
-    assert rep["data"]["calib"] == {"dataset": "/data/corpus", "files": 3, "chars": 1234, "tokens": 987, "truncated": False, "n": 4, "seq_len": 32}
+    assert rep["data"]["calib"] == {
+        "dataset": "/data/corpus", "files": 3, "chars": 1234, "tokens": 987, "truncated": False, "n": 4, "seq_len": 32,
+    }
 
 
 def test_the_default_calibration_is_still_reported_as_wikitext(job_env: None, tmp_path: Path) -> None:
@@ -370,7 +375,6 @@ def test_a_real_text_file_changes_what_gptq_learns(tmp_path: Path, monkeypatch: 
         ad.tokenizer = _CharTok()
         return ad
 
-    g = torch.Generator().manual_seed(7)
     monkeypatch.setattr(llm_job, "HFCausalLM", fake_hf)
     monkeypatch.setattr(llm_job, "eval_ids", lambda tok: torch.randint(0, VOCAB, (4096,), generator=torch.Generator().manual_seed(9)))
     a, b = tmp_path / "a.txt", tmp_path / "b.txt"
@@ -384,7 +388,9 @@ def test_a_real_text_file_changes_what_gptq_learns(tmp_path: Path, monkeypatch: 
     assert ppl["a"] != ppl["b"], "GPTQ gave the same result on two different calibration texts: the source was ignored"
 
 
-def test_a_missing_calibration_path_fails_the_job_at_calib_prepare_and_names_the_path(job_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_missing_calibration_path_fails_the_job_at_calib_prepare_and_names_the_path(
+    job_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from mqde.data import text as T
 
     monkeypatch.setattr(llm_job, "calib_batches", T.calib_batches)
@@ -394,3 +400,44 @@ def test_a_missing_calibration_path_fails_the_job_at_calib_prepare_and_names_the
     rep = json.loads((tmp_path / "j" / "report.json").read_text())
     assert [x["stage"] for x in rep["stages"] if x["status"] == "failed"] == ["calib_prepare"]
     assert "nope" in rep["error"]
+
+
+# ---------------------------------------------------------------- per-window loss, for the report's window review
+def test_every_eval_result_carries_its_windows_losses(job_env: None, tmp_path: Path) -> None:
+    rep = LLMJob(spec(tmp_path, eval_windows=4), job_dir=tmp_path / "j").run()
+    n = rep["baseline"]["windows"]
+    assert n == 4 and len(rep["baseline"]["window_nll"]) == 4
+    r = rep["recipes"]["W4A16"]["eval"]
+    assert len(r["fake_quant_wo_kv"]["window_nll"]) == 4
+    # PPL stays the exp of the mean window loss: nothing about it changed
+    import math
+
+    assert math.isclose(rep["baseline"]["ppl"], math.exp(sum(rep["baseline"]["window_nll"]) / 4), rel_tol=1e-9)
+
+
+def test_the_report_names_each_window_with_a_text_preview_when_the_tokenizer_can_decode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Tok(_CharTok):
+        def decode(self, ids: list[int]) -> str:
+            return "".join(chr(97 + i % 26) for i in ids)  # 'a'..'z'
+
+    def fake_hf(path: str, device: str = "cpu", **kw: object):  # type: ignore[no-untyped-def]
+        ad = _tiny.tiny()
+        ad.path = path
+        ad.tokenizer = Tok()
+        return ad
+
+    monkeypatch.setattr(llm_job, "HFCausalLM", fake_hf)
+    monkeypatch.setattr(llm_job, "calib_batches", lambda tok, n, s, seed=0, **kw: [torch.randint(0, VOCAB, (1, s)) for _ in range(n)])
+    monkeypatch.setattr(llm_job, "eval_ids", lambda tok: torch.arange(4096) % VOCAB)
+    rep = LLMJob(spec(tmp_path, eval_windows=3, eval_seq_len=64), job_dir=tmp_path / "j").run()
+    pv = rep["data"]["eval"]["previews"]
+    assert len(pv) == 3 and all(isinstance(x, str) and x for x in pv)
+    assert pv[0].startswith("abcdefghij") and len(pv[0]) <= 120
+    assert pv[1] != pv[0], "each window has its own preview: window 1 starts 64 tokens later"
+
+
+def test_no_previews_when_the_tokenizer_cannot_decode(job_env: None, tmp_path: Path) -> None:
+    rep = LLMJob(spec(tmp_path), job_dir=tmp_path / "j").run()
+    assert "previews" not in rep["data"]["eval"]
