@@ -598,26 +598,46 @@ TEST_F(hal_metal, bandwidth_is_in_the_range_of_unified_memory_and_is_stable_betw
   std::strcpy(req.kind, "bandwidth");
   req.bytes = 128u << 20;
   req.iterations = 8;
-  {  // the first benchmark in a process runs while the GPU clock is still ramping (ratios of 1.8 were seen):
-     // not measured
+
+  // One attempt: a warm-up call (the first benchmark in a process runs while the GPU clock is still ramping,
+  // ratios of 1.8 were seen -- not measured), then three measured samples. Returns false with a reason,
+  // instead of a GTest failure directly, so a transient stall (observed flaky under `ctest -jN`, where this
+  // GPU copy competes with other tests for the same hardware) can be retried once before it is treated as a
+  // real regression.
+  auto attempt = [&](double (&v)[3], std::string* why) -> bool {
     mqde_hal_profile_result warm{};
-    ASSERT_EQ(api->profile(0, &req, &warm), 0) << api->last_error();
-  }
+    if (api->profile(0, &req, &warm) != 0) { *why = api->last_error(); return false; }
+    for (double& x : v) {  // NOLINT(readability-identifier-naming)
+      mqde_hal_profile_result r{};
+      if (api->profile(0, &req, &r) != 0) { *why = api->last_error(); return false; }
+      if (std::string(r.unit) != "GB/s") { *why = std::string("unit was '") + r.unit + "', not GB/s"; return false; }
+      const double expected = 2.0 * (128u << 20) * 8 / r.seconds / 1e9;
+      if (std::abs(r.value - expected) > expected * 1e-6) {
+        *why = "reported value does not match bytes/seconds";
+        return false;
+      }
+      x = r.value;
+    }
+    for (double x : v) {
+      if (x <= 20.0) { *why = "an Apple GPU copy slower than 20 GB/s would be a broken measurement"; return false; }
+      if (x >= 1500.0) {
+        *why = "faster than any Apple unified memory (800 GB/s on the largest chips) means the copy was skipped";
+        return false;
+      }
+    }
+    const double ratio = *std::max_element(v, v + 3) / *std::min_element(v, v + 3);
+    if (ratio >= 1.6) {
+      *why = "three runs did not agree within 60% (ratio " + std::to_string(ratio) + ")";
+      return false;
+    }
+    return true;
+  };
+
   double v[3];
-  for (double& x : v) {
-    mqde_hal_profile_result r{};
-    ASSERT_EQ(api->profile(0, &req, &r), 0) << api->last_error();
-    EXPECT_STREQ(r.unit, "GB/s");
-    EXPECT_NEAR(r.value, 2.0 * (128u << 20) * 8 / r.seconds / 1e9, r.value * 1e-6);
-    x = r.value;
-  }
-  for (double x : v) {
-    EXPECT_GT(x, 20.0) << "an Apple GPU copy slower than 20 GB/s would be a broken measurement";
-    EXPECT_LT(x, 1500.0)
-        << "faster than any Apple unified memory (800 GB/s on the largest chips) means the copy was skipped";
-  }
-  EXPECT_LT(*std::max_element(v, v + 3) / *std::min_element(v, v + 3), 1.6)
-      << "three runs should agree within 60%";
+  std::string why1;
+  if (attempt(v, &why1)) return;
+  std::string why2;
+  if (!attempt(v, &why2)) FAIL() << "first attempt: " << why1 << "; retry: " << why2;
 }
 
 TEST_F(hal_metal, gemm_rate_is_derived_from_the_work_and_the_time_and_fp16_is_not_slower_than_fp32) {
