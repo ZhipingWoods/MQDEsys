@@ -134,11 +134,18 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **遗留**：VLA/VLM 已有的是“评估数据画廊卡片”概念（synthetic 或 LeRobot 目录），LLM 这边仍是路径输入框，不是画廊卡片——两者数据形状不同（文本 vs LeRobot parquet），没有强行统一。旧生产二进制（今天 20:07 前的 `build/dev/bin/mqde`）不认 `evaluation.dataset` 字段（对 LLM 作业会忽略，继续用它自己写死的 wikitext test），已在 4090 重新编译但生产未重启。
 
 ### 2026-10-14 · T-0406 CUDA GPTQ / AWQ 打包
-- **状态**：T-0406 PARTIAL（剩 AVX-512、Marlin/GGUF 的 GPU 打包、接入 Python 作业）
+- **状态**：T-0406 PARTIAL（剩 AVX-512、Marlin 的 GPU 打包、q4_0/q5_0/iq4_nl/q2_k/q4_k 的 GPU 打包、接入 Python 作业）
 - **AWQ（同日追加）**：`quant::cuda::pack_awq`，4 位的输出交错 [0,2,4,6,1,3,5,7] 由设备函数 `awq_source` 给出，其余位宽直排；与 CPU 逐字段一致，含两边都拒绝的形状（out*bits 不是 32 的倍数）；变异 13/13（外加 1 个故意放的空操作对照）；ctest 371（CUDA）/ 358 / 362。
 - **本次完成**：`quant::cuda::pack_gptq`：qweight / qzeros（v1 存 zero−1）/ fp16 scales 都与 CPU 逐字段一致；位流抽成设备函数 `stream_word`，pack_bits 与 GPTQ 共用。fp16 转换没有用 `__float2half_rn`（它对 NaN 的编码可能不同），移植了 CPU 的同一套算法。
 - **校验**：ctest 370（CUDA 构建）/ 358 / Mac 另跑；变异 15/17，余下 1 个等价 + 1 个故意放的空操作对照。
 - **前端**：无改动。
+
+### 2026-10-14 · T-0406 GGUF Q8_0 的 GPU 打包/反打包
+- **状态**：已验证（见下），待提交推送
+- GGUF 的几种类型里 Q8_0 是最简单的一种（每 32 个元素一块，一个 fp16 scale + 32 个 int8 code，没有 k-quant 那种带子块的多级 scale），拿它作为第一个 GPU 化的 GGUF 类型：`quant::cuda::gguf_quantize_q8_0`/`gguf_dequantize_q8_0`，每线程一个块，同样的 amax→除法→除法→`roundf`（对应 CPU 的 `std::round`，都是四舍五入远离零，不是 rne）次序，复用已有的 `fp32_to_fp16` 设备函数（移植了 CPU 的无分支 RNE 算法），新增一个 `fp16_to_fp32` 设备函数（半精度转单精度是精确的位扩展，不存在舍入分歧，只要位操作抄对就行）。
+- **怎么验证的**：Mac 没有 CUDA，这段代码在 Mac 上完全不会被编译（`MQDE_WITH_CUDA` 默认关），没法本地跑。在 4090 上专门配置了一个新目录 `build/cuda-check`（`-DMQDE_WITH_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89`，`nvcc` 在 `/usr/local/cuda/bin`），不碰生产在用的 `build/dev`；代码先用 scp 直接传上去验证（避免没验证过的代码进 `main`），确认通过后才提交推送。
+- **校验**：新 `ctest -R gguf_q8_0`（2 项：与 CPU 逐位一致，含全零块、跨 block 不串 scale、随机正态分布数值；长度不是 32 的倍数被拒绝）；`quant_cuda` 全部 15 项、`build/cuda-check` 全量 392/392（含 HAL 插件，一开始只 build 了 `mqde_unit_tests` 这一个 target 漏了插件 `.so`，补 `cmake --build` 不带 `--target` 后全绿）；变异：把 `roundf` 改成直接截断（取整方向变了），新测试抓到，恢复后复跑绿。
+- **没做的**（如实记录，不是顺手就能扩展的）：Marlin 的 GPU 打包（16×16 分块+张量核心片段置换，和这里的"位流/块量化"完全是两类东西）；GGUF 的其余类型（q4_0/q5_0/iq4_nl 结构和 Q8_0 类似，理论上可以照搬这次的路子继续做；q2_k/q4_k 是带子块的 k-quant，复杂度更高，没有一起做）；把这条 GPU 路径接到 Python 作业——查了 `python/mqde/export/int_checkpoint.py`，它调用的 `core.pack_int` 吃的是已经搬到 CPU 的 numpy 数组（`layer_codes()` 在那之前就 `.cpu().numpy()` 了），真要用上 GPU 打包得把这条导出路径的张量一路留在 GPU 上、重新设计 pybind11 的内存边界，是对现有导出路径的结构性改动，这次没有顺手做。
 
 ### 2026-10-14 · T-0406 CUDA 位打包
 - **状态**：T-0406 PARTIAL（剩 AVX-512、GPTQ/AWQ/Marlin/GGUF 的 GPU 打包、接入 Python 作业）

@@ -39,3 +39,11 @@ int mqde_cuda_pack_gptq(const uint8_t* codes, const uint8_t* zeros, const float*
 int mqde_cuda_pack_awq(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out,
                        int64_t in, int64_t group_size, int bits, int32_t* qweight, int32_t* qzeros,
                        uint16_t* fp16_scales, double* kernel_ms, char* err, size_t errlen);
+
+// GGUF Q8_0 (pack.h gguf_quantize/gguf_dequantize, GgufType::kQ8_0): blocks of 32 elements, each a 2-byte
+// fp16 scale followed by 32 signed int8 codes (34 bytes/block, pack.cpp's BlockQ8_0 layout). n must be a
+// multiple of 32; out holds n/32*34 bytes.
+int mqde_cuda_gguf_quantize_q8_0(const float* x, uint8_t* out, int64_t n, double* kernel_ms, char* err,
+                                 size_t errlen);
+int mqde_cuda_gguf_dequantize_q8_0(const uint8_t* data, float* out, int64_t n, double* kernel_ms, char* err,
+                                   size_t errlen);

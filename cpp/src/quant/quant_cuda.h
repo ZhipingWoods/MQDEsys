@@ -29,6 +29,11 @@ Result<pack::IntPacked> pack_gptq(const uint8_t* codes, const uint8_t* zeros, co
 // pack.h pack_awq on the GPU; every field equals the CPU function's.
 Result<pack::IntPacked> pack_awq(const uint8_t* codes, const uint8_t* zeros, const float* scales, int64_t out,
                                  int64_t in, int64_t group_size, int bits = 4);
+// pack.h gguf_quantize / gguf_dequantize on the GPU, GgufType::kQ8_0 only (the one GGUF type that is a plain
+// per-block scale-and-round, not a tensor-core-shaped format like Marlin or a k-quant super-block; those are
+// each their own bitstream and are not implemented here). `n` must be a multiple of 32.
+Result<std::vector<uint8_t>> gguf_quantize_q8_0(const float* x, int64_t n);
+Result<void> gguf_dequantize_q8_0(const uint8_t* data, int64_t n, float* out);
 // Wall-clock of the last call's kernels alone (calibration + qdq), in milliseconds, without the host<->device
 // copies.
 double last_kernel_ms();

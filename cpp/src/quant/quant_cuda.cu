@@ -451,3 +451,115 @@ int mqde_cuda_pack_awq(const uint8_t* codes, const uint8_t* zeros, const float* 
 #undef CK
   return 0;
 }
+
+namespace {
+
+// pack.cpp's BlockQ8_0 layout: a 2-byte fp16 scale followed by 32 signed int8 codes, 34 bytes, no padding
+// (both fields' natural alignment is already satisfied since every block starts at a multiple-of-34, and
+// 34 is even, offset so the uint16_t stays 2-byte aligned).
+constexpr int kGgufQ8K = 32;
+constexpr int kGgufQ8BlockBytes = 2 + kGgufQ8K;
+
+// pack.cpp fp16_to_fp32: ported bit for bit (half -> float widening is always exact, so this only has to
+// match the CPU's bit-manipulation path, not round the same way -- there is no rounding to match).
+__device__ float fp16_to_fp32(uint16_t h) {
+  const uint32_t w = static_cast<uint32_t>(h) << 16;
+  const uint32_t sign = w & 0x80000000u;
+  const uint32_t two_w = w + w;
+  const uint32_t exp_offset = 0xE0u << 23;
+  const float exp_scale = 0x1.0p-112f;
+  const float normalized = __uint_as_float((two_w >> 4) + exp_offset) * exp_scale;
+  const uint32_t magic_mask = 126u << 23;
+  const float magic_bias = 0.5f;
+  const float denormalized = __uint_as_float((two_w >> 17) | magic_mask) - magic_bias;
+  const uint32_t denormalized_cutoff = 1u << 27;
+  const uint32_t result = sign | (two_w < denormalized_cutoff ? __float_as_uint(denormalized) : __float_as_uint(normalized));
+  return __uint_as_float(result);
+}
+
+// pack.cpp quantize_q8_0: one thread per 32-element block, same sequential amax and the same two divisions
+// (amax/127, then 1/that) and round-half-away-from-zero (std::round) as the scalar path.
+__global__ void gguf_q8_0_quantize(const float* x, uint8_t* out, int64_t nb) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (i >= nb) return;
+  const float* blk = x + i * kGgufQ8K;
+  float amax = 0.0f;
+  for (int j = 0; j < kGgufQ8K; ++j) amax = fmaxf(amax, fabsf(blk[j]));
+  const float d = __fdiv_rn(amax, 127.0f);
+  const float id = d != 0.0f ? __fdiv_rn(1.0f, d) : 0.0f;
+  uint8_t* o = out + i * kGgufQ8BlockBytes;
+  *reinterpret_cast<uint16_t*>(o) = fp32_to_fp16(d);
+  for (int j = 0; j < kGgufQ8K; ++j)
+    o[2 + j] = static_cast<uint8_t>(static_cast<int8_t>(roundf(__fmul_rn(blk[j], id))));
+}
+
+// pack.cpp dequantize_q8_0: one thread per output element.
+__global__ void gguf_q8_0_dequantize(const uint8_t* data, float* out, int64_t n) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (i >= n) return;
+  const int64_t blk = i / kGgufQ8K, j = i % kGgufQ8K;
+  const uint8_t* b = data + blk * kGgufQ8BlockBytes;
+  const float d = fp16_to_fp32(*reinterpret_cast<const uint16_t*>(b));
+  const int8_t q = static_cast<int8_t>(b[2 + j]);
+  out[i] = __fmul_rn(static_cast<float>(q), d);
+}
+
+}  // namespace
+
+int mqde_cuda_gguf_quantize_q8_0(const float* x, uint8_t* out, int64_t n, double* kernel_ms, char* err,
+                                 size_t errlen) {
+  const int64_t nb = n / kGgufQ8K;
+  Buf<float> dx;
+  Buf<uint8_t> dout;
+  cudaError_t e;
+#define CK(call, what) \
+  if ((e = (call)) != cudaSuccess) return fail(err, errlen, what, e)
+  CK(cudaMalloc(&dx.p, n * sizeof(float)), "cudaMalloc x");
+  CK(cudaMalloc(&dout.p, nb * kGgufQ8BlockBytes), "cudaMalloc out");
+  CK(cudaMemcpy(dx.p, x, n * sizeof(float), cudaMemcpyHostToDevice), "copy in");
+  cudaEvent_t t0, t1;
+  cudaEventCreate(&t0);
+  cudaEventCreate(&t1);
+  cudaEventRecord(t0);
+  gguf_q8_0_quantize<<<static_cast<unsigned>((nb + 255) / 256), 256>>>(dx.p, dout.p, nb);
+  CK(cudaGetLastError(), "quantize launch");
+  cudaEventRecord(t1);
+  CK(cudaEventSynchronize(t1), "quantize");
+  float ms = 0;
+  cudaEventElapsedTime(&ms, t0, t1);
+  cudaEventDestroy(t0);
+  cudaEventDestroy(t1);
+  if (kernel_ms) *kernel_ms = ms;
+  CK(cudaMemcpy(out, dout.p, nb * kGgufQ8BlockBytes, cudaMemcpyDeviceToHost), "copy out");
+#undef CK
+  return 0;
+}
+
+int mqde_cuda_gguf_dequantize_q8_0(const uint8_t* data, float* out, int64_t n, double* kernel_ms, char* err,
+                                   size_t errlen) {
+  const int64_t nb = n / kGgufQ8K;
+  Buf<uint8_t> din;
+  Buf<float> dout;
+  cudaError_t e;
+#define CK(call, what) \
+  if ((e = (call)) != cudaSuccess) return fail(err, errlen, what, e)
+  CK(cudaMalloc(&din.p, nb * kGgufQ8BlockBytes), "cudaMalloc data");
+  CK(cudaMalloc(&dout.p, n * sizeof(float)), "cudaMalloc out");
+  CK(cudaMemcpy(din.p, data, nb * kGgufQ8BlockBytes, cudaMemcpyHostToDevice), "copy in");
+  cudaEvent_t t0, t1;
+  cudaEventCreate(&t0);
+  cudaEventCreate(&t1);
+  cudaEventRecord(t0);
+  gguf_q8_0_dequantize<<<static_cast<unsigned>((n + 255) / 256), 256>>>(din.p, dout.p, n);
+  CK(cudaGetLastError(), "dequantize launch");
+  cudaEventRecord(t1);
+  CK(cudaEventSynchronize(t1), "dequantize");
+  float ms = 0;
+  cudaEventElapsedTime(&ms, t0, t1);
+  cudaEventDestroy(t0);
+  cudaEventDestroy(t1);
+  if (kernel_ms) *kernel_ms = ms;
+  CK(cudaMemcpy(out, dout.p, n * sizeof(float), cudaMemcpyDeviceToHost), "copy out");
+#undef CK
+  return 0;
+}
