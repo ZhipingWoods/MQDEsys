@@ -752,16 +752,29 @@ Result<void> serve(const ServerOptions& o) {
     std::vector<int64_t> h(bins, 0);
     for (float v : *vals) h[std::clamp(static_cast<int>((v - mn) / (mx - mn) * bins), 0, bins - 1)]++;
     out["hist"] = {{"min", mn}, {"max", mx}, {"counts", h}};
-    // Optional: preview the quantization error of a recipe on this tensor (2-D only).
+    // Optional: preview the quantization error of a recipe on this tensor (2-D only). T-C: this used to
+    // require `vals` (the histogram/stats sample, element-strided for cheapness) to equal the tensor's full
+    // element count, which silently skipped the preview for any ordinary-sized weight matrix -- almost
+    // everything over 4M elements, i.e. most real linear layers. read_tensor_rows_f32 samples whole rows
+    // instead (a structurally valid submatrix, never a shape mismatch for fake_quant's column-grouped
+    // granularity), so a preview is now possible for any 2-D float weight, exact when it fits the cap and a
+    // clearly labeled approximation (rows_sampled < rows_total) when it doesn't.
     const auto recipe = body->value("recipe", "");
-    if (!recipe.empty() && it->shape.size() == 2 && static_cast<int64_t>(vals->size()) == it->numel) {
+    if (!recipe.empty() && it->shape.size() == 2) {
       auto r = estimator::load_recipe(recipe);
       if (r && r->weight.enabled()) {
-        std::vector<float> q(vals->size());
-        if (quant::fake_quant(vals->data(), it->shape[0], it->shape[1], r->weight, q.data()))
-          out["quant_preview"] = {{"recipe", r->name},
-                                  {"metrics", quant::to_json(quant::measure(
-                                                  vals->data(), q.data(), static_cast<int64_t>(q.size())))}};
+        constexpr int64_t kQuantPreviewMaxElems = 64'000'000;  // ~256 MiB of fp32, one tensor, on demand
+        if (auto rows = modelspec::read_tensor_rows_f32(path, *it, kQuantPreviewMaxElems)) {
+          auto& [sample, rows_sampled] = *rows;
+          std::vector<float> q(sample.size());
+          if (quant::fake_quant(sample.data(), rows_sampled, it->shape[1], r->weight, q.data()))
+            out["quant_preview"] = {{"recipe", r->name},
+                                    {"rows_sampled", rows_sampled},
+                                    {"rows_total", it->shape[0]},
+                                    {"exact", rows_sampled == it->shape[0]},
+                                    {"metrics", quant::to_json(quant::measure(
+                                                    sample.data(), q.data(), static_cast<int64_t>(q.size())))}};
+        }
       }
     }
     send_json(res, out);

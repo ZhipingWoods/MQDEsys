@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "mqde/common/result.h"
@@ -25,6 +26,17 @@ struct TensorInfo {
 // At most `max_elems` evenly-strided elements are returned so huge embeddings stay cheap.
 Result<std::vector<float>> read_tensor_f32(const std::filesystem::path& model_dir, const TensorInfo& t,
                                            int64_t max_elems = 4'000'000);
+
+// T-C: for a 2-D tensor, like read_tensor_f32 but samples whole rows instead of individual elements, so the
+// result is always a real, structurally valid submatrix of the original (every returned row is complete and
+// in its original column order) -- unlike read_tensor_f32's element-level stride sampling, which is fine for
+// a histogram (order doesn't matter there) but wrong input for a per-group quantization preview, whose
+// granularity groups columns within a row. Evenly spaced rows are picked across the whole tensor height when
+// `t.shape[0]` exceeds what `max_elems / t.shape[1]` rows allow; otherwise every row is read, identically
+// to what a direct full read would give. Returns (values, rows_actually_read); `rows_actually_read` equals
+// `t.shape[0]` exactly when nothing had to be dropped. An error for anything that is not a 2-D tensor.
+Result<std::pair<std::vector<float>, int64_t>> read_tensor_rows_f32(const std::filesystem::path& model_dir,
+                                                                    const TensorInfo& t, int64_t max_elems);
 
 // Bytes per element for a safetensors dtype string; 0 for unknown.
 double dtype_bytes(std::string_view dtype);

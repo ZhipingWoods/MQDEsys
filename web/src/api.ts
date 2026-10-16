@@ -671,7 +671,13 @@ export interface TensorView {
   name: string; dtype: string; shape: number[]; numel: number; sampled?: number; unsupported?: string;
   stats?: { min: number; max: number; absmax: number; mean: number; std: number; kurtosis: number; outlier_ratio: number };
   hist?: { min: number; max: number; counts: number[] };
-  quant_preview?: { recipe: string; metrics: { sqnr_db: number | null; cosine: number; rel_l2: number | null; max_abs: number } };
+  quant_preview?: {
+    recipe: string;
+    rows_sampled: number;
+    rows_total: number;
+    exact: boolean; // T-C: false means rows_sampled < rows_total -- an approximation, not a flaw, but say so
+    metrics: { sqnr_db: number | null; cosine: number; rel_l2: number | null; max_abs: number };
+  };
 }
 
 export interface RunPath { run_mode: string; best_quant: string; memory_required_gb: number; estimated_tps: number; speed_unit: string; fit_level: FitLevel; runtime: string; utilization_pct: number }

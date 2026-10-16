@@ -74,6 +74,89 @@ TEST(modelspec_safetensors, rejects_garbage) {
   EXPECT_EQ(t.error().code, mqde::Errc::kParse);
 }
 
+namespace {
+
+// A real F32 payload (not header-only like make_fixture_model() above): value[row][col] = row*1000 + col,
+// so a correct whole-row read is easy to tell apart from an element-scattered one by eye.
+fs::path write_numbered_matrix(const std::string& stem, int64_t rows, int64_t cols) {
+  const auto dir = fs::temp_directory_path() / ("mqde_rows_" + stem);
+  fs::create_directories(dir);
+  const auto file = dir / "model.safetensors";
+  std::vector<float> data(static_cast<size_t>(rows * cols));
+  for (int64_t r = 0; r < rows; ++r)
+    for (int64_t c = 0; c < cols; ++c) data[static_cast<size_t>(r * cols + c)] = static_cast<float>(r * 1000 + c);
+  mqde::Json header = {{"w", {{"dtype", "F32"}, {"shape", {rows, cols}}, {"data_offsets", {0, data.size() * 4}}}}};
+  const std::string h = header.dump();
+  std::ofstream out(file, std::ios::binary);
+  uint64_t n = h.size();
+  for (int i = 0; i < 8; ++i) out.put(static_cast<char>((n >> (8 * i)) & 0xff));
+  out << h;
+  out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size() * 4));
+  return dir;
+}
+
+TensorInfo w_tensor(const fs::path& dir, int64_t rows, int64_t cols) {
+  // data_offset is 8 (length prefix) + header JSON length + the tensor's own data_offsets[0] -- computing it
+  // by hand here would just be re-deriving read_safetensors_header's own logic and risks getting it wrong
+  // (as a first draft of this fixture did); reading it back for real is both simpler and the real contract.
+  auto hdr = read_safetensors_header(dir / "model.safetensors");
+  if (!hdr || hdr->empty()) throw std::runtime_error("fixture header unreadable");
+  TensorInfo t = hdr->front();
+  if (t.shape != std::vector<int64_t>{rows, cols}) throw std::runtime_error("fixture shape mismatch");
+  return t;
+}
+
+}  // namespace
+
+// T-C: quant_preview's actual bug. read_tensor_f32's element-level stride sampling is correct for histograms
+// (order doesn't matter there) but wrong input for fake_quant, which needs a real row-major submatrix (its
+// per-group granularity groups along columns). read_tensor_rows_f32 samples whole rows instead, so what it
+// returns is always a valid (if possibly smaller) matrix with the tensor's real `cols`.
+TEST(modelspec_safetensors, read_tensor_rows_f32_returns_a_structurally_valid_submatrix) {
+  const auto dir = write_numbered_matrix("big", 100, 8);
+  const auto t = w_tensor(dir, 100, 8);
+
+  // cap large enough for the whole tensor: every row, bit-for-bit the same as a direct full read would give
+  auto all = read_tensor_rows_f32(dir, t, 100 * 8);
+  ASSERT_TRUE(all) << all.error().to_string();
+  EXPECT_EQ(all->second, 100) << "rows_sampled should equal rows_total when the cap covers everything";
+  ASSERT_EQ(all->first.size(), static_cast<size_t>(100 * 8));
+  for (int64_t r = 0; r < 100; ++r)
+    for (int64_t c = 0; c < 8; ++c)
+      EXPECT_FLOAT_EQ(all->first[static_cast<size_t>(r * 8 + c)], static_cast<float>(r * 1000 + c))
+          << "row " << r << " col " << c;
+
+  // cap forcing a subset: rows_sampled must be smaller, but still a whole number of complete 8-column rows
+  // (never a fractional row -- that would misalign fake_quant's column-grouped granularity)
+  auto some = read_tensor_rows_f32(dir, t, 30);  // room for well under 100 rows of 8 columns each
+  ASSERT_TRUE(some) << some.error().to_string();
+  EXPECT_LT(some->second, 100);
+  EXPECT_GT(some->second, 0);
+  ASSERT_EQ(some->first.size(), static_cast<size_t>(some->second * 8));
+  // every row actually returned must be one of the real rows of the matrix: its 8 values must be
+  // {k*1000, k*1000+1, ..., k*1000+7} for some row index k -- not an element-scattered mixture of rows
+  int64_t max_row_seen = -1;
+  for (int64_t r = 0; r < some->second; ++r) {
+    const float first_val = some->first[static_cast<size_t>(r * 8)];
+    const int64_t k = static_cast<int64_t>(first_val) / 1000;
+    max_row_seen = std::max(max_row_seen, k);
+    for (int64_t c = 0; c < 8; ++c)
+      EXPECT_FLOAT_EQ(some->first[static_cast<size_t>(r * 8 + c)], static_cast<float>(k * 1000 + c))
+          << "returned row " << r << " is not a real, complete row of the source matrix";
+  }
+  // the sample must actually be spread across the matrix, not just its first few rows -- a 100-row matrix
+  // sampled down to 3 rows should include something well past the start
+  EXPECT_GT(max_row_seen, 50) << "rows should be spread across the whole height, not clustered at the start";
+}
+
+TEST(modelspec_safetensors, read_tensor_rows_f32_rejects_non_2d_tensors) {
+  const auto dir = write_numbered_matrix("flat", 1, 8);  // a [1, 8] matrix...
+  TensorInfo t = w_tensor(dir, 1, 8);
+  t.shape = {8};  // ...reported here as the 1-D tensor it would be if squeezed, which is what must be rejected
+  auto r = read_tensor_rows_f32(dir, t, 1000);
+  EXPECT_FALSE(r);
+}
+
 TEST(modelspec_vla, minicpm_vla_structure) {
   auto spec = inspect_local(make_fixture_model());
   ASSERT_TRUE(spec) << spec.error().to_string();

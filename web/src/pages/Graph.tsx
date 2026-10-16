@@ -303,14 +303,21 @@ function Props({ model, node }: { model: string; node: GraphNode | null }) {
                 ))}
               </div>
               {tv.data?.quant_preview ? (
-                <dl className="kv">
-                  <dt>SQNR</dt><dd><b>{fmt(tv.data.quant_preview.metrics.sqnr_db, 2)} dB</b></dd>
-                  <dt>余弦相似度</dt><dd>{fmt(tv.data.quant_preview.metrics.cosine, 5)}</dd>
-                  <dt>相对 L2</dt><dd>{fmt(tv.data.quant_preview.metrics.rel_l2, 4)}</dd>
-                  <dt>最大绝对误差</dt><dd>{tv.data.quant_preview.metrics.max_abs.toPrecision(3)}</dd>
-                </dl>
+                <>
+                  <dl className="kv">
+                    <dt>SQNR</dt><dd><b>{fmt(tv.data.quant_preview.metrics.sqnr_db, 2)} dB</b></dd>
+                    <dt>余弦相似度</dt><dd>{fmt(tv.data.quant_preview.metrics.cosine, 5)}</dd>
+                    <dt>相对 L2</dt><dd>{fmt(tv.data.quant_preview.metrics.rel_l2, 4)}</dd>
+                    <dt>最大绝对误差</dt><dd>{tv.data.quant_preview.metrics.max_abs.toPrecision(3)}</dd>
+                  </dl>
+                  {!tv.data.quant_preview.exact && (
+                    <p className="muted small" data-testid="quant-preview-approx">
+                      基于 {fmtParams(tv.data.quant_preview.rows_sampled)}/{fmtParams(tv.data.quant_preview.rows_total)} 行抽样的近似值（张量太大，没有全读）。
+                    </p>
+                  )}
+                </>
               ) : (
-                <p className="muted small">{tv.loading ? "计算中…" : "该张量不支持预览（需完整读取的 2-D 浮点权重）"}</p>
+                <p className="muted small">{tv.loading ? "计算中…" : "该张量不支持预览（需 2-D 浮点权重）"}</p>
               )}
             </>
           )}

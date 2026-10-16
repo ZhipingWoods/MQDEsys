@@ -189,4 +189,49 @@ Result<std::vector<float>> read_tensor_f32(const fs::path& model_dir, const Tens
   return out;
 }
 
+Result<std::pair<std::vector<float>, int64_t>> read_tensor_rows_f32(const fs::path& model_dir,
+                                                                     const TensorInfo& t, int64_t max_elems) {
+  if (t.shape.size() != 2)
+    return make_error(Errc::kUnsupported, "'{}' is not 2-D (row sampling needs rows and columns)", t.name);
+  const double eb = dtype_bytes(t.dtype);
+  if (!(t.dtype == "BF16" || t.dtype == "F16" || t.dtype == "F32" || t.dtype == "F8_E4M3" ||
+        t.dtype == "F8_E5M2"))
+    return make_error(Errc::kUnsupported, "dtype {} is packed or non-float; no value view", t.dtype);
+  const int64_t rows_total = t.shape[0], cols = t.shape[1];
+  if (rows_total <= 0 || cols <= 0) return make_error(Errc::kInvalidArgument, "'{}' has an empty dimension", t.name);
+  const int64_t rows_wanted = std::clamp<int64_t>(max_elems / cols, 1, rows_total);
+  std::ifstream in(model_dir / t.file, std::ios::binary);
+  if (!in) return make_error(Errc::kNotFound, "cannot open shard '{}'", t.file);
+  const size_t esz = static_cast<size_t>(eb);
+  std::vector<float> out;
+  out.reserve(static_cast<size_t>(rows_wanted * cols));
+  std::vector<char> row_buf(static_cast<size_t>(cols) * esz);
+  for (int64_t i = 0; i < rows_wanted; ++i) {
+    // evenly spaced row indices across the whole height; rows_wanted == rows_total makes this 0,1,2,...,
+    // i.e. every row, identically to what a direct full read would give
+    const int64_t row = i * rows_total / rows_wanted;
+    in.seekg(static_cast<std::streamoff>(t.data_offset + static_cast<uint64_t>(row * cols) * esz));
+    if (!in.read(row_buf.data(), static_cast<std::streamsize>(row_buf.size())))
+      return make_error(Errc::kIo, "short read on '{}'", t.name);
+    for (int64_t c = 0; c < cols; ++c) {
+      const char* p = row_buf.data() + static_cast<size_t>(c) * esz;
+      float v = 0;
+      if (t.dtype == "F32")
+        std::memcpy(&v, p, 4);
+      else if (t.dtype == "BF16") {
+        uint16_t h;
+        std::memcpy(&h, p, 2);
+        v = bf16_to_f32(h);
+      } else if (t.dtype == "F16") {
+        uint16_t h;
+        std::memcpy(&h, p, 2);
+        v = f16_to_f32(h);
+      } else
+        v = f8_to_f32(static_cast<uint8_t>(*p), t.dtype == "F8_E4M3");
+      out.push_back(v);
+    }
+  }
+  return std::make_pair(std::move(out), rows_wanted);
+}
+
 }  // namespace mqde::modelspec
