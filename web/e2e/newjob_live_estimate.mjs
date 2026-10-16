@@ -98,6 +98,13 @@ try {
   const w = want.estimates.map((e) => e.breakdown.weights);
   check('the estimates differ between recipes (the sidebar is not static text)', new Set(w).size > 1, w.join(','));
 
+  // T-A: this test's fake server has no real GPU behind it, so nothing can match "nvidia/rtx4090" -- the
+  // sidebar must say so honestly (capacity came from the static datasheet total) rather than claim a probe
+  // that never happened.
+  const probeNote = await page.getByTestId('resource-probe-note').innerText();
+  check('capacity is a live probe when the server has matching hardware, and says so plainly when it does not',
+    want.resource_probe.probed === false && /未探测到本机这块硬件/.test(probeNote), probeNote);
+
   // picking another recipe changes the rows; unpicking removes one
   const before = calls.length;
   await page.getByText('w2a16', { exact: false }).first().click();

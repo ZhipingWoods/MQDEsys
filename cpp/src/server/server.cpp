@@ -123,6 +123,56 @@ estimator::RuntimeParams runtime_from(const Json& j) {
   return rt;
 }
 
+// T-A: what a live probe of this machine's own devices says about a hardware_db profile the caller asked
+// to estimate against. `probed` is false whenever the requested id isn't a device physically present here
+// (e.g. estimating for an A100 on a Mac, or any hardware_db entry with no match on this box) -- in that
+// case the estimate stays exactly as before this existed, purely from the static datasheet total.
+struct LiveProbe {
+  bool probed = false;
+  std::string device_name;
+  uint64_t mem_total_bytes = 0, mem_free_bytes = 0;
+};
+
+// One probe of every local device, matched against hardware_db by name (the same match_hardware() the
+// /api/v1/hardware endpoint already uses) and indexed by profile id. When more than one local device
+// matches the same profile (e.g. a 4-way RTX 4090 box), the one with the most free memory wins -- a fresh
+// job would run on whichever is least busy, not necessarily device 0.
+std::map<std::string, LiveProbe> probe_live_by_profile() {
+  std::map<std::string, LiveProbe> out;
+  mqde_device_info devs[32];
+  int n = 0;
+  if (mqde_probe_all(devs, 32, &n) != 0) return out;
+  for (int i = 0; i < n; ++i) {
+    if (devs[i].kind != MQDE_DEV_GPU) continue;
+    auto hw = estimator::match_hardware(devs[i].name);
+    if (!hw) continue;
+    auto& slot = out[hw->id];
+    if (slot.probed && slot.mem_free_bytes >= devs[i].mem_free_bytes) continue;
+    slot = {true, devs[i].name, devs[i].mem_total_bytes, devs[i].mem_free_bytes};
+  }
+  return out;
+}
+
+// Applies a live probe to `hw` (if one matches `hw.id`) and returns it, for the response's `resource_probe`
+// field. `hw.live_free_bytes` is left untouched (0) when nothing matches, so estimate() falls back to the
+// static total exactly as it always has.
+LiveProbe apply_live_probe(estimator::HardwareProfile& hw) {
+  auto by_profile = probe_live_by_profile();
+  auto it = by_profile.find(hw.id);
+  if (it == by_profile.end()) return {};
+  hw.live_free_bytes = it->second.mem_free_bytes;
+  return it->second;
+}
+
+Json to_json(const LiveProbe& p) {
+  if (!p.probed) return {{"probed", false}};
+  return {{"probed", true},
+         {"device_name", p.device_name},
+         {"mem_total_bytes", p.mem_total_bytes},
+         {"mem_free_bytes", p.mem_free_bytes},
+         {"other_usage_bytes", p.mem_total_bytes > p.mem_free_bytes ? p.mem_total_bytes - p.mem_free_bytes : 0}};
+}
+
 }  // namespace
 
 Result<void> serve(const ServerOptions& o) {
@@ -407,6 +457,7 @@ Result<void> serve(const ServerOptions& o) {
     if (!spec) return send_error(res, spec.error());
     auto hw = estimator::load_hardware(body->value("hardware", "nvidia/rtx4090"));
     if (!hw) return send_error(res, hw.error());
+    const auto probe = apply_live_probe(*hw);  // T-A: live free memory when this is a device physically here
     auto be = estimator::load_backend(body->value("backend", "hf_transformers"));
     if (!be) return send_error(res, be.error());
     const auto rt = runtime_from(body->value("runtime", Json::object()));
@@ -427,7 +478,7 @@ Result<void> serve(const ServerOptions& o) {
           {"images", estimator::to_json(estimator::memory_vs_images(*spec, *r, *hw, *be, rt, img_xs))}};
       out.push_back(j);
     }
-    send_json(res, {{"hardware", estimator::to_json(*hw)}, {"estimates", out}});
+    send_json(res, {{"hardware", estimator::to_json(*hw)}, {"estimates", out}, {"resource_probe", to_json(probe)}});
   });
 
   // Deployability matrix: recipes x hardware profiles.
@@ -444,10 +495,14 @@ Result<void> serve(const ServerOptions& o) {
     auto hw_ids = estimator::list_data_entries("hardware_db");
     auto recipe_ids = estimator::list_data_entries("recipes");
     if (!hw_ids || !recipe_ids) return send_error(res, 500, "internal", "data directory unreadable");
+    // T-A: probe once, apply to whichever profiles in the matrix happen to be physically present here --
+    // the other hardware in the comparison (almost always most of it) is untouched, exactly as before.
+    const auto live = probe_live_by_profile();
     Json cells = Json::array();
     for (const auto& h : *hw_ids) {
       auto hw = estimator::load_hardware(h);
       if (!hw) continue;
+      if (auto it = live.find(hw->id); it != live.end()) hw->live_free_bytes = it->second.mem_free_bytes;
       for (const auto& rid : *recipe_ids) {
         auto r = estimator::load_recipe(rid);
         if (!r) continue;
@@ -460,6 +515,7 @@ Result<void> serve(const ServerOptions& o) {
                          {"capacity_bytes", e.capacity_bytes},
                          {"max_concurrency", e.max_concurrency},
                          {"latency_floor_ms", e.latency_floor_ms},
+                         {"probed", live.contains(hw->id)},
                          {"n_notes", e.reasons.size()}});
       }
     }
@@ -1013,6 +1069,7 @@ Result<void> serve(const ServerOptions& o) {
     if (!s) return send_error(res, s.error());
     auto hw = estimator::load_hardware(body->value("hardware", "nvidia/rtx4090"));
     if (!hw) return send_error(res, hw.error());
+    const auto probe = apply_live_probe(*hw);  // T-A: live free memory when this is a device physically here
     auto be = estimator::load_backend(body->value("backend", "hf_transformers"));
     if (!be) return send_error(res, be.error());
     const std::string recipe = body->value("recipe", "bf16");
@@ -1020,6 +1077,7 @@ Result<void> serve(const ServerOptions& o) {
     const int64_t context = body->value("context", 4096);
     auto c = fit::estimate_concurrency(*s, recipe, *hw, *be, users, context);
     Json out = fit::to_json(c);
+    out["resource_probe"] = to_json(probe);
     // Curves for the frontend: memory vs users at this context, and max context vs users.
     if (body->value("curve", true)) {
       const int64_t top = std::clamp<int64_t>(c.max_users > 0 ? c.max_users * 5 / 4 : 8, 4, 512);

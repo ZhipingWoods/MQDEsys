@@ -171,10 +171,17 @@
 | T-1306 | "量化与评测"信息架构拆分 | P13 | T-1304 | L1 | DONE (2026-10-12，/analysis、/suggest 独立路由+导航项，nav_split.mjs 11/11，web/e2e 全量 123/123) |
 | T-1307 | 硬件与后端页面视觉改版 | P13 | T-0306 | L1 | DONE (2026-10-12，三张表加图标，硬件画像行可展开详情+数据来源链接，hardware_plugin.mjs 11/11；HardwareProfile 新增 source 字段，estimator_test 1 例 mutation 验证，4090 ctest 288/288) |
 | T-1308 | 多硬件部署/推理/误差对比闭环 | P13 | T-1101,T-1102,T-1103 | L1 | DONE (2026-10-12，发现 llm_job.py 报告原本不记录任何硬件标识，补上 env.hardware/quant_device_name/eval_device_name；4090 上真实跑了同一 Qwen2.5-0.5B W4A16 在 CPU 和 CUDA 上各一次：量化 175.3s vs 59.6s、评估 2.0s vs 0.065s，PPL 17.46 vs 17.86（GPTQ CPU/GPU 数值路径不同，预期之内，不是 bug）；Compare.tsx 新增"按硬件对比"表，仅当同配方出现≥2种硬件时显示，hardware_compare.mjs 7/7。Mac 用 Metal 跑没做——本机无 torch，不打算为这一项单独装；用 4090 CPU vs CUDA 作为两种真实硬件) |
+| T-A | 预估器接入真实空闲资源探测 | P14 | T-1301 | L2（`estimator.h` 新字段） | DONE (2026-10-16，见 P14 详情；4090 真机验证：6 张 RTX 4090 中 2 张已被别的进程占用 21+GiB，预估正确探测到并挑了一张空闲的；ctest 382/382，mutation 1/1) |
+| T-B | HF / 模型目录搜索改模糊匹配 | P14 | 无 | L0/L1 | TODO |
+| T-C | 量化误差预览修掉尺寸门槛 | P14 | 无 | L2（`safetensors.h` 新函数） | TODO |
+| T-D | 图标 hover 数值停留不闪烁 | P14 | 无 | L1 | TODO |
+| T-E | 后端注册表（为 VLA/VLM 接后端打基础） | P14 | 无 | L1 | TODO |
+| T-F | VLM 后端支持（先出可行性结论再落地） | P14 | T-E | L1 | TODO |
+| T-G | VLA 后端支持（如果可行性查证支持，否则记录为已知限制） | P14 | T-E | L1 | TODO |
 
 > 标注“扩展/实验”的任务（T-0610、T-0706、T-1004、T-1005、T-1103~T-1105）不阻塞 v1.0，其余均为必选。
 > 注意：T-0805 依赖 T-1101（HAL），可在 P8 前提前完成 T-1101。
-> P13 来自用户 2026-10-10 提出的 8 条改进意见（见 docs/PROGRESS.md 对应会话记录及 `/Users/zhipingwu/.claude/plans/abstract-frolicking-sun.md` 计划文件），明确不包含：T-1002/T-1003/T-1005 的真实 pipeline 实现、T-0610 的 QuaRot、T-0609 的 GPTQModel 实际引入（仅 ADR）。
+> P13 来自用户 2026-10-10 提出的 8 条改进意见（见 docs/PROGRESS.md 对应会话记录），明确不包含：T-1002/T-1003/T-1005 的真实 pipeline 实现、T-0610 的 QuaRot、T-0609 的 GPTQModel 实际引入（仅 ADR）。
 
 ---
 
@@ -1117,3 +1124,41 @@
   - 列补全：运行时、已安装、磁盘占用、上下文、置信度。
 - **验收**：筛选任意组合后表格与 URL query 同步（可分享链接）；导出的 CSV 能在 Excel 打开且列名为中文；对比面板在 3 个模型下不溢出。
 - **校验**：`npm run build`；截图贴进 PR。
+
+### P14 —— 资源真实探测、搜索、预览修复、UI 细节、后端跨域打通、硬件可移植性核实
+
+> 来自用户 2026-10-16 提出的两条反馈（资源预估要用真实探测、HF 搜索要模糊、量化误差预览失效、hover 数值闪烁；LLM 三后端应该同步给 VLA/VLM、硬件要能快速部署到新设备），完整调研与设计见 `docs/PROGRESS.md` 对应会话记录。调研结论：资源探测的底层能力（NVML/`/proc/meminfo`）已经存在，只是没接到预估端点；量化误差预览不是没做而是尺寸门槛写错了；VLA 的"三后端"诉求受限于 vLLM/SGLang/llama.cpp 本身不认识自定义动作头，不是我们代码的问题；硬件插件层已经是成熟架构，真正缺的是后端注册表。
+
+#### T-A 预估器接入真实空闲资源探测
+- **依赖**：T-1301（领域注册表，概念上相关但代码不耦合） **级别**：L2（`cpp/include/mqde/estimator/estimator.h` 的 `HardwareProfile` 新增 `live_free_bytes` 字段）
+- **产出**：`HardwareProfile.live_free_bytes`（0 = 未探测，向后兼容）；新函数 `estimator::effective_capacity_bytes(hw, util)` 统一了 `estimator.cpp`、`fit/concurrency.cpp` 两处原本各自独立的"容量 = 总显存 × 利用率"算式（`fit/concurrency.cpp` 改成直接复用 `estimate()` 已经算出的 `capacity_bytes`，不再重复计算，避免两处漂移）；`server.cpp` 新增 `probe_live_by_profile()`（复用 `/api/v1/hardware` 端点已有的 `mqde_probe_all` + `estimator::match_hardware(device_name)`，一次探测本机所有 GPU，按画像 id 分组，同一画像有多张卡时取空闲内存最多的那张）和 `apply_live_probe()`，接入 `/api/v1/estimate`、`/api/v1/estimate:matrix`、`/api/v1/fit:concurrency` 三个端点；请求的硬件 id 命中本机真实设备才生效，命中不到（比如在 Mac 上估算一张不存在的 A100）完全不受影响。响应新增 `resource_probe`（`{probed, device_name, mem_total_bytes, mem_free_bytes, other_usage_bytes}`），`estimate:matrix` 的每个 cell 也带 `probed` 布尔值。
+- **前端**：`web/src/api.ts` 新增 `ResourceProbe` 类型和 `probeNote()` 格式化函数；`Estimate.tsx`（"资源预估"页）、`NewJob.tsx`（向导实时预估侧栏）、`Fit.tsx`（"并发能力"面板）三处都接了这行提示。
+- **验收**（4090 真机，2026-10-16）：当时 8 张卡里有 2 张（index 2、3）已经被另一个进程占用了 21+ GiB，向 `/api/v1/estimate` 请求 `nvidia/rtx4090` 时，`resource_probe` 正确返回 `probed: true`，`mem_free_bytes` 对应的是一张空闲卡（约 23.5 GiB 空闲、约 500 MiB 被占用），而不是写死的 24 GiB 出厂规格，也没有误选中那两张忙碌的卡；`capacity_bytes` 相应地比 Mac 上（无匹配硬件，`probed: false`，走静态值）略低。Mac 上同样的请求 `probed: false`，数字与改动前逐位一致。
+- **校验**：新 `ctest`（`estimator_memory.live_free_bytes_overrides_the_static_datasheet_total_when_present`），mutation（把 `effective_capacity_bytes` 改成忽略 `live_free_bytes`，确认新测试抓到）；4090/Mac 各跑一次 ctest 全量（382/382）；web e2e 全量 24 个文件（`newjob_live_estimate.mjs` 新增一条探测提示的断言，11/11）。
+
+#### T-B HF / 模型目录搜索改模糊匹配
+- **依赖**：无 **级别**：L0/L1
+- **现状**：`hub::search()`（`cpp/src/hub/catalog.cpp`）是精确、大小写不敏感的子串匹配，无任何模糊/打分逻辑。
+
+#### T-C 量化误差预览修掉尺寸门槛
+- **依赖**：无 **级别**：L2（`cpp/include/mqde/modelspec/safetensors.h` 新函数签名）
+- **现状**：`/api/v1/models:tensor` 的 `quant_preview` 要求 `read_tensor_f32` 的抽样结果与张量原始元素数完全相等才会计算，而 `read_tensor_f32` 默认 `max_elems=4,000,000` 会对任何更大的二维权重做元素级抽样——绝大多数真实模型的线性层都会命中这条，预览被静默跳过。
+
+#### T-D 图标 hover 数值停留不闪烁
+- **依赖**：无 **级别**：L1
+- **现状**：`web/src/pages/Fit.tsx` 的 `Meter` 组件用原生 `title=` 属性显示百分比，下载进度每秒轮询重写这个属性，打断浏览器原生 tooltip 的计时器，数值一闪而过。
+
+#### T-E 后端注册表
+- **依赖**：无（但应早于 T-F/T-G） **级别**：L1
+- **现状**：`llm_job.py` 的 `_llamacpp`/`_vllm_serve`/`_sglang_serve` 是硬编码 import + 按字段分支，无注册表（`docs/guides/add-backend.md` 原文承认这是真实架构缺口）。
+
+#### T-F VLM 后端支持
+- **依赖**：T-E **级别**：L1
+- **现状**：VLM 作业量化后从不导出可服务的 checkpoint，评估全程在 Python 进程内完成；第一步必须先查证 vLLM/SGLang/llama.cpp 里有没有哪个原生支持当前用的 VLM 架构，查证结论写进 PROGRESS.md 再决定要不要往下做。
+
+#### T-G VLA 后端支持
+- **依赖**：T-E **级别**：L1
+- **现状**：同 T-F，但调研已经给出合理预期——vLLM/SGLang/llama.cpp 面向文本/视觉语言模型，大概率不认识带自定义动作头的 VLA 结构。查证后如果确实不支持，在 `data/domains/vla.yaml` 用已有的 `pipeline_status: ui_only_pending_backend` 标注清楚，不做看起来能用但点了报错的假后端卡片。
+
+#### 不在这批次做的
+- **硬件插件层（HAL）改造**：调研确认已是成熟、ABI 版本化、文档齐全的架构（`cpp/include/mqde/hal/mqde_hal.h`、`docs/guides/add-hardware-plugin.md`），用户"硬件融合"的真实诉求由 T-E 解决，HAL 层本身不需要动。

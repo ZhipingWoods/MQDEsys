@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { deriveFromJob, DeriveStep, DERIVE_STEPS, Rule } from "../derive";
-import { Advice, AdviceObjective, api, CatalogModel, DownloadStatus, fmtBytes, RuntimeParams , BackendId } from "../api";
+import { Advice, AdviceObjective, api, CatalogModel, DownloadStatus, fmtBytes, probeNote, RuntimeParams , BackendId } from "../api";
 import { BackendCards } from "../components/BackendCards";
 import { DatasetPicker } from "../components/DatasetPicker";
 import { DEFAULT_DATASET, DEFAULT_LLM, DEFAULT_MODEL, DEFAULT_VLM, useAsync, useDebounced } from "../hooks";
@@ -1118,7 +1118,11 @@ export default function NewJobPage() {
             </tbody>
           </table>
         )}
-        {est.data && <p className="note">显存容量 {fmtBytes(est.data.estimates[0]?.capacity_bytes)}（利用率 0.9）。由 C++ 预估器计算，与"资源预估"页同源。</p>}
+        {est.data && (
+          <p className="note" data-testid="resource-probe-note">
+            显存容量 {fmtBytes(est.data.estimates[0]?.capacity_bytes)}（利用率 0.9）。由 C++ 预估器计算，与"资源预估"页同源。{probeNote(est.data.resource_probe)}。
+          </p>
+        )}
       </aside>
       </div>
     </>

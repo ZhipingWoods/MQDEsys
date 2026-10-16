@@ -30,7 +30,11 @@ static ConcurrencyEstimate compute(const modelspec::ModelSpec& spec, const estim
   // overhead = activations + runtime (constant, not per-user).
   const double overhead_gb = static_cast<double>(e1.activation_bytes + e1.runtime_bytes) / (1ull << 30);
 
-  const double capacity_gb = static_cast<double>(hw.mem_bytes) / (1ull << 30) * rt1.gpu_memory_utilization;
+  // e1.capacity_bytes already went through estimator::effective_capacity_bytes (T-A: live-probed free
+  // memory when the server supplied one, else the static datasheet total) -- reusing it here instead of
+  // recomputing hw.mem_bytes * utilization keeps this module and estimator.cpp from being able to disagree
+  // on what "capacity" means.
+  const double capacity_gb = static_cast<double>(e1.capacity_bytes) / (1ull << 30);
   const int64_t n_gpus = std::max<int64_t>(1, 1);  // single GPU for now
   const double cap = capacity_gb * n_gpus;
 

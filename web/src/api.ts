@@ -55,6 +55,14 @@ export interface ComponentMemory {
   quantized: boolean;
 }
 
+// T-A: what a live probe of the server's own devices found for the hardware a request asked to estimate
+// against. `probed: false` means that hardware isn't physically present on the machine answering the
+// request (the common case -- estimating for different hardware, or no probe support there), in which case
+// capacity/concurrency come from the static datasheet total exactly as before this existed.
+export type ResourceProbe =
+  | { probed: false }
+  | { probed: true; device_name: string; mem_total_bytes: Bytes; mem_free_bytes: Bytes; other_usage_bytes: Bytes };
+
 export interface Estimate {
   recipe: string;
   recipe_id: string;
@@ -95,6 +103,7 @@ export interface MatrixCell {
   capacity_bytes: Bytes;
   max_concurrency: number;
   latency_floor_ms: number;
+  probed: boolean; // T-A: capacity_bytes came from a live free-memory reading, not the static datasheet total
 }
 
 export interface Device {
@@ -697,6 +706,7 @@ export interface ConcurrencyEstimate {
   fits: boolean; high_pressure: boolean;
   max_context_for_users: number;
   curve?: { users: number; total_gb: number; weights_gb: number; kv_gb: number; overhead_gb: number; utilization_pct: number; fits: boolean; max_context: number }[];
+  resource_probe: ResourceProbe; // T-A
 }
 
 export const api = {
@@ -720,7 +730,7 @@ export const api = {
   recommend: (model: string, hardware: string[], backend: string[], objective: AdviceObjective, runtime: Partial<RuntimeParams>, top_k = 8) =>
     req<{ top: Advice[]; excluded: number; considered: number; objective: AdviceObjective; measured_jobs: number }>("POST", "/recommend", { model, hardware, backend, objective, runtime, top_k }),
   estimate: (model: string, hardware: string, recipes: string[], runtime: RuntimeParams, backend = "hf_transformers") =>
-    req<{ hardware: HardwareProfile; estimates: Estimate[] }>("POST", "/estimate", { model, hardware, recipes, runtime, backend }),
+    req<{ hardware: HardwareProfile; estimates: Estimate[]; resource_probe: ResourceProbe }>("POST", "/estimate", { model, hardware, recipes, runtime, backend }),
   matrix: (model: string, runtime: RuntimeParams) => req<{ cells: MatrixCell[] }>("POST", "/estimate:matrix", { model, runtime }),
   jobs: () => req<JobListItem[]>("GET", "/jobs"),
   job: (id: string) => req<JobDetail>("GET", `/jobs/${id}`),
@@ -807,3 +817,11 @@ export const fmtBytes = (b: number | null | undefined): string => {
 };
 export const gib = (b: number) => b / 2 ** 30;
 export const fmt = (v: number | null | undefined, d = 3) => (v == null || !isFinite(v) ? "–" : v.toFixed(d));
+
+// T-A: a one-line, honest statement of whether capacity/concurrency numbers came from a live probe of this
+// machine's own free memory, or (the common case) from the hardware's static datasheet total because the
+// requested hardware isn't physically present here.
+export const probeNote = (p: ResourceProbe | undefined): string =>
+  p?.probed
+    ? `探测到 ${p.device_name} 实际空闲 ${fmtBytes(p.mem_free_bytes)}（总 ${fmtBytes(p.mem_total_bytes)}，其他程序占用 ${fmtBytes(p.other_usage_bytes)}）`
+    : "未探测到本机这块硬件，按出厂规格估算";

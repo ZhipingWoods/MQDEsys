@@ -110,6 +110,40 @@ TEST(estimator_memory, concurrency_scales_kv_and_feasibility) {
   EXPECT_EQ(small.max_concurrency, 0);
 }
 
+// T-A: a profile may carry a live-probed free-memory reading (populated by the server, never by the
+// estimator itself, which stays a pure function); when present it, not the static datasheet mem_bytes,
+// is what capacity/feasibility/concurrency are computed from -- someone else's process already using
+// half the card must shrink what this estimate thinks is available.
+TEST(estimator_memory, live_free_bytes_overrides_the_static_datasheet_total_when_present) {
+  auto spec = tiny_spec();
+  auto r = load_recipe("bf16");
+  ASSERT_TRUE(r);
+  RuntimeParams rt;
+  rt.context_tokens = 1000;
+  BackendProfile be;
+  be.runtime_overhead_bytes = 0;
+  be.allocator_factor = 1.0;
+
+  HardwareProfile hw = gpu(1ull << 34);  // 16 GiB datasheet total
+  const auto e_static = estimate(spec, *r, hw, be, rt);
+  EXPECT_EQ(e_static.capacity_bytes,
+           static_cast<uint64_t>(static_cast<double>(hw.mem_bytes) * rt.gpu_memory_utilization))
+      << "no live reading: capacity comes from the static total, unchanged from before this field existed";
+
+  hw.live_free_bytes = 1ull << 30;  // another process (or job) left only 1 GiB actually free right now
+  const auto e_live = estimate(spec, *r, hw, be, rt);
+  EXPECT_EQ(e_live.capacity_bytes,
+           static_cast<uint64_t>(static_cast<double>(hw.live_free_bytes) * rt.gpu_memory_utilization))
+      << "a live reading present: capacity comes from what is actually free, not the datasheet total";
+  EXPECT_LT(e_live.capacity_bytes, e_static.capacity_bytes);
+  // with only 1 GiB really free, max_concurrency must reflect that squeeze, not the datasheet-sized answer
+  EXPECT_LT(e_live.max_concurrency, e_static.max_concurrency);
+
+  hw.live_free_bytes = 0;  // 0 means "not probed" (the field's documented default), not "zero free bytes"
+  const auto e_back_to_static = estimate(spec, *r, hw, be, rt);
+  EXPECT_EQ(e_back_to_static.capacity_bytes, e_static.capacity_bytes);
+}
+
 TEST(estimator_memory, context_from_images) {
   auto spec = tiny_spec();
   auto r = load_recipe("bf16");

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { api, Estimate, fmt, fmtBytes, gib, RuntimeParams } from "../api";
+import { api, Estimate, fmt, fmtBytes, gib, probeNote, RuntimeParams } from "../api";
 import { barItem, baseOption, Chart, refLine, series, token } from "../charts";
 import { DEFAULT_MODEL, useAsync, useDebounced } from "../hooks";
 
@@ -96,6 +96,12 @@ export default function EstimatePage() {
           </div>
         </div>
       </div>
+
+      {est.data && (
+        <p className="note" data-testid="resource-probe-note">
+          {probeNote(est.data.resource_probe)}
+        </p>
+      )}
 
       {(est.error || spec.error) && <div className="error-box">{est.error ?? spec.error}</div>}
 

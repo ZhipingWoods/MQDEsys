@@ -11,6 +11,15 @@ using modelspec::ModelSpec;
 using quant::NumFormat;
 using quant::QuantSpec;
 
+}  // namespace
+
+uint64_t effective_capacity_bytes(const HardwareProfile& hw, double gpu_memory_utilization) {
+  const uint64_t base = hw.live_free_bytes > 0 ? hw.live_free_bytes : hw.mem_bytes;
+  return static_cast<uint64_t>(static_cast<double>(base) * gpu_memory_utilization);
+}
+
+namespace {
+
 double elem_bytes(const QuantSpec& s, double fallback) {
   return s.enabled() ? static_cast<double>(s.bits) / 8.0 : fallback;
 }
@@ -230,7 +239,7 @@ Estimate estimate(const ModelSpec& spec, const Recipe& recipe, const HardwarePro
                              static_cast<double>(e.activation_bytes)) *
                                 f +
                             static_cast<double>(e.runtime_bytes));
-  e.capacity_bytes = static_cast<uint64_t>(static_cast<double>(hw.mem_bytes) * rt.gpu_memory_utilization);
+  e.capacity_bytes = effective_capacity_bytes(hw, rt.gpu_memory_utilization);
   e.feasible = e.peak_bytes <= e.capacity_bytes;
 
   const double per_seq = (kv_seq + std::max({act_vision, act_lang, act_action})) * f;

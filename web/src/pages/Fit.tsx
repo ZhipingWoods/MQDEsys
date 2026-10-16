@@ -3,7 +3,7 @@
 // breakdown, notes) and a "plan" view that grades one model on every hardware profile.
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api, DownloadStatus, FitLevel, FitQuery, fmt, fmtBytes, HfHit, ModelFit } from "../api";
+import { api, DownloadStatus, FitLevel, FitQuery, fmt, fmtBytes, HfHit, ModelFit, probeNote } from "../api";
 import { barItem, baseOption, Chart, token } from "../charts";
 import { useAsync, useDebounced } from "../hooks";
 
@@ -54,6 +54,7 @@ function ConcurrencyPanel({ model, hardware, recipe, users, context }: {
         <Tile label={`${users} 路显存`} value={`${fmt(c.total_gb, 1)} GiB`} hint={`容量 ${fmt(c.capacity_gb, 1)} GiB · ${pct}%`} />
         <Tile label="每路 KV" value={`${fmt(c.kv_per_user_gb * 1024, 0)} MiB`} hint={`权重 ${fmt(c.weights_gb, 1)} · 运行时 ${fmt(c.overhead_gb, 1)} GiB`} />
       </div>
+      <p className="note" data-testid="resource-probe-note">{probeNote(c.resource_probe)}</p>
       {curve.length > 1 && (
         <div className="grid-2">
           <div>

@@ -140,7 +140,13 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **校验**：ctest 370（CUDA 构建）/ 358 / Mac 另跑；变异 15/17，余下 1 个等价 + 1 个故意放的空操作对照。
 - **前端**：无改动。
 
-### 2026-10-14 · T-0406 GGUF Q8_0 的 GPU 打包/反打包
+### 2026-10-16 · P14 T-A 预估器接入真实空闲资源探测（用户反馈：别用刻板印象算资源）
+- **状态**：已验证，待提交推送
+- 用户反馈：评估 token/s、显存、并发时应该先探测设备当前真实可用的资源（别的程序/作业可能已经在占用），而不是按写死的显卡规格表硬算。调研发现活的探测其实已经存在——`cpp/probe_c/src/probe.c` 用 NVML/`/proc/meminfo` 读真实空闲内存——但只接到了硬件页的设备列表，预估器（`/api/v1/estimate`、`/api/v1/fit:concurrency`）从没调用过，是刻意设计的纯函数、只吃 `data/hardware_db/**/*.yaml` 里的静态出厂规格。
+- `HardwareProfile` 新增 `live_free_bytes`（0=未探测，向后兼容）；新函数 `estimator::effective_capacity_bytes()` 统一了原来 `estimator.cpp`/`fit/concurrency.cpp` 两处各自独立的容量算式；server 端 `probe_live_by_profile()` 复用 `/api/v1/hardware` 已有的探测+匹配逻辑，一次探测本机所有 GPU 按画像 id 分组（同画像多卡取空闲最多的那张），接入三个端点，响应带 `resource_probe` 字段说明这次是探测来的还是静态估的。前端三处（"资源预估"页、新建作业向导侧栏、并发能力面板）都显示这行提示。
+- **真机验证最有说服力的一点**：验证当天 4090 服务器 8 张卡里有 2 张（index 2、3）已经被另一个进程占了 21+ GiB，不是人为制造的测试场景，是撞上了真实的资源争用——请求 `nvidia/rtx4090` 时系统正确探测到、算出的 `capacity_bytes` 基于一张真正空闲的卡（约 23.5 GiB 空闲），没有被那两张忙碌的卡带偏，也没有像以前一样无视这一切直接按 24 GiB 出厂规格去算。Mac 上同样请求因为没有匹配的本机硬件，`probed: false`，数字和改动前逐位一致（不破坏跨硬件静态对比场景）。
+- **校验**：新 ctest（mutation 验证：把 `effective_capacity_bytes` 改成忽略探测值，新测试抓到）；Mac/4090 ctest 全量 382/382；web e2e 全量 24 个文件（`newjob_live_estimate.mjs` 新增探测提示断言）。
+
 - **状态**：已验证（见下），待提交推送
 - GGUF 的几种类型里 Q8_0 是最简单的一种（每 32 个元素一块，一个 fp16 scale + 32 个 int8 code，没有 k-quant 那种带子块的多级 scale），拿它作为第一个 GPU 化的 GGUF 类型：`quant::cuda::gguf_quantize_q8_0`/`gguf_dequantize_q8_0`，每线程一个块，同样的 amax→除法→除法→`roundf`（对应 CPU 的 `std::round`，都是四舍五入远离零，不是 rne）次序，复用已有的 `fp32_to_fp16` 设备函数（移植了 CPU 的无分支 RNE 算法），新增一个 `fp16_to_fp32` 设备函数（半精度转单精度是精确的位扩展，不存在舍入分歧，只要位操作抄对就行）。
 - **怎么验证的**：Mac 没有 CUDA，这段代码在 Mac 上完全不会被编译（`MQDE_WITH_CUDA` 默认关），没法本地跑。在 4090 上专门配置了一个新目录 `build/cuda-check`（`-DMQDE_WITH_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89`，`nvcc` 在 `/usr/local/cuda/bin`），不碰生产在用的 `build/dev`；代码先用 scp 直接传上去验证（避免没验证过的代码进 `main`），确认通过后才提交推送。

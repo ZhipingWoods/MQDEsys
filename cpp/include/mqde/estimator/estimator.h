@@ -25,6 +25,14 @@ struct HardwareProfile {
   std::string id, vendor, name, arch;
   std::vector<std::string> match_names;
   uint64_t mem_bytes = 0;
+  // T-A: a live reading of this device's actually-free memory right now (NVML / /proc/meminfo), filled in
+  // by the server -- never by this header's functions, which stay pure -- only when `id` matches a device
+  // physically present on the machine answering the request. 0 is "not probed" (the common case: the
+  // requested hardware isn't the one running here, or this is an offline estimate), in which case `estimate()`
+  // falls back to `mem_bytes` exactly as before this field existed. When set, it -- not the static datasheet
+  // total -- is what capacity/feasibility/concurrency are computed from, because another process or job may
+  // already be using part of the card.
+  uint64_t live_free_bytes = 0;
   double mem_bw_gbps = 0;
   std::map<std::string, double> peak_tflops;  // fp32/bf16/fp16/fp8/int8/int4
   std::vector<std::string> native_formats;
@@ -84,6 +92,11 @@ Result<std::vector<Domain>> list_domains_in(const std::filesystem::path& dir);
 Result<std::vector<std::string>> list_data_entries(std::string_view sub);  // recipes, hardware_db, ...
 // Finds the hardware_db profile whose match_names occur in a probed device name ("NVIDIA GeForce RTX 4090").
 Result<HardwareProfile> match_hardware(std::string_view device_name);
+// T-A: the memory budget `estimate()` computes capacity/feasibility/concurrency from -- `hw.live_free_bytes`
+// when the caller has probed one (> 0), else the static `hw.mem_bytes` datasheet total, in both cases scaled
+// by `gpu_memory_utilization`. The one place this scaling happens, so `estimator.cpp` and `fit/concurrency.cpp`
+// can't drift apart on what "capacity" means.
+uint64_t effective_capacity_bytes(const HardwareProfile& hw, double gpu_memory_utilization);
 
 struct RuntimeParams {
   int64_t concurrency = 1;      // independent sequences (robots / requests) served at once
