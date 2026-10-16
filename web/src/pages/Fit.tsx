@@ -623,8 +623,11 @@ function Detail({ m, query }: { m: ModelFit; query: FitQuery }) {
 export function Meter({ pct, plain }: { pct: number; plain?: boolean }) {
   const v = Math.max(0, Math.min(100, pct));
   const cls = plain ? "" : pct > 98 ? "bad" : pct > 85 ? "warn" : "";
+  // T-D: data-tip, not title= -- a native tooltip's hover timer resets whenever the attribute's value
+  // changes, and this one is rewritten every second while a download is in progress, so it used to flicker
+  // instead of staying put while the cursor rested on it.
   return (
-    <div className={`meter ${cls}`} title={`${fmt(pct, 0)}%`}>
+    <div className={`meter ${cls}`} data-tip={`${fmt(pct, 0)}%`}>
       <i style={{ width: `${v}%` }} />
     </div>
   );

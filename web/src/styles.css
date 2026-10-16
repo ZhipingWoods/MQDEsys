@@ -221,6 +221,31 @@ tbody tr.clickable { cursor: pointer; }
 .note.muted { color: var(--text-muted); }
 .empty { padding: 28px; text-align: center; color: var(--text-muted); }
 
+/* T-D: a hover tooltip driven by data-tip, not the native title= attribute. The native title's value has to
+   be read by the browser once a hover timer elapses; rewriting it mid-hover (e.g. a progress percentage
+   polled every second) resets that timer, so the tooltip flickers in and out instead of staying put. :hover
+   tracks the pointer being over the element, not the attribute's identity, so updating data-tip's value
+   while already hovering just updates the text in place -- nothing to reset. */
+[data-tip] { position: relative; }
+[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  background: var(--surface-3);
+  color: var(--text-primary);
+  border: 1px solid var(--border-md);
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+  z-index: 50;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+
 /* meter bar (llmfit metric-track) */
 .meter { height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; min-width: 60px; }
 .meter > i { display: block; height: 100%; border-radius: 999px; background: var(--accent); }

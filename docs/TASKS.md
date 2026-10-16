@@ -174,7 +174,7 @@
 | T-A | 预估器接入真实空闲资源探测 | P14 | T-1301 | L2（`estimator.h` 新字段） | DONE (2026-10-16，见 P14 详情；4090 真机验证：6 张 RTX 4090 中 2 张已被别的进程占用 21+GiB，预估正确探测到并挑了一张空闲的；ctest 382/382，mutation 1/1) |
 | T-B | HF / 模型目录搜索改模糊匹配 | P14 | 无 | L0/L1 | DONE (2026-10-16，见 P14 详情；真机验证：真实 200 条目录数据搜 "qwen25" 命中 21 条 Qwen2.5 系列，audit_fixes.mjs 18/18；ctest 新增 4 项，mutation 3/3) |
 | T-C | 量化误差预览修掉尺寸门槛 | P14 | 无 | L2（`safetensors.h` 新函数） | DONE (2026-10-16，见 P14 详情；真机验证：2048×2048=419万元素的权重矩阵过了旧的 400 万门槛，现在能正常出预览；ctest 新增 2 项+mutation 2/2，web e2e 新文件 quant_preview.mjs 8/8) |
-| T-D | 图标 hover 数值停留不闪烁 | P14 | 无 | L1 | TODO |
+| T-D | 图标 hover 数值停留不闪烁 | P14 | 无 | L1 | DONE (2026-10-16，见 P14 详情；改成 CSS `data-tip` 悬浮提示代替原生 `title=`；ctest 不涉及，web e2e 新文件 tooltip_persist.mjs 8/8，mutation 1/1) |
 | T-E | 后端注册表（为 VLA/VLM 接后端打基础） | P14 | 无 | L1 | TODO |
 | T-F | VLM 后端支持（先出可行性结论再落地） | P14 | T-E | L1 | TODO |
 | T-G | VLA 后端支持（如果可行性查证支持，否则记录为已知限制） | P14 | T-E | L1 | TODO |
@@ -1153,7 +1153,10 @@
 
 #### T-D 图标 hover 数值停留不闪烁
 - **依赖**：无 **级别**：L1
-- **现状**：`web/src/pages/Fit.tsx` 的 `Meter` 组件用原生 `title=` 属性显示百分比，下载进度每秒轮询重写这个属性，打断浏览器原生 tooltip 的计时器，数值一闪而过。
+- **根因**：`web/src/pages/Fit.tsx` 的 `Meter` 组件用原生 `title=` 属性显示百分比，下载进度每秒轮询重写这个属性，打断浏览器原生 tooltip 的计时器，数值一闪而过。
+- **产出**：`web/src/styles.css` 新增一套 `[data-tip]:hover::after` 的纯 CSS 悬浮提示——`:hover` 伪类跟踪的是鼠标是否停在元素上，和属性的值无关，所以悬停期间改 `data-tip` 的值只会原地更新文字，不会把提示打断重来。`Meter` 组件的 `title=` 换成 `data-tip=`。`Estimate.tsx` 矩阵卡片那处原生 `title` 是多行文本、且不在轮询循环里（不是这次反馈的那个 bug），这次没有一起换。
+- **验收/真机**：真实走一遍"HF 搜索与下载"的下载流程（网络调用拦截，像其它 e2e 一样离线跑），悬停在进度条上不动，跨两次真实的 1 秒轮询，数值从 25% 变到 40% 的同时提示框全程没有消失；移开鼠标提示正常消失（不是一个卡死常显的提示）。
+- **校验**：新 e2e `tooltip_persist.mjs`（8 项，含真实浏览器 hover + 真实轮询间隔）；mutation：把 CSS 改成不受 `:hover`限制、始终显示，"移开鼠标后消失"这条测试抓到。
 
 #### T-E 后端注册表
 - **依赖**：无（但应早于 T-F/T-G） **级别**：L1
