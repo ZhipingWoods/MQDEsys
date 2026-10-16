@@ -22,6 +22,30 @@ std::string lower(std::string s) {
   return s;
 }
 
+// T-B: fzf-style fuzzy match -- `query`'s characters just have to occur in `name` in order, not contiguously
+// ("qwen25" matches "Qwen2.5-7B-Instruct" even though "." sits between the 2 and the 5). An exact substring
+// hit is still unambiguously best (a flat score far above anything fuzzy scoring could produce), so a user
+// who types the literal name never sees a worse-but-more-downloaded fuzzy hit rank above it. Returns -1 when
+// `query` is not even a subsequence of `name` (nothing to show at all), else a score where higher is better;
+// the greedy left-to-right scan rewards runs of consecutive characters and matches that start a word.
+long fuzzy_score(const std::string& query, const std::string& name) {
+  if (query.empty()) return 0;
+  if (name.find(query) != std::string::npos) return 1'000'000;
+  long score = 0;
+  size_t search_from = 0;
+  long last_pos = -1;
+  for (char qc : query) {
+    const size_t found = name.find(qc, search_from);
+    if (found == std::string::npos) return -1;
+    const bool boundary = found == 0 || !std::isalnum(static_cast<unsigned char>(name[found - 1]));
+    const bool consecutive = last_pos >= 0 && static_cast<size_t>(last_pos) + 1 == found;
+    score += 1 + (consecutive ? 3 : 0) + (boundary ? 2 : 0);
+    last_pos = static_cast<long>(found);
+    search_from = found + 1;
+  }
+  return score;
+}
+
 // config.json keys the estimator reads (model_spec.cpp). Everything else is dropped to keep the file small.
 const std::vector<std::string>& kept_keys() {
   static const std::vector<std::string> k = {
@@ -331,10 +355,11 @@ std::vector<const CatalogEntry*> search(const Catalog& c, const std::string& que
                                         const std::string& provider, const std::string& capability,
                                         size_t limit, bool include_demoted) {
   const std::string q = lower(query), pv = lower(provider), cap = lower(capability);
-  std::vector<const CatalogEntry*> out;
+  std::vector<std::pair<const CatalogEntry*, long>> scored;
   for (const auto& e : c.entries) {
     if (e.demoted && !include_demoted) continue;
-    if (!q.empty() && lower(e.name).find(q) == std::string::npos) continue;
+    const long score = q.empty() ? 0 : fuzzy_score(q, lower(e.name));
+    if (score < 0) continue;  // query's characters don't even occur, in order, anywhere in the name
     if (!pv.empty() && lower(e.provider) != pv) continue;
     if (!cap.empty()) {
       bool has_cap = false;
@@ -345,10 +370,15 @@ std::vector<const CatalogEntry*> search(const Catalog& c, const std::string& que
         }
       if (!has_cap) continue;
     }
-    out.push_back(&e);
+    scored.push_back({&e, score});
   }
-  std::stable_sort(out.begin(), out.end(),
-                   [](auto* a, auto* b) { return a->hf_downloads > b->hf_downloads; });
+  std::stable_sort(scored.begin(), scored.end(), [](const auto& a, const auto& b) {
+    if (a.second != b.second) return a.second > b.second;
+    return a.first->hf_downloads > b.first->hf_downloads;
+  });
+  std::vector<const CatalogEntry*> out;
+  out.reserve(scored.size());
+  for (const auto& [e, score] : scored) out.push_back(e);
   if (limit > 0 && out.size() > limit) out.resize(limit);
   return out;
 }

@@ -183,6 +183,100 @@ TEST(hub, catalog_roundtrip_and_search) {
   std::filesystem::remove(p);
 }
 
+// T-B: a query no longer has to be a contiguous substring of the name -- its characters just have to occur
+// in order (fzf-style subsequence matching), so a quick abbreviated search like "qwen25" finds
+// "Qwen2.5-7B-Instruct" even though "qwen25" is not literally inside that string.
+TEST(hub, search_is_fuzzy_a_subsequence_of_characters_in_order_not_only_a_contiguous_substring) {
+  Catalog c;
+  auto mk = [](std::string name, int64_t downloads) {
+    CatalogEntry e;
+    e.name = name;
+    e.provider = "test";
+    e.parameter_count = "7B";
+    e.quantization = "BF16";
+    e.format = "safetensors";
+    e.hf_downloads = downloads;
+    return e;
+  };
+  c.entries.push_back(mk("Qwen/Qwen2.5-7B-Instruct", 100));
+  c.entries.push_back(mk("meta-llama/Llama-3.1-8B-Instruct", 50));
+  c.entries.push_back(mk("mistralai/Mistral-7B-v0.1", 10));
+
+  // "qwen25" is not a contiguous substring of "Qwen/Qwen2.5-7B-Instruct" (there's a '.' in the way), but
+  // every one of its characters occurs in that order -- a plain substring search would find nothing.
+  auto hits = search(c, "qwen25", "", "", 10);
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0]->name, "Qwen/Qwen2.5-7B-Instruct");
+
+  // a subsequence that could match more than one entry (both names contain an 'l', 'a', 'm' in order) must
+  // not swallow everything -- "llama31" is specific enough that only Llama should come back
+  auto hits2 = search(c, "llama31", "", "", 10);
+  ASSERT_EQ(hits2.size(), 1u);
+  EXPECT_EQ(hits2[0]->name, "meta-llama/Llama-3.1-8B-Instruct");
+
+  // no query still returns everything, unaffected by the new scoring
+  EXPECT_EQ(search(c, "", "", "", 10).size(), 3u);
+
+  // a query matching nothing at all (character not present in any name) returns nothing, not everything
+  EXPECT_TRUE(search(c, "zzzzz", "", "", 10).empty());
+}
+
+TEST(hub, search_still_puts_an_exact_substring_hit_first_and_falls_back_to_downloads_on_ties) {
+  Catalog c;
+  auto mk = [](std::string name, int64_t downloads) {
+    CatalogEntry e;
+    e.name = name;
+    e.provider = "test";
+    e.parameter_count = "7B";
+    e.quantization = "BF16";
+    e.format = "safetensors";
+    e.hf_downloads = downloads;
+    return e;
+  };
+  // "qwen" is a fuzzy subsequence of both, but a literal substring of only the first -- becoming fuzzy must
+  // not make an exact hit rank behind (or even tie with) a merely-fuzzy one
+  c.entries.push_back(mk("some/qwen-fork", 5));
+  c.entries.push_back(mk("other/Quietly-When-Everyone-Naps", 1000));
+  auto hits = search(c, "qwen", "", "", 10);
+  ASSERT_EQ(hits.size(), 2u);
+  EXPECT_EQ(hits[0]->name, "some/qwen-fork") << "the exact substring hit must rank first despite far fewer downloads";
+
+  // same score (both exact substring hits) -> download count still breaks the tie, as before
+  c.entries.push_back(mk("a/qwen-small", 2));
+  c.entries.push_back(mk("b/qwen-big", 2000));
+  auto tie = search(c, "qwen", "", "", 10);
+  const auto idx = [&](const char* n) {
+    for (size_t i = 0; i < tie.size(); ++i)
+      if (tie[i]->name == n) return i;
+    return tie.size();
+  };
+  EXPECT_LT(idx("b/qwen-big"), idx("a/qwen-small"));
+}
+
+// A short query is the sharpest version of "exact must still win": with only two characters, a fuzzy hit
+// where both characters happen to start their own word (maximum boundary bonus, no penalty for not being
+// consecutive) can out-score an exact substring match that happens to sit mid-word in its name -- unless
+// the exact-match bonus is there specifically to prevent that.
+TEST(hub, a_short_exact_hit_still_beats_a_short_fuzzy_hit_with_favorable_word_boundaries) {
+  Catalog c;
+  auto mk = [](std::string name) {
+    CatalogEntry e;
+    e.name = name;
+    e.provider = "test";
+    e.parameter_count = "7B";
+    e.quantization = "BF16";
+    e.format = "safetensors";
+    e.hf_downloads = 0;
+    return e;
+  };
+  c.entries.push_back(mk("x/crab-model"));   // "ab" is an exact substring, but mid-word (not at a boundary)
+  c.entries.push_back(mk("x/a-b-corp"));     // "ab" only matches as a fuzzy subsequence, one word-start each
+  auto hits = search(c, "ab", "", "", 10);
+  ASSERT_EQ(hits.size(), 2u);
+  EXPECT_EQ(hits[0]->name, "x/crab-model")
+      << "an exact (if mid-word) substring hit must still outrank a fuzzy hit that only wins on word-boundary bonuses";
+}
+
 TEST(hub, packed_int_checkpoint_uses_name_size) {
   auto info = qwen7_info();
   info["id"] = "someone/Model-27B-AWQ";

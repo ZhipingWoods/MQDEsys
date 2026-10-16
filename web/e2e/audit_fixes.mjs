@@ -116,11 +116,25 @@ try {
   await page.getByTestId('catalog-toggle-all').click();
   await page.waitForFunction((t) => document.querySelectorAll('tbody tr').length >= t, total, { timeout: 5000 });
   check('全部展开 shows every model', (await page.locator('tbody tr').count()) >= total + heads);
-  await page.getByPlaceholder('名称子串，如 qwen3、llama').fill('qwen2.5');
+  await page.getByPlaceholder('模糊搜索，如 qwen25、llama3（按字符顺序匹配，不用连着打全）').fill('qwen2.5');
   await page.waitForFunction(() => { const c = document.querySelector('[data-testid="catalog-count"]')?.textContent ?? ''; return /^\d+ 条/.test(c) && !c.startsWith(String(document.querySelectorAll('tbody tr').length)); }, null, { timeout: 10000 }).catch(() => {});
   await page.waitForTimeout(600);
   const open = await page.locator('tr.group-head .muted').first().innerText();
   check('a search flattens the groups (every matching model visible, no collapsed category)', open.trim() === '▾' && (await page.getByTestId('catalog-toggle-all').count()) === 0, open);
+
+  // T-B: "qwen25" is not a literal substring of "Qwen2.5-..." (there's a "." in the way) -- only a fuzzy,
+  // in-order-characters match finds it. This is the real end-to-end path (server's hub::search, not the
+  // unit-level fuzzy_score tests), against the actual catalog fixture.
+  const searchBox = page.getByPlaceholder('模糊搜索，如 qwen25、llama3（按字符顺序匹配，不用连着打全）');
+  await searchBox.fill('qwen25');
+  await page.waitForTimeout(600);
+  const fuzzyRows = await page.locator('tbody tr td', { hasText: 'Qwen2.5' }).count();
+  check('a fuzzy query with no literal substring in the name ("qwen25") still finds Qwen2.5 models', fuzzyRows > 0, `${fuzzyRows} rows mentioning Qwen2.5`);
+  await searchBox.fill('zzzzznosuchmodel');
+  await page.waitForTimeout(600);
+  const noHitCount = Number((await page.getByTestId('catalog-count').innerText()).match(/(\d+) 条/)?.[1] ?? '-1');
+  check('a query matching nothing shows zero results, not everything', noHitCount === 0, String(noHitCount));
+  await searchBox.fill('');
   check('no page errors', errors.length === 0, errors.slice(0, 2).join(' | '));
 } catch (e) {
   failed = true;

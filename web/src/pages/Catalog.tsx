@@ -62,7 +62,7 @@ export default function CatalogPage() {
         <div className="form-row">
           <div className="field grow">
             <label>搜索</label>
-            <input placeholder="名称子串，如 qwen3、llama" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <input placeholder="模糊搜索，如 qwen25、llama3（按字符顺序匹配，不用连着打全）" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
           <div className="field" style={{ minWidth: 200 }}>
             <label>提供者</label>

@@ -147,6 +147,14 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **真机验证最有说服力的一点**：验证当天 4090 服务器 8 张卡里有 2 张（index 2、3）已经被另一个进程占了 21+ GiB，不是人为制造的测试场景，是撞上了真实的资源争用——请求 `nvidia/rtx4090` 时系统正确探测到、算出的 `capacity_bytes` 基于一张真正空闲的卡（约 23.5 GiB 空闲），没有被那两张忙碌的卡带偏，也没有像以前一样无视这一切直接按 24 GiB 出厂规格去算。Mac 上同样请求因为没有匹配的本机硬件，`probed: false`，数字和改动前逐位一致（不破坏跨硬件静态对比场景）。
 - **校验**：新 ctest（mutation 验证：把 `effective_capacity_bytes` 改成忽略探测值，新测试抓到）；Mac/4090 ctest 全量 382/382；web e2e 全量 24 个文件（`newjob_live_estimate.mjs` 新增探测提示断言）。
 
+### 2026-10-16 · P14 T-B HF / 模型目录搜索改模糊匹配
+- **状态**：已验证，待提交推送
+- 用户反馈："HF 搜索与下载"要模糊搜索——原来是精确、大小写不敏感的子串匹配。新 `fuzzy_score()`：query 字符按顺序出现在 name 里即命中（fzf 风格），连续匹配 +3/字符、单词边界命中 +2/字符；精确子串命中给一个远高于任何模糊分数的固定分，保证完全匹配永远排最前。
+- **mutation 过程中发现的真实陷阱**：去掉"精确子串命中给固定高分"这条规则后，我原来写的两个测试居然还是全过——因为我选的测试字符串查询都是 3 个字符以上，连续匹配的加分本身就足够让精确命中赢。补算了一下：对一个 2 字符查询，如果精确命中恰好不在单词边界（比如 "ab" 命中 "crab" 中间那段），而模糊命中的两个字符各自都在单词开头（比如 "a-b-corp"），不给固定高分的话模糊命中反而会以 6:5 反超精确命中。照这个反例专门写了一个对抗性测试（`a_short_exact_hit_still_beats_a_short_fuzzy_hit_with_favorable_word_boundaries`），这次 mutation 才真正被抓到。
+- **真机验证**：用真实的 200 条目录数据搜 "qwen25"（不是 "Qwen2.5" 的字面子串，中间差个点号），命中 21 条 Qwen2.5 系列；搜一个随便哪个字符都不存在的串返回 0 条而不是全部。前端搜索框 placeholder 改成如实说明"模糊搜索"而不是"名称子串"。
+- **校验**：新 4 个 ctest，mutation 3/3（固定高分、"不是子序列就排除"的过滤，两处都抓到）；`audit_fixes.mjs` 新增两条真机断言，18/18；ctest 全量 385/385；web e2e 全量 24 个文件。
+
+### 2026-10-14 · T-0406 GGUF Q8_0 的 GPU 打包/反打包
 - **状态**：已验证（见下），待提交推送
 - GGUF 的几种类型里 Q8_0 是最简单的一种（每 32 个元素一块，一个 fp16 scale + 32 个 int8 code，没有 k-quant 那种带子块的多级 scale），拿它作为第一个 GPU 化的 GGUF 类型：`quant::cuda::gguf_quantize_q8_0`/`gguf_dequantize_q8_0`，每线程一个块，同样的 amax→除法→除法→`roundf`（对应 CPU 的 `std::round`，都是四舍五入远离零，不是 rne）次序，复用已有的 `fp32_to_fp16` 设备函数（移植了 CPU 的无分支 RNE 算法），新增一个 `fp16_to_fp32` 设备函数（半精度转单精度是精确的位扩展，不存在舍入分歧，只要位操作抄对就行）。
 - **怎么验证的**：Mac 没有 CUDA，这段代码在 Mac 上完全不会被编译（`MQDE_WITH_CUDA` 默认关），没法本地跑。在 4090 上专门配置了一个新目录 `build/cuda-check`（`-DMQDE_WITH_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89`，`nvcc` 在 `/usr/local/cuda/bin`），不碰生产在用的 `build/dev`；代码先用 scp 直接传上去验证（避免没验证过的代码进 `main`），确认通过后才提交推送。
