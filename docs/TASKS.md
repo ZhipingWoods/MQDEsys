@@ -175,9 +175,9 @@
 | T-B | HF / 模型目录搜索改模糊匹配 | P14 | 无 | L0/L1 | DONE (2026-10-16，见 P14 详情；真机验证：真实 200 条目录数据搜 "qwen25" 命中 21 条 Qwen2.5 系列，audit_fixes.mjs 18/18；ctest 新增 4 项，mutation 3/3) |
 | T-C | 量化误差预览修掉尺寸门槛 | P14 | 无 | L2（`safetensors.h` 新函数） | DONE (2026-10-16，见 P14 详情；真机验证：2048×2048=419万元素的权重矩阵过了旧的 400 万门槛，现在能正常出预览；ctest 新增 2 项+mutation 2/2，web e2e 新文件 quant_preview.mjs 8/8) |
 | T-D | 图标 hover 数值停留不闪烁 | P14 | 无 | L1 | DONE (2026-10-16，见 P14 详情；改成 CSS `data-tip` 悬浮提示代替原生 `title=`；ctest 不涉及，web e2e 新文件 tooltip_persist.mjs 8/8，mutation 1/1) |
-| T-E | 后端注册表（为 VLA/VLM 接后端打基础） | P14 | 无 | L1 | TODO |
-| T-F | VLM 后端支持（先出可行性结论再落地） | P14 | T-E | L1 | TODO |
-| T-G | VLA 后端支持（如果可行性查证支持，否则记录为已知限制） | P14 | T-E | L1 | TODO |
+| T-E | 后端注册表（为 VLA/VLM 接后端打基础） | P14 | 无 | L1 | PARTIAL (2026-10-16，可行性结论已出，见下；注册表本身的实现因为预估规模超出本轮合理范围，未动手——理由见 PROGRESS.md) |
+| T-F | VLM 后端支持 | P14 | T-E | L1 | BLOCKED: 可行性已确认（vLLM 原生支持 `MiniCPMV4_6ForConditionalGeneration`），但真正落地需要新建一条 VLM 量化导出流水线（现在量化全程在内存里，从不落盘），工作量是独立的大任务，本轮未实现，见 PROGRESS.md |
+| T-G | VLA 后端支持 | P14 | T-E | L1 | DONE (2026-10-16，可行性结论：三个引擎都不支持，不是"还没试"而是结构性不可能——自定义动作头是 DiT 输出连续动作张量，三个引擎都只有"文本输入→文本输出"的 OpenAI chat 接口，没有第二段去噪解码的概念；`data/domains/{llm,vlm,vla}.yaml` 新增 `deploy_backends` 字段记录三个领域各自的结论（纯数据，C++ loader 暂不读取这个字段，不影响现有行为），不做看起来能用但点了报错的假后端卡片)
 
 > 标注“扩展/实验”的任务（T-0610、T-0706、T-1004、T-1005、T-1103~T-1105）不阻塞 v1.0，其余均为必选。
 > 注意：T-0805 依赖 T-1101（HAL），可在 P8 前提前完成 T-1101。
@@ -1161,14 +1161,18 @@
 #### T-E 后端注册表
 - **依赖**：无（但应早于 T-F/T-G） **级别**：L1
 - **现状**：`llm_job.py` 的 `_llamacpp`/`_vllm_serve`/`_sglang_serve` 是硬编码 import + 按字段分支，无注册表（`docs/guides/add-backend.md` 原文承认这是真实架构缺口）。
+- **2026-10-16 补充查证**：这三个方法里，"起进程、探活、读日志诊断失败原因"这部分确实是通用的（`ServerBackend` 基类本来就是域无关的），但紧挨着的"怎么打分"——`served_perplexity`（按 logprobs 算 PPL）、`lm_eval`、并发扫描——是彻头彻尾的 LLM/文本特有逻辑，三个方法里两类代码交织在一起。真要抽一个"注册表"出来，得先回答"VLM/VLA 怎么打分"这个设计问题（VLM 大概率不是 PPL，是生成准确率一类的指标），不是简单把三段代码挪进三个文件就完事。考虑到 T-F 查证后发现 VLM 导出环节本身还不存在（见下），VLA 又确认三个引擎都服务不了，注册表当前唯一的真实消费者只有"理论上可行但还没建导出环节"的 VLM——时机还不成熟，本轮没有动手实现，只做完了可行性查证这一步，留给以后专注的会话。
 
 #### T-F VLM 后端支持
 - **依赖**：T-E **级别**：L1
-- **现状**：VLM 作业量化后从不导出可服务的 checkpoint，评估全程在 Python 进程内完成；第一步必须先查证 vLLM/SGLang/llama.cpp 里有没有哪个原生支持当前用的 VLM 架构，查证结论写进 PROGRESS.md 再决定要不要往下做。
+- **可行性结论（2026-10-16，已查证，非假设）**：**vLLM 原生支持**——`data/model_families/minicpmv.yaml` declares 的架构 `minicpmv4_6` 对应 vLLM 模型注册表里的 `MiniCPMV4_6ForConditionalGeneration`（上游 PR #43213 合并），需要 `transformers>=5.7.0`；4090 的 `mqde` conda 环境已经是 5.7.0，版本条件已经满足。这**不是**"大概率不支持"的猜测，是搜了 vLLM 官方支持模型列表和 Hugging Face 模型卡确认的。
+- **真正的缺口不是引擎支持，是我们自己这边没有导出环节**：`python/mqde/pipeline/vlm_job.py` 量化全程在内存里完成（fake-quant），从来没有把量化后的 checkpoint 落盘成 safetensors/GGUF 给 vLLM 去加载。要让 VLM 真的能部署，需要新建一条量化导出流水线（`VLMJobSpec` 加 `vllm` 字段、真实导出 checkpoint、接服务/测试逻辑、换一套不是 PPL 的打分方式），这是一个独立的较大功能，本轮没有实现，依赖 T-E 的设计先讨论清楚"VLM 怎么打分"再动手，不预先动代码。
+- **产出**：`data/domains/vlm.yaml` 新增 `deploy_backends: []`（配注释写明可行性结论和缺口位置），`data/domains/llm.yaml` 对应补了 `deploy_backends: [llamacpp, vllm, sglang]`，都是纯数据字段，C++ 的 `cpp/src/estimator/domain.cpp` loader 暂时不读取这个字段（已验证不影响现有解析，`estimator_domain` 全部 10 项 ctest 照常绿），留给以后给 `BackendCards` 前端门槛做数据驱动时用。
 
 #### T-G VLA 后端支持
 - **依赖**：T-E **级别**：L1
-- **现状**：同 T-F，但调研已经给出合理预期——vLLM/SGLang/llama.cpp 面向文本/视觉语言模型，大概率不认识带自定义动作头的 VLA 结构。查证后如果确实不支持，在 `data/domains/vla.yaml` 用已有的 `pipeline_status: ui_only_pending_backend` 标注清楚，不做看起来能用但点了报错的假后端卡片。
+- **可行性结论（2026-10-16，已查证，非假设）**：三个引擎都**结构性**不支持，不是版本问题也不是"还没试"。`data/model_families/minicpm_vla.yaml` 的动作头是一个 flow-matching DiT（`transformer_blocks`、`timestep_encoder`、`norm1.linear` adaLN 调制、`num_inference_timesteps` 次迭代去噪），输出连续动作张量；vLLM/SGLang/llama.cpp 三个都是"文本进→causal LM 前向→采样下一个 token→流式吐文本"这一套 OpenAI chat completions 接口，没有"第二段去噪解码"的概念，也没有"返回一个动作向量而不是文本"的 API 形状。就算语言骨干（Qwen3.5 混合注意力）本身被某个引擎认识，动作头依然没有任何框架能服务——这不是"少接一个后端"的问题，是这类输出本身不在这些框架的服务协议范围内。
+- **产出**：`data/domains/vla.yaml` 新增 `deploy_backends: []`，带上面这段结论的完整注释，说明前端 `BackendCards` 现在对 VLA 不显示（门槛是 `kind === "llm"`）是已经验证过的正确行为，不是遗漏，避免以后反复被当成"没做"重新提出来。
 
 #### 不在这批次做的
 - **硬件插件层（HAL）改造**：调研确认已是成熟、ABI 版本化、文档齐全的架构（`cpp/include/mqde/hal/mqde_hal.h`、`docs/guides/add-hardware-plugin.md`），用户"硬件融合"的真实诉求由 T-E 解决，HAL 层本身不需要动。

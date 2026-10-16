@@ -170,6 +170,16 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 - **写这个测试时踩的坑**：第一版用共享的 `os.tmpdir()` 当 `--allow` 根目录，结果被其它 e2e 测试遗留的几十个模型夹具目录拖慢+干扰，换成专用的临时目录就好了；按钮用 `getByRole('button', {name: '查询'})` 不加 `exact: true` 一开始看似该报多重匹配错误但没有，根因其实是另一个——下载流程的 `/api/v1/download` 列组请求和真正下载请求是同一个 POST 端点（不是两个路径），一开始按两个不同路径拦截导致"列权重组"请求收到的是"开始下载"的响应形状，页面上压根不出现"下载"按钮。
 - **校验**：新 e2e `tooltip_persist.mjs` 8/8（标准条件下连续跑 3 次无 flaky）；mutation：把 CSS 改成不受 `:hover` 限制、始终显示浮层，"移开鼠标后消失"这条断言抓到；ctest 不涉及（纯前端 CSS 改动）；web e2e 全量 26 个文件。
 
+### 2026-10-16 · P14 T-E/T-F/T-G 后端注册表 + VLA/VLM 可行性查证（用户反馈：LLM 三后端应该同步给 VLA/VLM）
+- **状态**：可行性查证已完成并验证，注册表本身未实现（理由见下），待提交推送
+- 用户反馈原话大意："LLM 领域有三个后端（llama.cpp/vLLM/SGLang），其他领域没有同步支持，差异无非是特定模块/算法/数据，部署后端应该是一样的"。调研结果和这个判断**部分吻合、部分不吻合**：
+  - **VLM：用户的直觉基本是对的，但更乐观**——查了 vLLM 官方支持模型列表和 Hugging Face 模型卡（不是猜的）：`data/model_families/minicpmv.yaml` 用的架构 `minicpmv4_6` 对应 vLLM 模型注册表里真实存在的 `MiniCPMV4_6ForConditionalGeneration`（上游 PR #43213 已合并），只需要 `transformers>=5.7.0`——4090 的 `mqde` conda 环境已经是 5.7.0，版本条件现成满足。**真正的缺口不在 vLLM 这边，在我们自己：`vlm_job.py` 量化全程在内存里跑 fake-quant，从来没有把量化后的 checkpoint 导出成一个真实文件**，所以哪怕 vLLM 认识这个架构，也没有东西可以喂给它。这是一个需要新建导出流水线的独立大任务，没有在本轮里实现。
+  - **VLA：用户的直觉不对，但原因很具体，不是含糊的"可能不行"**——`data/model_families/minicpm_vla.yaml` 的动作头是一个 flow-matching DiT（迭代去噪、连续动作张量输出），而 vLLM/SGLang/llama.cpp 三个框架全部是"文本进、文本出"的 OpenAI chat completions 协议，没有"第二段去噪解码"或"返回一个动作向量而不是文字"这种概念——这不是"这几个框架还没支持我们的模型"，是这一类输出压根不在它们的服务协议范围内，语言骨干本身被认不认识都无所谓，动作头都没地方接。
+  - **后端注册表（T-E）本身**：确认了 `docs/guides/add-backend.md` 早就承认的架构缺口是真的——`llm_job.py` 的三段后端服务代码硬编码 import+分支。但细看这三段代码才发现：起进程/探活/读日志诊断这部分确实通用，紧挨着的"怎么打分"（PPL via logprobs、lm_eval、并发扫描）是彻头彻尾的 LLM 文本特有逻辑，两类代码揉在一起。真要抽注册表出来，得先定下"VLM 怎么打分"（大概率不是 PPL，是生成准确率一类）这个设计问题。鉴于 VLA 已经确认不可行、VLM 的导出环节还不存在，注册表当前没有真实可用的消费者，强行抽象风险大于收益，本轮没有动手实现代码，只完成了可行性查证这一步。
+- **产出**：`data/domains/{llm,vlm,vla}.yaml` 各加一个 `deploy_backends` 字段（纯数据，`cpp/src/estimator/domain.cpp` 的 loader 暂时不读取这个键，已验证不影响现有解析）——`llm: [llamacpp, vllm, sglang]`，`vlm: []`（注释写明"可行但未实现，缺口在导出环节"），`vla: []`（注释写明三个引擎都结构性不支持的具体原因）。前端 `BackendCards` 现在对 VLM/VLA 都不显示（门槛仍是 `kind === "llm"`），这是已验证过的正确行为，不是遗漏。
+- **调研过程中的一个环境发现**：仓库里根本没有 `3rdpart/vllm` 这个子模块（`.gitmodules` 里也没列），4090 的 `mqde` 环境也没装 pip 版 vllm——调研一开始想直接 grep 源码确认架构注册表，发现这条路走不通，改用 vLLM 官方文档站的"已支持模型"列表 + Hugging Face 模型卡交叉确认，不是瞎猜。
+- **校验**：`data/domains/*.yaml` 三个文件手动 `yaml.safe_load` 验证可解析；`ctest -R estimator_domain` 全部 10 项照常绿（新字段对 C++ loader 透明）；ctest 全量 387/387。
+
 ### 2026-10-14 · T-0406 GGUF Q8_0 的 GPU 打包/反打包
 - **状态**：已验证（见下），待提交推送
 - GGUF 的几种类型里 Q8_0 是最简单的一种（每 32 个元素一块，一个 fp16 scale + 32 个 int8 code，没有 k-quant 那种带子块的多级 scale），拿它作为第一个 GPU 化的 GGUF 类型：`quant::cuda::gguf_quantize_q8_0`/`gguf_dequantize_q8_0`，每线程一个块，同样的 amax→除法→除法→`roundf`（对应 CPU 的 `std::round`，都是四舍五入远离零，不是 rne）次序，复用已有的 `fp32_to_fp16` 设备函数（移植了 CPU 的无分支 RNE 算法），新增一个 `fp16_to_fp32` 设备函数（半精度转单精度是精确的位扩展，不存在舍入分歧，只要位操作抄对就行）。

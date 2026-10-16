@@ -14,3 +14,8 @@ classic_algorithms:
     note: activation-aware per-channel scaling (implemented, T-0601)
 default_eval_dataset: wikitext2
 pipeline_status: implemented  # python/mqde/pipeline/llm_job.py
+# T-E/T-F/T-G (2026-10-16): which serving backends a quantized export of this domain can be deployed to.
+# Not yet read by any loader (cpp/src/estimator/domain.cpp ignores unknown keys) -- recorded now so the
+# answer is in one place instead of re-discovered per session; a future BackendCards gating change can read
+# this instead of NewJob.tsx's current `kind === "llm"` check.
+deploy_backends: [llamacpp, vllm, sglang]  # python/mqde/pipeline/llm_job.py: all three implemented

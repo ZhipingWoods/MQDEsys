@@ -12,3 +12,14 @@ classic_algorithms:
     note: applied to the language backbone component only (implemented, T-0601)
 default_eval_dataset: synthetic
 pipeline_status: implemented  # python/mqde/pipeline/vla_job.py
+# T-E/T-F/T-G (2026-10-16): feasibility checked -- not just "untried," structurally impossible with any of
+# the three engines as they exist today. The action head (see action_head: below) is a flow-matching DiT
+# producing continuous action tensors via iterative denoising; vLLM/SGLang/llama.cpp all implement an
+# OpenAI-chat-completions-shaped serving loop (tokenize text -> causal-LM forward -> sample next-token
+# logits -> stream text back) with no concept of a second denoising decode phase or a non-text output
+# shape. Even if the Qwen3.5-hybrid-attention text backbone were separately recognized by an engine's
+# registry, the action head could not be served through that same API -- it is not a missing integration,
+# it is a different kind of output these frameworks have no contract for. BackendCards in NewJob.tsx
+# already shows no backend choice for VLA (gated on kind === "llm"); this comment exists so that absence is
+# understood as a verified conclusion, not a gap to keep re-raising.
+deploy_backends: []  # not feasible with any of llama.cpp/vllm/sglang as they exist; see comment above
