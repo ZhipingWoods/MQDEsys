@@ -106,6 +106,25 @@ TensorInfo w_tensor(const fs::path& dir, int64_t rows, int64_t cols) {
   return t;
 }
 
+// A genuinely 1-D fixture (rather than reshaping a 2-D TensorInfo after the fact, which GCC 12's
+// -Warray-bounds has a known false-positive on for this exact "reassign a vector<int64_t> member from a
+// braced-init-list a second time in the same function" pattern).
+fs::path write_numbered_vector(const std::string& stem, int64_t n) {
+  const auto dir = fs::temp_directory_path() / ("mqde_rows_" + stem);
+  fs::create_directories(dir);
+  const auto file = dir / "model.safetensors";
+  std::vector<float> data(static_cast<size_t>(n));
+  for (int64_t i = 0; i < n; ++i) data[static_cast<size_t>(i)] = static_cast<float>(i);
+  mqde::Json header = {{"w", {{"dtype", "F32"}, {"shape", {n}}, {"data_offsets", {0, data.size() * 4}}}}};
+  const std::string h = header.dump();
+  std::ofstream out(file, std::ios::binary);
+  uint64_t len = h.size();
+  for (int i = 0; i < 8; ++i) out.put(static_cast<char>((len >> (8 * i)) & 0xff));
+  out << h;
+  out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size() * 4));
+  return dir;
+}
+
 }  // namespace
 
 // T-C: quant_preview's actual bug. read_tensor_f32's element-level stride sampling is correct for histograms
@@ -150,9 +169,12 @@ TEST(modelspec_safetensors, read_tensor_rows_f32_returns_a_structurally_valid_su
 }
 
 TEST(modelspec_safetensors, read_tensor_rows_f32_rejects_non_2d_tensors) {
-  const auto dir = write_numbered_matrix("flat", 1, 8);  // a [1, 8] matrix...
-  TensorInfo t = w_tensor(dir, 1, 8);
-  t.shape = {8};  // ...reported here as the 1-D tensor it would be if squeezed, which is what must be rejected
+  const auto dir = write_numbered_vector("flat", 8);
+  auto hdr = read_safetensors_header(dir / "model.safetensors");
+  ASSERT_TRUE(hdr) << hdr.error().to_string();
+  ASSERT_FALSE(hdr->empty());
+  const TensorInfo& t = hdr->front();
+  ASSERT_EQ(t.shape.size(), 1u) << "fixture sanity: this must actually be 1-D";
   auto r = read_tensor_rows_f32(dir, t, 1000);
   EXPECT_FALSE(r);
 }
