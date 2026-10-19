@@ -338,7 +338,7 @@ class VLMJob:
                     for fmt, exp in rep["export"].items():
                         if exp.get("status") == "exported":
                             ckpt = Path(self.out / "export" / f"{recipe.name.lower()}-{fmt}")
-                            exp["vllm"] = self._stage("deploy_vllm", lambda ckpt=ckpt: self._vllm_serve(ckpt, evals), f"{recipe.name}/{fmt}")
+                            exp["vllm"] = self._stage("deploy_vllm", lambda ckpt=ckpt: self._vllm_serve(ckpt, evals), msg=f"{recipe.name}/{fmt}")
             engine.restore()
             self.report["recipes"][recipe.name] = rep
             self._save()
