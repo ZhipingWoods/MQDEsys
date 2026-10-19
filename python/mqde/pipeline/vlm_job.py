@@ -350,8 +350,16 @@ class VLMJob:
         Reuses the LLM exporters (python/mqde/export/__init__.py) — they take an nn.Module and a source
         dir, and write a safetensors checkpoint + config + tokenizer. For VLM the source dir is the
         original model_path so the visual tokenizer / preprocessor config is preserved. The model stays
-        on its current device; the exporter moves tensors to CPU for saving."""
+        on its current device; the exporter moves tensors to CPU for saving.
+
+        VLM checkpoints also need preprocessor_config.json (the image processor config) and
+        configuration.json (the HF Hub metadata) which the LLM exporter does not write — copy them
+        from the source model directory when they exist, so vLLM can load the exported checkpoint."""
+        import shutil
         from mqde.export import get_exporter
+
+        # VLM-specific files the LLM exporter does not know to copy; present in MiniCPM-V and similar.
+        vlm_aux_files = ("preprocessor_config.json", "configuration.json")
 
         out: dict[str, Any] = {}
         for fmt in self.spec.export:
@@ -366,6 +374,16 @@ class VLMJob:
             d.mkdir(parents=True, exist_ok=True)
             try:
                 res = ex.export(ad.model, d, self.spec.model_path)
+                # Copy VLM-specific aux files the LLM exporter skipped, so vLLM can load the checkpoint.
+                src = Path(self.spec.model_path)
+                copied: list[str] = []
+                for name in vlm_aux_files:
+                    s = src / name
+                    if s.exists() and not (d / name).exists():
+                        shutil.copy2(s, d / name)
+                        copied.append(name)
+                if copied:
+                    self.ev.log(f"{recipe}: copied VLM aux files for {fmt}: {', '.join(copied)}")
                 out[fmt] = {"status": "exported", **res.to_dict()}
                 self.ev.log(f"{recipe}: exported {fmt} -> {d}")
             except Exception as e:
