@@ -121,3 +121,19 @@ class VllmServer(ServerBackend):
             if m:
                 out[k] = conv(m)
         return out
+
+# Register this backend in the discovery layer so new domains can declare it in their
+# deploy_backends list without needing to add a new hardcoded branch to llm_job.py.
+def _register() -> None:
+    from mqde.backend.registry import BackendEntry, register_backend
+    register_backend(BackendEntry(
+        id="vllm",
+        server_class="VllmServer",
+        spec_field="vllm",
+        export_formats=["awq", "gptq", "compressed_tensors"],
+        needs_cuda=True,
+        bin_check=lambda: vllm_bin() and None,
+        module="mqde.backend.vllm_server",
+    ))
+
+_register()

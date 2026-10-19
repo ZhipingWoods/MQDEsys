@@ -122,3 +122,17 @@ class SglangServer(ServerBackend):
         elif m := re.search(r"KV Cache is allocated\..*?KV size: ([\d.]+) GB", log):
             out["kv_cache_gib"] = float(m.group(1))
         return out
+
+def _register() -> None:
+    from mqde.backend.registry import BackendEntry, register_backend
+    register_backend(BackendEntry(
+        id="sglang",
+        server_class="SglangServer",
+        spec_field="sglang",
+        export_formats=["awq", "gptq", "compressed_tensors"],
+        needs_cuda=True,
+        bin_check=lambda: sglang_python() and None,
+        module="mqde.backend.sglang_server",
+    ))
+
+_register()

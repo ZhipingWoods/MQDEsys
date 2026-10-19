@@ -92,3 +92,17 @@ def serve_bench(port: int, *, concurrency: int = 4, requests: int = 16, prompt_l
                     n_predict=n_predict, token_id=token_id, timeout=timeout, warmup=0)
     out = run_load(port, spec)
     return {"concurrency": concurrency, "requests": requests, "prompt_len": prompt_len, "n_predict": n_predict, **out}
+
+def _register() -> None:
+    from mqde.backend.registry import BackendEntry, register_backend
+    register_backend(BackendEntry(
+        id="llamacpp",
+        server_class="LlamaServer",
+        spec_field="llamacpp_serve",
+        export_formats=["gguf"],
+        needs_cuda=False,
+        bin_check=lambda: server_bin() and None,
+        module="mqde.backend.llamacpp_server",
+    ))
+
+_register()
