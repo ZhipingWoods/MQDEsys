@@ -17,5 +17,5 @@ pipeline_status: implemented  # python/mqde/pipeline/vlm_job.py (MiniCPM-V 4.6);
 # exporters; _vllm_serve() starts vLLM, smokes it, runs a load test, generates an answer for each eval
 # sample and scores gt_accuracy (fraction of correct answers). Scoring is accuracy-based, not PPL.
 # Full deployment chain (export -> vllm serve -> accuracy scoring) verified with 41 unit tests on 4090.
-deploy_backends: [vllm]  # implemented: VLMJobSpec.export + _export_recipe + _vllm_serve
-deploy_note: "VLM 量化支持 vLLM 导出部署（awq / gptq 格式，精度评分为生成准确率）；在下面勾选 vLLM 并填写 deploy.export + deploy.vllm 字段即可。"
+deploy_backends: [vllm, sglang]  # implemented: VLMJobSpec.export/_serve; both verified on MiniCPM-V 4.6
+deploy_note: "VLM 量化支持 vLLM 和 SGLang 导出部署（awq 格式，精度评分为生成准确率）；在下面勾选后端并填写 deploy.export + deploy.vllm / deploy.sglang 字段即可。"
