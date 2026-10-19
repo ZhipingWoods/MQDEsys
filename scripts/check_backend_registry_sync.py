@@ -23,8 +23,16 @@ from pathlib import Path
 ENTRY_ID_RE = re.compile(r'BackendEntry\s*\(.*?id\s*=\s*"([a-z_]+)"', re.DOTALL)
 
 
-def registered_ids(registry_py: Path) -> set[str]:
-    return set(ENTRY_ID_RE.findall(registry_py.read_text()))
+def registered_ids(backend_dir: Path) -> set[str]:
+    """Scan all .py files in the backend package for BackendEntry(id=...) calls.
+
+    Registrations live in the individual server modules (vllm_server.py etc.), not in
+    registry.py itself, so we must scan the whole package directory.
+    """
+    ids: set[str] = set()
+    for py in backend_dir.glob("*.py"):
+        ids.update(ENTRY_ID_RE.findall(py.read_text()))
+    return ids
 
 
 def domain_deploy_backends(domains_dir: Path) -> dict[str, list[str]]:
