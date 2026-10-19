@@ -421,32 +421,48 @@ class VLMJob:
                         copied.append(aux)
                 if copied:
                     self.ev.log(f"{recipe}: copied VLM aux files for {fmt}: {', '.join(copied)}")
-                # Step 2: patch quantize_config.json so SGLang (and vLLM) skip buffer allocation for
-                # any linear layer whose safetensors key is .weight (not .qweight). This covers layers
-                # the quantizer skipped because their dims are not divisible by group_size.
-                qcfg_path = d / "quantize_config.json"
-                if fmt == "awq" and qcfg_path.exists():
+                # Step 2: patch modules_to_not_convert in both quantize_config.json AND
+                # config.json["quantization_config"]. SGLang reads config.json for layer construction;
+                # vLLM reads the safetensors keys directly (not the JSON), but updating both is safe.
+                # We scan the safetensors for linear layers that have .weight but no .qweight (i.e.
+                # the quantizer skipped them due to non-128-aligned dims) and add their last name
+                # segment to modules_to_not_convert so backends skip AWQ buffer allocation for them.
+                if fmt == "awq" and (d / "quantize_config.json").exists():
                     from safetensors import safe_open
-                    fp_names: set[str] = set()
                     with safe_open(str(d / "model.safetensors"), framework="pt") as sf:
-                        keys = list(sf.keys())
-                    weight_keys = {k[:-len(".weight")] for k in keys if k.endswith(".weight")}
-                    qweight_keys = {k[:-len(".qweight")] for k in keys if k.endswith(".qweight")}
-                    # Linear layers present as .weight but not .qweight should be in modules_to_not_convert
+                        all_keys = list(sf.keys())
+                    weight_keys = {k[:-len(".weight")] for k in all_keys if k.endswith(".weight")}
+                    qweight_keys = {k[:-len(".qweight")] for k in all_keys if k.endswith(".qweight")}
+                    # Layers with .weight but no .qweight were skipped by the quantizer — they need
+                    # to be in modules_to_not_convert so backends don't try to allocate AWQ buffers.
+                    # Exclude norm layers, embeddings, and other non-projection weights by name heuristic.
+                    _fp_layer_suffixes = frozenset({"q_proj", "k_proj", "v_proj", "o_proj", "out_proj",
+                                                    "gate_proj", "up_proj", "down_proj", "fc1", "fc2",
+                                                    "linear_1", "linear_2", "dense", "dense_h_to_4h",
+                                                    "dense_4h_to_h", "in_proj", "proj"})
+                    fp_names: set[str] = set()
                     for layer_name in weight_keys - qweight_keys:
-                        # Only include layers that look like linear projections (not norms, biases, etc.)
                         last = layer_name.split(".")[-1]
-                        if last in ("weight",):
-                            continue  # skip bare "weight" keys from embedding tables etc.
-                        fp_names.add(last)
+                        if last in _fp_layer_suffixes:
+                            fp_names.add(last)
                     if fp_names:
-                        qcfg = _json.loads(qcfg_path.read_text())
-                        existing = set(qcfg.get("modules_to_not_convert") or [])
-                        new_names = fp_names - existing
-                        if new_names:
-                            qcfg["modules_to_not_convert"] = sorted(existing | fp_names)
-                            qcfg_path.write_text(_json.dumps(qcfg, indent=2))
-                            self.ev.log(f"{recipe}: patched quantize_config.json modules_to_not_convert += {sorted(new_names)}")
+                        # Patch quantize_config.json (vLLM hint) and config.json (SGLang reads this)
+                        for cfg_file, cfg_key in [("quantize_config.json", None), ("config.json", "quantization_config")]:
+                            cfg_path = d / cfg_file
+                            if not cfg_path.exists():
+                                continue
+                            raw = _json.loads(cfg_path.read_text())
+                            target = raw if cfg_key is None else raw.get(cfg_key, {})
+                            if not isinstance(target, dict):
+                                continue
+                            existing = set(target.get("modules_to_not_convert") or [])
+                            new_names = fp_names - existing
+                            if new_names:
+                                target["modules_to_not_convert"] = sorted(existing | fp_names)
+                                if cfg_key is not None:
+                                    raw[cfg_key] = target
+                                cfg_path.write_text(_json.dumps(raw, indent=2))
+                        self.ev.log(f"{recipe}: patched modules_to_not_convert in config.json and quantize_config.json += {sorted(fp_names - existing)}")
                 out[fmt] = {"status": "exported", **res.to_dict()}
                 self.ev.log(f"{recipe}: exported {fmt} -> {d}")
             except Exception as e:
