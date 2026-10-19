@@ -294,3 +294,88 @@ def test_defaults_are_the_ones_the_wizard_sends_when_nothing_is_touched(tmp_path
         None,
         24,
     )
+
+
+def test_from_yaml_reads_export_and_vllm_deploy_fields(tmp_path: Path) -> None:
+    p = tmp_path / "j.yaml"
+    p.write_text(
+        yaml.safe_dump(
+            {
+                "metadata": {"name": "n"},
+                "model": {"path": "/m", "type": "vlm"},
+                "quant": {"recipe": ["w4a16"], "algorithm": "rtn"},
+                "calibration": {},
+                "evaluation": {},
+                "deploy": {"export": ["awq", "gptq"], "vllm": {"concurrency": 2, "requests": 8}},
+            }
+        )
+    )
+    s = VLMJobSpec.from_yaml(p)
+    assert s.export == ["awq", "gptq"]
+    assert s.vllm == {"concurrency": 2, "requests": 8}
+
+
+def test_export_and_vllm_default_to_empty_and_none(tmp_path: Path) -> None:
+    p = tmp_path / "j.yaml"
+    p.write_text(yaml.safe_dump({"model": {"path": "/m"}, "quant": {"recipe": ["w4a16"]}}))
+    s = VLMJobSpec.from_yaml(p)
+    assert s.export == []
+    assert s.vllm is None
+
+
+def test_export_recipe_is_called_when_export_is_non_empty(tmp_path: Path) -> None:
+    """_export_recipe must be invoked after eval_quantized; its return value is stored in rep['export']."""
+    exported: list[str] = []
+
+    def factory(s: VLMJobSpec) -> Any:
+        fa = FakeAdapter()
+        return fa
+
+    job = VLMJob(spec(tmp_path, export=["awq"], vllm=None), adapter_factory=factory)
+
+    # Patch _export_recipe to record that it was called and return a stub (no real exporter needed).
+    def fake_export(ad: Any, recipe_name: str) -> dict:
+        exported.append(recipe_name)
+        return {"awq": {"status": "exported", "bytes": 1}}
+
+    job._export_recipe = fake_export  # type: ignore[method-assign]
+    rep = job.run()
+    assert "export" in rep["recipes"]["W4A16"], "export key must be in recipe report"
+    assert exported == ["W4A16"], "export was not called for the recipe"
+
+
+def test_vllm_serve_is_called_only_when_vllm_is_set_and_export_succeeded(tmp_path: Path) -> None:
+    """_vllm_serve must only be called when the export step produced status='exported'."""
+    served: list[str] = []
+
+    job = VLMJob(spec(tmp_path, export=["awq"], vllm={"concurrency": 1}))
+
+    def fake_export(ad: Any, recipe_name: str) -> dict:
+        return {"awq": {"status": "exported", "bytes": 1}}
+
+    def fake_serve(ckpt: Path, evals: list) -> dict:  # type: ignore[name-defined]
+        served.append(str(ckpt))
+        return {"status": "succeeded"}
+
+    job._export_recipe = fake_export  # type: ignore[method-assign]
+    job._vllm_serve = fake_serve  # type: ignore[method-assign]
+    job.run()
+    assert len(served) == 1, "vllm serve must be called once for the one exported recipe"
+
+
+def test_vllm_serve_is_not_called_when_export_failed(tmp_path: Path) -> None:
+    served: list[str] = []
+
+    job = VLMJob(spec(tmp_path, export=["awq"], vllm={"concurrency": 1}))
+
+    def fake_export(ad: Any, recipe_name: str) -> dict:
+        return {"awq": {"status": "unsupported", "n_problems": 1}}
+
+    def fake_serve(ckpt: Path, evals: list) -> dict:  # type: ignore[name-defined]
+        served.append(str(ckpt))
+        return {"status": "succeeded"}
+
+    job._export_recipe = fake_export  # type: ignore[method-assign]
+    job._vllm_serve = fake_serve  # type: ignore[method-assign]
+    job.run()
+    assert served == [], "vllm serve must NOT be called when export status != 'exported'"
