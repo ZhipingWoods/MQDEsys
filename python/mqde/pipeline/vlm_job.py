@@ -384,6 +384,24 @@ class VLMJob:
                         copied.append(name)
                 if copied:
                     self.ev.log(f"{recipe}: copied VLM aux files for {fmt}: {', '.join(copied)}")
+                # For AWQ exports: the merger layers in MiniCPM-V 4.6 (and similar VLMs) are plain
+                # nn.Linear in vLLM's model definition -- it does not register them for AWQ, so if the
+                # exporter quantized them it will fail at weight load with "no parameter named qweight".
+                # Patch modules_to_not_convert to include the VLM-specific fusion layer suffixes so
+                # vLLM treats them as FP16, matching what the checkpoint actually contains.
+                qcfg_path = d / "quantize_config.json"
+                if fmt == "awq" and qcfg_path.exists():
+                    import json as _json
+                    qcfg = _json.loads(qcfg_path.read_text())
+                    # Merger/projector suffixes that vLLM does not register as quantizable.
+                    # Detected by the acceptance run: merger.mlp.0.linear_1, merger.mlp.0.linear_2.
+                    vlm_fp_suffixes = ["linear_1", "linear_2"]
+                    existing = set(qcfg.get("modules_to_not_convert") or [])
+                    updated = sorted(existing | set(vlm_fp_suffixes))
+                    if updated != sorted(existing):
+                        qcfg["modules_to_not_convert"] = updated
+                        qcfg_path.write_text(_json.dumps(qcfg, indent=2))
+                        self.ev.log(f"{recipe}: patched quantize_config.json modules_to_not_convert += {vlm_fp_suffixes}")
                 out[fmt] = {"status": "exported", **res.to_dict()}
                 self.ev.log(f"{recipe}: exported {fmt} -> {d}")
             except Exception as e:
