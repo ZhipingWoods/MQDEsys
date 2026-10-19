@@ -704,6 +704,8 @@ export interface Domain {
   /** Inference backends a quantized export of this domain can be served by. Empty means no backend
    * deployment is supported. Drives BackendCards visibility without hardcoding per-domain frontend logic. */
   deploy_backends: BackendId[];
+  /** why deploy_backends is what it is; shown in the wizard when it is empty */
+  deploy_note: string;
 }
 
 export interface ExportSuggestion { format: string; verdict: "native" | "emulated" | "unsupported"; reason: string }

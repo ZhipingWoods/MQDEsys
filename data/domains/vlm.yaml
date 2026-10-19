@@ -21,3 +21,4 @@ pipeline_status: implemented  # python/mqde/pipeline/vlm_job.py (MiniCPM-V 4.6);
 # wiring (accuracy-based, not PPL -- vLLM's served output for a VLM isn't scored the same way as an LLM's)
 # is its own multi-session task, not started.
 deploy_backends: []  # feasible (vllm), not implemented
+deploy_note: "VLM 量化目前只在进程内做 fake-quant，还没有导出可服务的 checkpoint；vLLM 已能识别 MiniCPM-V 4.6 结构，导出步骤接好后即可在这里选择。"

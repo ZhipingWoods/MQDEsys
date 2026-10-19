@@ -83,6 +83,8 @@ struct Domain {
   // "llamacpp"). Empty means no backend deployment is supported or implemented. Drives the frontend's
   // BackendCards gate so new domains never require a frontend code change.
   std::vector<std::string> deploy_backends;
+  // One user-facing sentence on why deploy_backends is what it is (shown in the wizard when it is empty).
+  std::string deploy_note;
 };
 
 Result<Recipe> load_recipe(std::string_view name_or_path);

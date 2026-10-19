@@ -19,3 +19,4 @@ pipeline_status: implemented  # python/mqde/pipeline/llm_job.py
 # answer is in one place instead of re-discovered per session; a future BackendCards gating change can read
 # this instead of NewJob.tsx's current `kind === "llm"` check.
 deploy_backends: [llamacpp, vllm, sglang]  # python/mqde/pipeline/llm_job.py: all three implemented
+deploy_note: "三个后端均已实现（python/mqde/pipeline/llm_job.py）。"

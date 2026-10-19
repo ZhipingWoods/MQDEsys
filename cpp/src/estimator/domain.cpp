@@ -24,6 +24,7 @@ Result<Domain> load_domain(std::string_view id_or_path) {
   d.order = get_or<int>(j, "order", d.order);
   d.pipeline_status = get_or<std::string>(j, "pipeline_status", "ui_only_pending_backend");
   d.deploy_backends = get_or<std::vector<std::string>>(j, "deploy_backends", {});
+  d.deploy_note = get_or<std::string>(j, "deploy_note", "");
   if (d.pipeline_status != "implemented" && d.pipeline_status != "ui_only_pending_backend")
     return make_error(
         Errc::kInvalidArgument,
@@ -61,7 +62,8 @@ Json to_json(const Domain& d) {
           {"default_eval_dataset", d.default_eval_dataset},
           {"pipeline_status", d.pipeline_status},
           {"order", d.order},
-          {"deploy_backends", d.deploy_backends}};
+          {"deploy_backends", d.deploy_backends},
+          {"deploy_note", d.deploy_note}};
 }
 
 }  // namespace mqde::estimator

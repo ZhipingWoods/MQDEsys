@@ -244,6 +244,23 @@ try {
   d = await deploy();
   check('choosing vLLM instead replaces it', !!d.vllm && !d.sglang, JSON.stringify(Object.keys(d)));
 
+  // ---------------------------------------------------------------- other domains: the section is driven by data/domains/*.yaml deploy_backends
+  await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
+  await page.getByTestId('backend-toggle-vllm').waitFor({ timeout: 10000 });
+  await page.getByTestId('backend-toggle-vllm').check(); // a tick on the LLM tab that must not leak into VLM
+  await page.getByTestId('domain-tab-vlm').click();
+  await page.getByTestId('backend-cards').waitFor({ timeout: 10000 });
+  const allOff = async () => (await page.getByTestId('backend-toggle-vllm').isDisabled()) && (await page.getByTestId('backend-toggle-sglang').isDisabled()) && (await page.getByTestId('backend-toggle-llamacpp').isDisabled()) && !(await page.getByTestId('backend-toggle-vllm').isChecked());
+  check('VLM: the three backend cards are shown, not hidden, and none is selectable', await allOff());
+  check('VLM: the section says why, from vlm.yaml deploy_note', /VLM 暂不能部署/.test(await text('backend-disabled-note')) && /MiniCPM-V/.test(await text('backend-disabled-note')), await text('backend-disabled-note'));
+  check('VLM: the vLLM tick from the LLM tab does not reach the VLM job', !(await preview()).deploy?.vllm && (await preview()).model?.type === 'vlm');
+  await page.getByTestId('domain-tab-vla').click();
+  await until(() => /VLA 暂不能部署/.test(document.querySelector('[data-testid="backend-disabled-note"]')?.textContent ?? ''));
+  check('VLA: cards shown greyed out, with the DiT action-head reason from vla.yaml', (await allOff()) && /DiT/.test(await text('backend-disabled-note')));
+  await page.getByTestId('domain-tab-llm').click();
+  await until(() => !document.querySelector('[data-testid="backend-toggle-vllm"]')?.disabled);
+  check('back on LLM: all three backends are selectable again and the note is gone', !(await page.getByTestId('backend-toggle-sglang').isDisabled()) && !(await page.getByTestId('backend-toggle-llamacpp').isDisabled()) && (await page.getByTestId('backend-disabled-note').count()) === 0);
+
   check('no page errors', errors.length === 0, errors.slice(0, 2).join(' | '));
   failed = results.some((r) => !r);
 } catch (e) {

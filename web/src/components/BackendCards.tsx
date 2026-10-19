@@ -41,11 +41,13 @@ interface Props {
   single?: boolean;
   disabled?: boolean;
   disabledNote?: string;
+  /** shown on a card outside `allowed` (default: a generic "not available with these settings") */
+  unavailableNote?: string;
   /** a backend's own options, shown inside its card while it is switched on */
   options?: Partial<Record<BackendId, ReactNode>>;
 }
 
-export function BackendCards({ env, sel, onToggle, allowed = BACKEND_ORDER, single = false, disabled = false, disabledNote, options = {} }: Props) {
+export function BackendCards({ env, sel, onToggle, allowed = BACKEND_ORDER, single = false, disabled = false, disabledNote, unavailableNote, options = {} }: Props) {
   const nothing = !BACKEND_ORDER.some((b) => sel[b]);
   return (
     <div data-testid="backend-cards">
@@ -86,7 +88,7 @@ export function BackendCards({ env, sel, onToggle, allowed = BACKEND_ORDER, sing
                 <dt>测量</dt>
                 <dd>{info.measures}</dd>
               </dl>
-              {!can && <p className="note muted">{single ? "这个产物的格式不能用这个后端服务。" : "当前设置下不可选。"}</p>}
+              {!can && <p className="note muted" data-testid={`backend-unavailable-${id}`}>{unavailableNote ?? (single ? "这个产物的格式不能用这个后端服务。" : "当前设置下不可选。")}</p>}
               {on && missing && (
                 <p className="note warn" data-testid={`backend-missing-${id}`}>
                   这台服务器上没有 {info.name}：该阶段会被跳过。<Link to="/hardware">到「硬件与后端」安装</Link>
@@ -102,7 +104,7 @@ export function BackendCards({ env, sel, onToggle, allowed = BACKEND_ORDER, sing
           还没有选部署后端：只评估量化误差，不做真实部署。勾选一个或几个来真实部署并对比。
         </p>
       )}
-      {disabled && disabledNote && <p className="note muted">{disabledNote}</p>}
+      {disabled && disabledNote && <p className="note muted" data-testid="backend-disabled-note">{disabledNote}</p>}
     </div>
   );
 }

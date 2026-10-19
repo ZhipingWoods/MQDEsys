@@ -13,3 +13,5 @@ classic_algorithms:
       diffusion/video models); not implemented in this repo
 default_eval_dataset: ""
 pipeline_status: ui_only_pending_backend  # no python pipeline exists; see T-1005
+deploy_backends: []
+deploy_note: "该领域还没有量化流水线，暂无部署后端。"

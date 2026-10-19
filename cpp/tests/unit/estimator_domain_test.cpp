@@ -118,3 +118,19 @@ TEST(estimator_domain, order_is_part_of_the_json_and_a_missing_order_sorts_last_
   EXPECT_EQ(ids, (std::vector<std::string>{"mid", "alpha", "zeta"}));
   std::filesystem::remove_all(dir);
 }
+
+TEST(estimator_domain, deploy_backends_is_loaded_and_emitted_so_the_wizard_can_gate_on_data) {
+  auto llm = load_domain("llm");
+  ASSERT_TRUE(llm) << llm.error().message;
+  EXPECT_EQ(llm->deploy_backends, (std::vector<std::string>{"llamacpp", "vllm", "sglang"}));
+  EXPECT_EQ(to_json(*llm).at("deploy_backends"), (Json{"llamacpp", "vllm", "sglang"}));
+  for (const char* id : {"vlm", "vla", "world", "ewm"}) {
+    auto d = load_domain(id);
+    ASSERT_TRUE(d) << id << ": " << d.error().message;
+    EXPECT_TRUE(d->deploy_backends.empty()) << id;
+    EXPECT_TRUE(to_json(*d).at("deploy_backends").is_array()) << id;
+    // an empty list is explained to the user, not left blank
+    EXPECT_FALSE(d->deploy_note.empty()) << id;
+    EXPECT_EQ(to_json(*d).at("deploy_note"), d->deploy_note) << id;
+  }
+}

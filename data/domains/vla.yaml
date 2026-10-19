@@ -23,3 +23,4 @@ pipeline_status: implemented  # python/mqde/pipeline/vla_job.py
 # already shows no backend choice for VLA (gated on kind === "llm"); this comment exists so that absence is
 # understood as a verified conclusion, not a gap to keep re-raising.
 deploy_backends: []  # not feasible with any of llama.cpp/vllm/sglang as they exist; see comment above
+deploy_note: "VLA 的动作头是 flow-matching DiT（连续动作、迭代去噪），llama.cpp / vLLM / SGLang 都只支持文本 token 输出的服务接口，无法部署；这是上游引擎的限制。"

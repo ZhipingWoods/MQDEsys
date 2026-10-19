@@ -330,9 +330,12 @@ export default function NewJobPage() {
   }, [artifactKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The backends this job deploys to. A reused artifact (B2) goes to exactly one; a quantizing job can go to several.
-  const chosenBackends: BackendId[] = artifact
+  // Only what this domain can deploy to counts: a vLLM tick left over from the LLM tab is not a VLM choice.
+  const domainBackends: BackendId[] = currentDomain?.deploy_backends ?? [];
+  const chosenBackends: BackendId[] = (artifact
     ? deployBackend === "none" ? [] : [deployBackend]
-    : ([useVllm && "vllm", useSglang && "sglang", gguf.length > 0 && "llamacpp"].filter(Boolean) as BackendId[]);
+    : ([useVllm && "vllm", useSglang && "sglang", gguf.length > 0 && "llamacpp"].filter(Boolean) as BackendId[])
+  ).filter((b) => domainBackends.includes(b));
   const toggleBackend = (id: BackendId, on: boolean) => {
     if (artifact) {
       if (on) setDeployBackend(id);
@@ -966,7 +969,7 @@ export default function NewJobPage() {
             </select>
           </div>
         </div>
-        {(currentDomain?.deploy_backends?.length ?? 0) > 0 && (
+        {currentDomain && !blocked && (
           <div data-testid="backend-section" style={{ marginTop: 10 }}>
             <label className="small">部署后端（真实部署并实测；可以同时选几个来对比）</label>
             <BackendCards
@@ -978,9 +981,10 @@ export default function NewJobPage() {
               }}
               onToggle={toggleBackend}
               single={!!artifact}
-              allowed={artifact ? (isGguf ? ["llamacpp"] : ["vllm", "sglang"]) : (kind !== "llm" ? currentDomain!.deploy_backends as BackendId[] : undefined)}
-              disabled={quantizeOnly}
-              disabledNote="仅量化不评测已开启：导出/部署需要评测得到的 fake-quant 基线，本次跳过。"
+              allowed={artifact ? (isGguf ? ["llamacpp"] : ["vllm", "sglang"]) : domainBackends}
+              disabled={quantizeOnly || domainBackends.length === 0}
+              disabledNote={domainBackends.length === 0 ? `${kind.toUpperCase()} 暂不能部署到推理后端：${currentDomain.deploy_note || "该领域没有声明可用后端。"}` : "仅量化不评测已开启：导出/部署需要评测得到的 fake-quant 基线，本次跳过。"}
+              unavailableNote={artifact ? undefined : `${kind.toUpperCase()} 领域不支持这个后端。`}
               options={{
                 llamacpp: artifact ? undefined : (
                   <div>
