@@ -27,7 +27,7 @@ export const LLM_STAGES: [string, string][] = [
 
 const pct = (v: number | null | undefined) => (v == null ? "–" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`);
 const wdesc = (r: LLMRecipeReport) =>
-  `W ${r.weight.format}${r.weight.bits ?? ""}${r.weight.group_size ? " g" + r.weight.group_size : ""} · A ${r.act.format === "none" ? "FP" : `${r.act.format}${r.act.bits ?? ""}`}`;
+  `W ${r.weight.format}${r.weight.format.startsWith("fp8") ? "" : (r.weight.bits ?? "")}${r.weight.group_size ? " g" + r.weight.group_size : ""} · A ${r.act.format === "none" ? "FP" : `${r.act.format}${r.act.format.startsWith("fp8") ? "" : (r.act.bits ?? "")}`}`;
 
 export function ordered(rep: LLMJobReport): LLMRecipeReport[] {
   // A job that failed before writing its full report (or a stand-in worker in a test) may have no spec / recipes at

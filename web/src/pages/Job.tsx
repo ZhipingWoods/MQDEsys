@@ -378,7 +378,7 @@ export function VLARecipeErrorAnalysis({ r, rep }: { r: RecipeReport; rep: JobRe
         <Tile label="动作 rel-L2" value={fmt(r.eval.action_rel_l2, 4)} hint={`${fmt(r.summary.action_rel_l2_over_noise_floor, 2)} × 噪声下限`} />
         <Tile label="动作 cos" value={fmt(r.eval.action_cos, 4)} />
         <Tile label="VL 嵌入 cos" value={fmt(r.eval.vl_cos, 4)} hint={`SQNR ${fmt(r.eval.vl_sqnr_db, 1)} dB`} />
-        <Tile label="量化层数" value={`${r.layers.length}`} hint={`W: ${r.weight.format}${r.weight.bits ?? ""} ${r.weight.granularity ?? ""}${r.weight.group_size ? " g" + r.weight.group_size : ""} · A: ${r.act.format}`} />
+        <Tile label="量化层数" value={`${r.layers.length}`} hint={`W: ${r.weight.format}${r.weight.format.startsWith("fp8") ? "" : (r.weight.bits ?? "")} ${r.weight.granularity ?? ""}${r.weight.group_size ? " g" + r.weight.group_size : ""} · A: ${r.act.format}`} />
       </div>
       <LayerAnalysis layers={r.layers} />
     </>
