@@ -496,10 +496,14 @@ class VLMJob:
                               for x, g in zip(evals, gens, strict=True)][:8]}
 
     def _vlm_openai_payload(self, sample: Any, model: str, n_predict: int) -> dict[str, Any]:
-        """Build an OpenAI chat-completions payload for one VLMSample: image as a data URL, question as user text."""
+        """Build an OpenAI chat-completions payload for one VLMSample: image as a data URL, question as user text.
+
+        VLMSample.images is a list of HxWx3 uint8 numpy arrays; we take the first image and PNG-encode it."""
         import base64, io
+        import numpy as np
         from PIL import Image
-        img: Image.Image = sample.image
+        arr = sample.images[0]  # HxWx3 uint8 numpy array
+        img = Image.fromarray(arr.astype(np.uint8))
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         data_url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
