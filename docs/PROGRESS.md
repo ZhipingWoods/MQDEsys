@@ -18,6 +18,19 @@
 | 下一步建议 | ① 真实部署路径（T-0405 打包 → T-0705 llama.cpp / T-0701 vLLM）让显存真正下降；② GPTQ/AWQ/SmoothQuant（T-0601~0603）改善 W4A8/W2；③ 敏感层混合精度（T-0608/T-0904，数据已指向视觉前 5 块）；④ T-0005/T-0006 CI |
 | 最后更新 | 2026-09-30 · Claude（Opus 5） |
 
+### 2026-10-19 · @claude-opus-5-5 · T-F SGLang support added and verified on real hardware
+
+- **状态**：DONE（vLLM + SGLang 都在真机上跑通）
+- **真机验收（MiniCPM-V 4.6, CUDA:4）**：
+  - vLLM:   smoke='Paris', 47.5 tok/s, served_accuracy=1.0
+  - SGLang: smoke='Paris', 44.8 tok/s, served_accuracy=1.0
+- **代码**：`_vllm_serve` 重构为 `_serve(backend, ...)` 同时支持 vLLM 和 SGLang；`VLMJobSpec` 新增 `sglang` 字段；YAML 形状与 LLM 作业对齐（`export.formats`）
+- **真机发现的三个 SGLang 兼容性 bug 并修复**：
+  1. `vit_merger.linear_2` 维度 17216 不被 128 整除，量化器跳过了它（safetensors 里是 .weight），但 `quantize_config.json` 没列进 `modules_to_not_convert`，SGLang 读 config.json 构造层时为它分配 AWQ 缓冲区失败。修复：导出后扫描 safetensors，把有 .weight 没 .qweight 的线性层加进 config.json 和 quantize_config.json 两处的 `modules_to_not_convert`。
+  2. SGLang 读 `config.json["quantization_config"]` 构造层（不是 quantize_config.json），之前只 patch 了后者。修复：两处都 patch。
+  3. MiniCPM-V 4.6 的线性注意力层用 BFloat16，强制 `dtype=float16` 导致 KV-cache dtype 不匹配崩溃。修复：SGLang `dtype=auto`。
+- **vlm.yaml**：`deploy_backends: [vllm, sglang]`
+- **校验**：43/43 VLM 单元测试；44/44 backend_cards e2e；生产 18080 重启后 `/api/v1/domains` 正确返回 `vlm -> ['vllm','sglang']`
 ### 2026-10-19 · @claude-opus-5-5 · T-F real-machine acceptance run (MiniCPM-V 4.6 + vLLM 0.30.0)
 
 - **状态**：DONE（真机全链路验证，含修复三个实机发现的 bug）
@@ -1029,6 +1042,7 @@ P13（领域泛化与前端重构）全部 8 个任务（T-1301～T-1308）完�
 `scripts/setup_backend.py` + `mqde.backend.envs` + `/api/v1/backend-envs` + 硬件页卡片，真机（4090）验证：全新目录装出 vLLM 0.31.0（61 s）、SGLang 0.5.21（151 s），不导出任何 `MQDE_*_BIN` 两者都能启动并压测；llama.cpp 识别 CUDA 包与 glibc 不兼容并回退 CPU 包 `b11569`。细节与踩坑见 TASKS.md T-0704。测试：C++ 13 + Python 81 + 前端 e2e 27，每个新逻辑都做了变异测试。
 
 **待你定**：①生产服务（18080）目前用 `MQDE_VLLM_BIN`/`MQDE_SGLANG_PYTHON` 指向现有环境，这样按钮是禁用的（见上）。要启用按钮，需取消这两个变量并让按钮装一份托管环境（约 11 GB 下载）——我没替你切，因为 `/cache/wuzhiping/envs/vllm` 是你已有的环境，原地更新会改它的版本。②MiniCPM-V-4.6 等你下载完再继续 VLM 流水线。
+
 
 
 
