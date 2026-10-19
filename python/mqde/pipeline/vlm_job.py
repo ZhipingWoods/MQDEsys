@@ -333,7 +333,7 @@ class VLMJob:
                 rep["summary"] = self._summarize(rep, self.report["baseline"])
             # Export the still-quantized model to disk (before engine.restore()), then optionally serve with vLLM.
             if s.export and not s.quantize_only:
-                rep["export"] = self._export_recipe(ad, recipe.name)
+                rep["export"] = self._export_recipe(ad, recipe.name, engine)
                 if s.vllm:
                     for fmt, exp in rep["export"].items():
                         if exp.get("status") == "exported":
@@ -344,7 +344,7 @@ class VLMJob:
             self._save()
         self._stage("report", self._save)
 
-    def _export_recipe(self, ad: Any, recipe: str) -> dict[str, Any]:
+    def _export_recipe(self, ad: Any, recipe: str, engine: Any | None = None) -> dict[str, Any]:
         """Write the still-quantized model as a servable checkpoint, one per format in spec.export.
 
         Reuses the LLM exporters (python/mqde/export/__init__.py) — they take an nn.Module and a source
@@ -354,18 +354,45 @@ class VLMJob:
 
         VLM checkpoints also need preprocessor_config.json (the image processor config) and
         configuration.json (the HF Hub metadata) which the LLM exporter does not write — copy them
-        from the source model directory when they exist, so vLLM can load the exported checkpoint."""
+        from the source model directory when they exist, so vLLM can load the exported checkpoint.
+
+        vLLM compatibility: some VLM fusion layers (merger.mlp.0.linear_1, linear_2 in MiniCPM-V)
+        are plain nn.Linear in vLLM's model definition and cannot accept AWQ qweight keys.  When an
+        engine is passed, we temporarily restore those layers to their original nn.Linear before
+        exporting (so the safetensors file contains .weight, not .qweight for them), then put
+        the FakeQuantLinear versions back so the calling loop's engine.restore() still works."""
         import shutil
         from mqde.export import get_exporter
+        from mqde.quant.modules import replace_module
 
         # VLM-specific files the LLM exporter does not know to copy; present in MiniCPM-V and similar.
         vlm_aux_files = ("preprocessor_config.json", "configuration.json")
 
+        # Layer name suffixes that vLLM's VLM models do not register as AWQ-quantizable.
+        # Restoring these to FP16 before export prevents qweight keys from landing in safetensors.
+        vlm_fp_suffixes = ("linear_1", "linear_2")
+
         out: dict[str, Any] = {}
         for fmt in self.spec.export:
             ex = get_exporter(fmt)
+            # Temporarily restore VLM-incompatible layers to their original nn.Linear so the
+            # exporter writes .weight (not .qweight) for them in the safetensors file.
+            restored: list[tuple[str, Any]] = []
+            if engine is not None and fmt == "awq":
+                for name, orig_lin in list(engine.originals.items()):
+                    if name.split(".")[-1] in vlm_fp_suffixes:
+                        from mqde.quant.modules import FakeQuantLinear
+                        current = dict(ad.model.named_modules()).get(name)
+                        if isinstance(current, FakeQuantLinear):
+                            replace_module(ad.model, name, orig_lin)
+                            restored.append((name, current))
+                if restored:
+                    self.ev.log(f"{recipe}: temporarily restored {len(restored)} VLM-incompatible layers to FP16 for {fmt} export")
             problems = ex.check(ad.model)
             if problems:
+                # Re-insert the FakeQuantLinear modules before returning
+                for name, fq in restored:
+                    replace_module(ad.model, name, fq)
                 out[fmt] = {"status": "unsupported", "problems": [{"layer": n, "reason": r} for n, r in problems[:20]],
                             "n_problems": len(problems)}
                 self.ev.log(f"{recipe}: {fmt} export skipped: {problems[0][1]} ({len(problems)} layers)", level="warning")
@@ -374,6 +401,9 @@ class VLMJob:
             d.mkdir(parents=True, exist_ok=True)
             try:
                 res = ex.export(ad.model, d, self.spec.model_path)
+                # Re-insert the FakeQuantLinear modules so engine.restore() in the calling loop works.
+                for name, fq in restored:
+                    replace_module(ad.model, name, fq)
                 # Copy VLM-specific aux files the LLM exporter skipped, so vLLM can load the checkpoint.
                 src = Path(self.spec.model_path)
                 copied: list[str] = []
@@ -384,27 +414,11 @@ class VLMJob:
                         copied.append(name)
                 if copied:
                     self.ev.log(f"{recipe}: copied VLM aux files for {fmt}: {', '.join(copied)}")
-                # For AWQ exports: the merger layers in MiniCPM-V 4.6 (and similar VLMs) are plain
-                # nn.Linear in vLLM's model definition -- it does not register them for AWQ, so if the
-                # exporter quantized them it will fail at weight load with "no parameter named qweight".
-                # Patch modules_to_not_convert to include the VLM-specific fusion layer suffixes so
-                # vLLM treats them as FP16, matching what the checkpoint actually contains.
-                qcfg_path = d / "quantize_config.json"
-                if fmt == "awq" and qcfg_path.exists():
-                    import json as _json
-                    qcfg = _json.loads(qcfg_path.read_text())
-                    # Merger/projector suffixes that vLLM does not register as quantizable.
-                    # Detected by the acceptance run: merger.mlp.0.linear_1, merger.mlp.0.linear_2.
-                    vlm_fp_suffixes = ["linear_1", "linear_2"]
-                    existing = set(qcfg.get("modules_to_not_convert") or [])
-                    updated = sorted(existing | set(vlm_fp_suffixes))
-                    if updated != sorted(existing):
-                        qcfg["modules_to_not_convert"] = updated
-                        qcfg_path.write_text(_json.dumps(qcfg, indent=2))
-                        self.ev.log(f"{recipe}: patched quantize_config.json modules_to_not_convert += {vlm_fp_suffixes}")
                 out[fmt] = {"status": "exported", **res.to_dict()}
                 self.ev.log(f"{recipe}: exported {fmt} -> {d}")
             except Exception as e:
+                for name, fq in restored:
+                    replace_module(ad.model, name, fq)
                 out[fmt] = {"status": "failed", "error": f"{type(e).__name__}: {e}"[:1500]}
                 self.ev.log(f"{recipe}: {fmt} export failed: {e}", level="warning")
         return out
