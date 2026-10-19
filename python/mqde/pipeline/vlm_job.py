@@ -68,7 +68,8 @@ class VLMJobSpec:
     seed: int = 0
     output_dir: str = "runs"
     export: list[str] = dataclasses.field(default_factory=list)  # quantized export formats, e.g. ["awq"]
-    vllm: dict | None = None  # if set, serve each exported checkpoint with vLLM and measure accuracy
+    vllm: dict | None = None  # deploy.vllm: serve each exported checkpoint with vLLM and measure accuracy
+    sglang: dict | None = None  # deploy.sglang: same with SGLang
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> VLMJobSpec:
@@ -92,8 +93,9 @@ class VLMJobSpec:
             mixed_precision=q.get("mixed_precision"),
             seed=int(d.get("seed", 0)),
             output_dir=d.get("output_dir", "runs"),
-            export=[str(x) for x in dep.get("export", [])] if dep.get("export") else [],
-            vllm=dep.get("vllm") if dep.get("vllm") is not None else None,
+            export=[str(x) for x in ((d.get("export") or {}).get("formats") or dep.get("export") or [])],
+            vllm=(dep.get("vllm") if isinstance(dep.get("vllm"), dict) else ({} if dep.get("vllm") else None)),
+            sglang=(dep.get("sglang") if isinstance(dep.get("sglang"), dict) else ({} if dep.get("sglang") else None)),
         )
 
 
@@ -334,11 +336,12 @@ class VLMJob:
             # Export the still-quantized model to disk (before engine.restore()), then optionally serve with vLLM.
             if s.export and not s.quantize_only:
                 rep["export"] = self._export_recipe(ad, recipe.name, engine)
-                if s.vllm:
+                for backend in [b for b in ("vllm", "sglang") if getattr(s, b) is not None]:
                     for fmt, exp in rep["export"].items():
                         if exp.get("status") == "exported":
                             ckpt = Path(self.out / "export" / f"{recipe.name.lower()}-{fmt}")
-                            exp["vllm"] = self._stage("deploy_vllm", lambda ckpt=ckpt: self._vllm_serve(ckpt, evals), msg=f"{recipe.name}/{fmt}")
+                            exp[backend] = self._stage(f"deploy_{backend}", lambda ckpt=ckpt, b=backend: self._serve(b, ckpt, evals),
+                                                       msg=f"{recipe.name}/{fmt}")
             engine.restore()
             self.report["recipes"][recipe.name] = rep
             self._save()
@@ -423,77 +426,89 @@ class VLMJob:
                 self.ev.log(f"{recipe}: {fmt} export failed: {e}", level="warning")
         return out
 
-    def _vllm_serve(self, ckpt: Path, evals: list[Any]) -> dict[str, Any]:
-        """Serve the exported VLM checkpoint with vLLM and score it on the eval set.
+    def _serve(self, backend: str, ckpt: Path, evals: list[Any]) -> dict[str, Any]:
+        """Serve the exported VLM checkpoint with vLLM or SGLang and score it on the eval set.
 
-        Scoring is accuracy-based, not PPL: vLLM generates an answer for each image+question (greedy,
-        same max_new_tokens as the in-process reference), and the answer is compared token-for-token with
-        the in-process reference answer. The smoke + load + startup measurements are the same as the LLM
-        serve path."""
+        Scoring is accuracy-based, not PPL: the server generates an answer for each image+question (greedy, OpenAI
+        chat-completions with the image as a data URL) and the answer is checked against the sample's ground truth with
+        answer_matches. Startup, smoke and closed-loop load are measured the same way as in the LLM job."""
+        import http.client
+        import json as _json
+
         from mqde.backend.base import openai_models, openai_smoke
-        from mqde.backend.vllm_server import VllmServer, vllm_bin
         from mqde.eval.loadtest import LoadSpec, run_load
 
-        s, cfg = self.spec, dict(self.spec.vllm or {})
+        s = self.spec
+        cfg = dict(getattr(s, backend) or {})
+        title = {"vllm": "vLLM", "sglang": "SGLang"}[backend]
         try:
-            vllm_bin()
+            if backend == "vllm":
+                from mqde.backend.vllm_server import vllm_bin
+
+                vllm_bin()
+            else:
+                from mqde.backend.sglang_server import sglang_python
+
+                sglang_python()
         except FileNotFoundError as e:
-            self.ev.log(f"vLLM {ckpt.name}: skipped ({e})")
+            self.ev.log(f"{title} {ckpt.name}: skipped ({e})")
             return {"status": "skipped", "reason": str(e)}
         if not torch.cuda.is_available():
-            self.ev.log(f"vLLM {ckpt.name}: skipped (no CUDA device)")
+            self.ev.log(f"{title} {ckpt.name}: skipped (no CUDA device)")
             return {"status": "skipped", "reason": "no CUDA device"}
         conc, n_predict = int(cfg.get("concurrency", 4)), int(cfg.get("n_predict", s.max_new_tokens))
         prompt_len = int(cfg.get("prompt_len", 256))
-        max_len = int(cfg.get("max_model_len", max(prompt_len + n_predict + 64, s.max_new_tokens + 512)))
+        # an image alone is several hundred tokens: leave room for it, not just for the text prompt
+        max_len = int(cfg.get("max_model_len", max(prompt_len + n_predict + 64, 4096)))
         serve_dir = self.out / "serve" / ckpt.name
         serve_dir.mkdir(parents=True, exist_ok=True)
-        srv = VllmServer(ckpt, serve_dir / f"vllm-{ckpt.name}.log", max_model_len=max_len, dtype="float16",
-                         gpu_memory_utilization=float(cfg.get("gpu_memory_utilization", 0.3)),
-                         enforce_eager=bool(cfg.get("enforce_eager", True)),
-                         max_num_seqs=max(8, conc))
-        self.ev.log(f"vLLM {ckpt.name}: starting on {srv.port} (max_model_len {max_len})")
+        log = serve_dir / f"{backend}-{ckpt.name}.log"
+        srv: Any
+        if backend == "vllm":
+            from mqde.backend.vllm_server import VllmServer
+
+            srv = VllmServer(ckpt, log, max_model_len=max_len, dtype="float16",
+                             gpu_memory_utilization=float(cfg.get("gpu_memory_utilization", 0.5)),
+                             enforce_eager=bool(cfg.get("enforce_eager", True)), max_num_seqs=max(8, conc))
+        else:
+            from mqde.backend.sglang_server import SglangServer
+
+            srv = SglangServer(ckpt, log, max_model_len=max_len, dtype="float16",
+                               mem_fraction_static=float(cfg.get("mem_fraction_static", 0.5)),
+                               disable_cuda_graph=bool(cfg.get("disable_cuda_graph", True)), max_running_requests=max(8, conc))
+        self.ev.log(f"{title} {ckpt.name}: starting on {srv.port} (max_model_len {max_len})")
+        gens: list[str] = []
         try:
             with srv:
                 sm = openai_smoke(srv.port)
-                self.ev.log(f"vLLM {ckpt.name}: smoke -> {sm['text']!r}")
+                self.ev.log(f"{title} {ckpt.name}: smoke -> {sm['text']!r}")
                 load = run_load(srv.port, LoadSpec(concurrency=conc, requests=int(cfg.get("requests", 16)),
                                                    prompt_len=prompt_len, n_predict=n_predict))
-                # VLM scoring: generate an answer for each eval sample and compare with the reference.
-                from mqde.models.minicpmv import MiniCPMV  # for the image-encoding path
-                import base64, http.client, json as _json
                 models = openai_models(srv.port)
                 served_model = models[0]["id"] if models else ckpt.name
-                gens: list[str] = []
                 conn = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=300)
                 for sample in evals:
-                    # The adapter knows how to turn a VLMSample into the OpenAI chat format vLLM expects.
-                    payload = self._vlm_openai_payload(sample, served_model, n_predict)
-                    conn.request("POST", "/v1/chat/completions", body=_json.dumps(payload),
+                    conn.request("POST", "/v1/chat/completions", body=_json.dumps(self._vlm_openai_payload(sample, served_model, n_predict)),
                                  headers={"Content-Type": "application/json"})
-                    resp = conn.getresponse()
-                    body = _json.loads(resp.read().decode())
-                    gens.append(body.get("choices", [{}])[0].get("message", {}).get("content", ""))
+                    body = _json.loads(conn.getresponse().read().decode())
+                    gens.append(((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
                 conn.close()
                 props, engine = srv.props(), srv.engine_info()
         except Exception as e:
-            self.ev.log(f"vLLM {ckpt.name}: failed: {e}", level="warning")
+            self.ev.log(f"{title} {ckpt.name}: failed: {e}", level="warning")
             return {"status": "failed", "error": str(e)[:1500], "diagnosis": srv.diagnose()}
-        # accuracy: how many served answers match the reference (answer_matches from this module)
-        ref_answers = [self._reference_answer(x) for x in evals]
-        matches = sum(answer_matches(g, a) for g, a in zip(gens, ref_answers, strict=True) if a)
-        gt_samples = sum(1 for a in ref_answers if a)
-        served_accuracy = (matches / gt_samples) if gt_samples else None
+        truths = [self._reference_answer(x) for x in evals]
+        gt_samples = sum(1 for a in truths if a)
+        served_accuracy = (sum(answer_matches(g, a) for g, a in zip(gens, truths, strict=True) if a) / gt_samples) if gt_samples else None
         good = bool(sm["ok"]) and load.get("ok") == load["spec"]["requests"]
         if load.get("ok"):
-            self.ev.emit("metric", name=f"vllm.{ckpt.name}.serve_tps", value=load["output_tokens_per_s"], msg=f"vLLM {ckpt.name}")
+            self.ev.emit("metric", name=f"{backend}.{ckpt.name}.serve_tps", value=load["output_tokens_per_s"], msg=f"{title} {ckpt.name}")
         if served_accuracy is not None:
-            self.ev.emit("metric", name=f"vllm.{ckpt.name}.served_accuracy", value=served_accuracy, msg=f"vLLM {ckpt.name}")
+            self.ev.emit("metric", name=f"{backend}.{ckpt.name}.served_accuracy", value=served_accuracy, msg=f"{title} {ckpt.name}")
         return {"status": "succeeded" if good else "degraded", "startup_s": srv.startup_s, "args": srv.args,
                 "props": props, "engine": engine, "smoke": sm, "load": load,
                 "served_accuracy": served_accuracy, "served_gt_samples": gt_samples,
-                "examples": [{"question": x.question, "answer": g, "truth": x.answer}
-                              for x, g in zip(evals, gens, strict=True)][:8]}
+                "examples": [{"question": x.question, "answer": g, "truth": x.answer} for x, g in zip(evals, gens, strict=True)][:8]}
 
     def _vlm_openai_payload(self, sample: Any, model: str, n_predict: int) -> dict[str, Any]:
         """Build an OpenAI chat-completions payload for one VLMSample: image as a data URL, question as user text.

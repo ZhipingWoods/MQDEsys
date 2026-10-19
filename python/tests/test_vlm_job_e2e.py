@@ -306,13 +306,15 @@ def test_from_yaml_reads_export_and_vllm_deploy_fields(tmp_path: Path) -> None:
                 "quant": {"recipe": ["w4a16"], "algorithm": "rtn"},
                 "calibration": {},
                 "evaluation": {},
-                "deploy": {"export": ["awq", "gptq"], "vllm": {"concurrency": 2, "requests": 8}},
+                "export": {"formats": ["awq", "gptq"]},
+                "deploy": {"vllm": {"concurrency": 2, "requests": 8}, "sglang": {}},
             }
         )
     )
     s = VLMJobSpec.from_yaml(p)
     assert s.export == ["awq", "gptq"]
     assert s.vllm == {"concurrency": 2, "requests": 8}
+    assert s.sglang == {}
 
 
 def test_export_and_vllm_default_to_empty_and_none(tmp_path: Path) -> None:
@@ -355,12 +357,12 @@ def test_vllm_serve_is_called_only_when_vllm_is_set_and_export_succeeded(tmp_pat
     def fake_export(ad: object, recipe_name: str, engine: object | None = None) -> dict:  # type: ignore[type-arg]
         return {"awq": {"status": "exported", "bytes": 1}}
 
-    def fake_serve(ckpt: Path, evals: list) -> dict:  # type: ignore[type-arg]
+    def fake_serve(backend: str, ckpt: Path, evals: list) -> dict:  # type: ignore[type-arg]
         served.append(str(ckpt))
         return {"status": "succeeded"}
 
     job._export_recipe = fake_export  # type: ignore[method-assign]
-    job._vllm_serve = fake_serve  # type: ignore[method-assign]
+    job._serve = fake_serve  # type: ignore[method-assign]
     job.run()
     assert len(served) == 1, "vllm serve must be called once for the one exported recipe"
 
@@ -376,11 +378,36 @@ def test_vllm_serve_is_not_called_when_export_failed(tmp_path: Path) -> None:
     def fake_export(ad: object, recipe_name: str, engine: object | None = None) -> dict:  # type: ignore[type-arg]
         return {"awq": {"status": "unsupported", "n_problems": 1}}
 
-    def fake_serve(ckpt: Path, evals: list) -> dict:  # type: ignore[type-arg]
+    def fake_serve(backend: str, ckpt: Path, evals: list) -> dict:  # type: ignore[type-arg]
         served.append(str(ckpt))
         return {"status": "succeeded"}
 
     job._export_recipe = fake_export  # type: ignore[method-assign]
-    job._vllm_serve = fake_serve  # type: ignore[method-assign]
+    job._serve = fake_serve  # type: ignore[method-assign]
     job.run()
     assert served == [], "vllm serve must NOT be called when export status != 'exported'"
+
+
+def test_the_older_deploy_export_shape_is_still_read(tmp_path: Path) -> None:
+    p = tmp_path / "j.yaml"
+    p.write_text(yaml.safe_dump({"model": {"path": "/m"}, "quant": {"recipe": ["w4a16"]}, "deploy": {"export": ["awq"], "vllm": True}}))
+    s = VLMJobSpec.from_yaml(p)
+    assert (s.export, s.vllm, s.sglang) == (["awq"], {}, None)
+
+
+def test_each_requested_backend_serves_each_exported_checkpoint(tmp_path: Path) -> None:
+    calls: list[tuple[str, str]] = []
+
+    job = VLMJob(spec(tmp_path, export=["awq"], vllm={}, sglang={}), job_id="j", adapter_factory=lambda s: FakeAdapter())
+    job._export_recipe = lambda ad, r, engine=None: {"awq": {"status": "exported"}}  # type: ignore[method-assign]
+
+    def fake_serve(backend: str, ckpt: Path, evals: list) -> dict:  # type: ignore[type-arg]
+        calls.append((backend, ckpt.name))
+        return {"status": "succeeded", "served_accuracy": 1.0}
+
+    job._serve = fake_serve  # type: ignore[method-assign]
+    rep = job.run()
+    assert calls == [("vllm", "w4a16-awq"), ("sglang", "w4a16-awq")]
+    exp = rep["recipes"]["W4A16"]["export"]["awq"]
+    assert exp["vllm"]["status"] == exp["sglang"]["status"] == "succeeded"
+    assert [x["stage"] for x in rep["stages"]].count("deploy_sglang") == 1
