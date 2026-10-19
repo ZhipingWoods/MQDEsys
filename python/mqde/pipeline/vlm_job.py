@@ -355,52 +355,43 @@ class VLMJob:
     def _export_recipe(self, ad: Any, recipe: str, engine: Any | None = None) -> dict[str, Any]:
         """Write the still-quantized model as a servable checkpoint, one per format in spec.export.
 
-        Reuses the LLM exporters (python/mqde/export/__init__.py) — they take an nn.Module and a source
-        dir, and write a safetensors checkpoint + config + tokenizer. For VLM the source dir is the
-        original model_path so the visual tokenizer / preprocessor config is preserved. The model stays
-        on its current device; the exporter moves tensors to CPU for saving.
+        Reuses the LLM exporters (python/mqde/export/__init__.py). For VLM there are two compat fixes:
 
-        VLM checkpoints also need preprocessor_config.json (the image processor config) and
-        configuration.json (the HF Hub metadata) which the LLM exporter does not write — copy them
-        from the source model directory when they exist, so vLLM can load the exported checkpoint.
+        1. FP16 restore (vLLM): some VLM fusion layers are plain nn.Linear in vLLM's model definition
+           (e.g. merger.mlp.0.linear_1 in MiniCPM-V 4.6). When an engine is passed we temporarily
+           restore those FakeQuantLinear modules to their original nn.Linear before calling the
+           exporter, so the safetensors file contains .weight not .qweight for them; then we put
+           them back so the calling loop's engine.restore() still works. Matched by last name segment.
 
-        vLLM compatibility: some VLM fusion layers (merger.mlp.0.linear_1, linear_2 in MiniCPM-V)
-        are plain nn.Linear in vLLM's model definition and cannot accept AWQ qweight keys.  When an
-        engine is passed, we temporarily restore those layers to their original nn.Linear before
-        exporting (so the safetensors file contains .weight, not .qweight for them), then put
-        the FakeQuantLinear versions back so the calling loop's engine.restore() still works."""
+        2. modules_to_not_convert patch (SGLang): the quantizer skips layers whose input dimension is
+           not divisible by group_size (e.g. vit_merger.linear_2 in MiniCPM-V: in_features=17216,
+           17216%128=64). Those already land as plain .weight in the safetensors, but
+           quantize_config.json doesn't list them in modules_to_not_convert, so SGLang allocates AWQ
+           buffers for them and fails with "input size not aligned". After export we scan the
+           safetensors for every layer that has .weight but no .qweight and add its last name segment
+           to modules_to_not_convert so both vLLM and SGLang skip buffer allocation for it."""
+        import json as _json
         import shutil
         from mqde.export import get_exporter
-        from mqde.quant.modules import replace_module
+        from mqde.quant.modules import FakeQuantLinear, replace_module
 
-        # VLM-specific files the LLM exporter does not know to copy; present in MiniCPM-V and similar.
+        # VLM-specific files the LLM exporter does not know to copy.
         vlm_aux_files = ("preprocessor_config.json", "configuration.json")
 
-        # Layer name suffixes that vLLM's VLM models do not register as AWQ-quantizable.
-        # Restoring these to FP16 before export prevents qweight keys from landing in safetensors.
-        # Layers that must be exported as plain FP16 weights for both vLLM and SGLang:
-        #  - "linear_1" / "linear_2" last-segment match: covers model.merger.mlp.0.{linear_1,2}
-        #    and model.vision_tower.vit_merger.{linear_1,2} — plain nn.Linear in vLLM, and
-        #    ColumnParallelLinear/RowParallelLinear with non-128-multiple dims in SGLang.
-        #  - "vit_merger.self_attn" substring match: the four attention projections
-        #    (k_proj/q_proj/v_proj/out_proj) inside the ViT window-attention merger have
-        #    non-group-128-aligned shapes and cause "input size not aligned" in SGLang.
-        #    Using a substring guard prevents sweeping the regular vision encoder layers
-        #    (model.vision_tower.encoder.layers.*.self_attn.*) which are legitimately AWQ.
-        vlm_fp_suffixes = ("linear_1", "linear_2")  # matched by last segment
-        vlm_fp_substrings = ("vit_merger.self_attn",)  # matched by substring
+        # Layer name suffixes that backends register as plain nn.Linear (not AWQ): last-segment match.
+        # linear_1 is always in engine.originals (quantized but vLLM/SGLang can't load it as AWQ).
+        # linear_2 may or may not be quantized depending on whether its dims are group-128-aligned;
+        # if it IS in originals we restore it here, otherwise the safetensors-scan below handles it.
+        vlm_fp_suffixes = ("linear_1", "linear_2")
 
         out: dict[str, Any] = {}
         for fmt in self.spec.export:
             ex = get_exporter(fmt)
-            # Temporarily restore VLM-incompatible layers to their original nn.Linear so the
-            # exporter writes .weight (not .qweight) for them in the safetensors file.
+            # Step 1: temporarily restore FakeQuantLinear layers to nn.Linear before export.
             restored: list[tuple[str, Any]] = []
             if engine is not None and fmt == "awq":
                 for name, orig_lin in list(engine.originals.items()):
-                    last = name.split(".")[-1]
-                    if last in vlm_fp_suffixes or any(sub in name for sub in vlm_fp_substrings):
-                        from mqde.quant.modules import FakeQuantLinear
+                    if name.split(".")[-1] in vlm_fp_suffixes:
                         current = dict(ad.model.named_modules()).get(name)
                         if isinstance(current, FakeQuantLinear):
                             replace_module(ad.model, name, orig_lin)
@@ -409,7 +400,6 @@ class VLMJob:
                     self.ev.log(f"{recipe}: temporarily restored {len(restored)} VLM-incompatible layers to FP16 for {fmt} export")
             problems = ex.check(ad.model)
             if problems:
-                # Re-insert the FakeQuantLinear modules before returning
                 for name, fq in restored:
                     replace_module(ad.model, name, fq)
                 out[fmt] = {"status": "unsupported", "problems": [{"layer": n, "reason": r} for n, r in problems[:20]],
@@ -420,19 +410,43 @@ class VLMJob:
             d.mkdir(parents=True, exist_ok=True)
             try:
                 res = ex.export(ad.model, d, self.spec.model_path)
-                # Re-insert the FakeQuantLinear modules so engine.restore() in the calling loop works.
                 for name, fq in restored:
                     replace_module(ad.model, name, fq)
-                # Copy VLM-specific aux files the LLM exporter skipped, so vLLM can load the checkpoint.
+                # Copy VLM-specific aux files.
                 src = Path(self.spec.model_path)
                 copied: list[str] = []
-                for name in vlm_aux_files:
-                    s = src / name
-                    if s.exists() and not (d / name).exists():
-                        shutil.copy2(s, d / name)
-                        copied.append(name)
+                for aux in vlm_aux_files:
+                    if (src / aux).exists() and not (d / aux).exists():
+                        shutil.copy2(src / aux, d / aux)
+                        copied.append(aux)
                 if copied:
                     self.ev.log(f"{recipe}: copied VLM aux files for {fmt}: {', '.join(copied)}")
+                # Step 2: patch quantize_config.json so SGLang (and vLLM) skip buffer allocation for
+                # any linear layer whose safetensors key is .weight (not .qweight). This covers layers
+                # the quantizer skipped because their dims are not divisible by group_size.
+                qcfg_path = d / "quantize_config.json"
+                if fmt == "awq" and qcfg_path.exists():
+                    from safetensors import safe_open
+                    fp_names: set[str] = set()
+                    with safe_open(str(d / "model.safetensors"), framework="pt") as sf:
+                        keys = list(sf.keys())
+                    weight_keys = {k[:-len(".weight")] for k in keys if k.endswith(".weight")}
+                    qweight_keys = {k[:-len(".qweight")] for k in keys if k.endswith(".qweight")}
+                    # Linear layers present as .weight but not .qweight should be in modules_to_not_convert
+                    for layer_name in weight_keys - qweight_keys:
+                        # Only include layers that look like linear projections (not norms, biases, etc.)
+                        last = layer_name.split(".")[-1]
+                        if last in ("weight",):
+                            continue  # skip bare "weight" keys from embedding tables etc.
+                        fp_names.add(last)
+                    if fp_names:
+                        qcfg = _json.loads(qcfg_path.read_text())
+                        existing = set(qcfg.get("modules_to_not_convert") or [])
+                        new_names = fp_names - existing
+                        if new_names:
+                            qcfg["modules_to_not_convert"] = sorted(existing | fp_names)
+                            qcfg_path.write_text(_json.dumps(qcfg, indent=2))
+                            self.ev.log(f"{recipe}: patched quantize_config.json modules_to_not_convert += {sorted(new_names)}")
                 out[fmt] = {"status": "exported", **res.to_dict()}
                 self.ev.log(f"{recipe}: exported {fmt} -> {d}")
             except Exception as e:
