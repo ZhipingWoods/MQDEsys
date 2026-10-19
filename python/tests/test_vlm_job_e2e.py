@@ -327,14 +327,13 @@ def test_export_recipe_is_called_when_export_is_non_empty(tmp_path: Path) -> Non
     """_export_recipe must be invoked after eval_quantized; its return value is stored in rep['export']."""
     exported: list[str] = []
 
-    def factory(s: VLMJobSpec) -> Any:
-        fa = FakeAdapter()
-        return fa
+    def factory(s: VLMJobSpec) -> FakeAdapter:
+        return FakeAdapter()
 
-    job = VLMJob(spec(tmp_path, export=["awq"], vllm=None), adapter_factory=factory)
+    job = VLMJob(spec(tmp_path, export=["awq"], vllm=None), job_id="j", adapter_factory=factory)
 
     # Patch _export_recipe to record that it was called and return a stub (no real exporter needed).
-    def fake_export(ad: Any, recipe_name: str) -> dict:
+    def fake_export(ad: object, recipe_name: str) -> dict:  # type: ignore[type-arg]
         exported.append(recipe_name)
         return {"awq": {"status": "exported", "bytes": 1}}
 
@@ -348,12 +347,15 @@ def test_vllm_serve_is_called_only_when_vllm_is_set_and_export_succeeded(tmp_pat
     """_vllm_serve must only be called when the export step produced status='exported'."""
     served: list[str] = []
 
-    job = VLMJob(spec(tmp_path, export=["awq"], vllm={"concurrency": 1}))
+    def factory(s: VLMJobSpec) -> FakeAdapter:
+        return FakeAdapter()
 
-    def fake_export(ad: Any, recipe_name: str) -> dict:
+    job = VLMJob(spec(tmp_path, export=["awq"], vllm={"concurrency": 1}), job_id="j", adapter_factory=factory)
+
+    def fake_export(ad: object, recipe_name: str) -> dict:  # type: ignore[type-arg]
         return {"awq": {"status": "exported", "bytes": 1}}
 
-    def fake_serve(ckpt: Path, evals: list) -> dict:  # type: ignore[name-defined]
+    def fake_serve(ckpt: Path, evals: list) -> dict:  # type: ignore[type-arg]
         served.append(str(ckpt))
         return {"status": "succeeded"}
 
@@ -366,12 +368,15 @@ def test_vllm_serve_is_called_only_when_vllm_is_set_and_export_succeeded(tmp_pat
 def test_vllm_serve_is_not_called_when_export_failed(tmp_path: Path) -> None:
     served: list[str] = []
 
-    job = VLMJob(spec(tmp_path, export=["awq"], vllm={"concurrency": 1}))
+    def factory(s: VLMJobSpec) -> FakeAdapter:
+        return FakeAdapter()
 
-    def fake_export(ad: Any, recipe_name: str) -> dict:
+    job = VLMJob(spec(tmp_path, export=["awq"], vllm={"concurrency": 1}), job_id="j", adapter_factory=factory)
+
+    def fake_export(ad: object, recipe_name: str) -> dict:  # type: ignore[type-arg]
         return {"awq": {"status": "unsupported", "n_problems": 1}}
 
-    def fake_serve(ckpt: Path, evals: list) -> dict:  # type: ignore[name-defined]
+    def fake_serve(ckpt: Path, evals: list) -> dict:  # type: ignore[type-arg]
         served.append(str(ckpt))
         return {"status": "succeeded"}
 
