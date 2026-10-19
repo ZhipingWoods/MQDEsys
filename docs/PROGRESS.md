@@ -18,6 +18,20 @@
 | 下一步建议 | ① 真实部署路径（T-0405 打包 → T-0705 llama.cpp / T-0701 vLLM）让显存真正下降；② GPTQ/AWQ/SmoothQuant（T-0601~0603）改善 W4A8/W2；③ 敏感层混合精度（T-0608/T-0904，数据已指向视觉前 5 块）；④ T-0005/T-0006 CI |
 | 最后更新 | 2026-09-30 · Claude（Opus 5） |
 
+### 2026-10-19 · @claude-opus-5-5 · T-F real-machine acceptance run (MiniCPM-V 4.6 + vLLM 0.30.0)
+
+- **状态**：DONE（真机全链路验证，含修复三个实机发现的 bug）
+- **结论**：W4A16 AWQ 导出 + vLLM 部署 + 准确率评分在 4090 上跑通，全链路 `verdict: succeeded`
+  - 量化：kl=0.085，top1_agreement=0.91，answer_ppl_delta=+9.4%
+  - AWQ 导出：320 层量化（语言模型 + 视觉塔 + merger，merger 的 linear_1/2 保持 FP16 见下）
+  - vLLM 启动：56 秒，smoke → "Paris"
+  - 压测：4/4 请求成功，28.5 tok/s
+  - served_accuracy: 1.0（4 个有标签样本全部答对）
+- **真机发现并修复的三个 bug**（不是 unit test 能覆盖的，实机才暴露）：
+  1. **缺 preprocessor_config.json**：AWQ exporter 不拷贝 VLM 特有的图片预处理器配置，vLLM 启动时报 "Can't load image processor"。修复：导出后从 source model dir 拷 preprocessor_config.json 和 configuration.json。
+  2. **merger 层写成 qweight，vLLM 不认**：vLLM 0.30.0 的 `MiniCPMV4_6ForConditionalGeneration` 把 merger.mlp.0.linear_1/linear_2 当普通 nn.Linear，不接受 qweight/qzeros/scales 键。先前的 quantize_config.json 补丁无效（vLLM 从 safetensors 文件直接读键名）。真正的修复：`_export_recipe` 在调用 exporter 前，先把这些层从 FakeQuantLinear 还原为原始 nn.Linear，导出后再换回去，让 safetensors 文件里对应位置写 .weight 而不是 .qweight。
+  3. **VLMSample.images 是 list[np.ndarray]，不是 PIL.Image**：`_vlm_openai_payload` 用了 `sample.image`（不存在的属性），改为 `sample.images[0]` 并用 PIL.Image.fromarray 转换。
+- **校验**：`pytest tests/test_vlm_job_e2e.py` → 41/41（4090）；真机全链路日志确认三个阶段 succeeded。
 ### 2026-10-19 · @claude-opus-5-5 · T-F VLM real export + vLLM serve path
 
 - **状态**：DONE 5bede23
@@ -1015,6 +1029,7 @@ P13（领域泛化与前端重构）全部 8 个任务（T-1301～T-1308）完�
 `scripts/setup_backend.py` + `mqde.backend.envs` + `/api/v1/backend-envs` + 硬件页卡片，真机（4090）验证：全新目录装出 vLLM 0.31.0（61 s）、SGLang 0.5.21（151 s），不导出任何 `MQDE_*_BIN` 两者都能启动并压测；llama.cpp 识别 CUDA 包与 glibc 不兼容并回退 CPU 包 `b11569`。细节与踩坑见 TASKS.md T-0704。测试：C++ 13 + Python 81 + 前端 e2e 27，每个新逻辑都做了变异测试。
 
 **待你定**：①生产服务（18080）目前用 `MQDE_VLLM_BIN`/`MQDE_SGLANG_PYTHON` 指向现有环境，这样按钮是禁用的（见上）。要启用按钮，需取消这两个变量并让按钮装一份托管环境（约 11 GB 下载）——我没替你切，因为 `/cache/wuzhiping/envs/vllm` 是你已有的环境，原地更新会改它的版本。②MiniCPM-V-4.6 等你下载完再继续 VLM 流水线。
+
 
 
 
