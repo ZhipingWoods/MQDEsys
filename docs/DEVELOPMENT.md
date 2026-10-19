@@ -90,6 +90,8 @@ cd /cache/wuzhiping/MQDEsys/web && npm run build
 
 ## 4. 起服务与看页面
 
+生产服务一律用 `scripts/serve_prod.sh`（flags 的唯一来源；GPU 池默认 4-7，可用 `MQDE_GPUS=…` 覆盖；导出 `MQDE_ENVS_DIR` 让 vLLM/SGLang/lm-eval 能被找到）。少带 `--runs/--gpus/--python` 会让作业列表变空、GPU 作业无法调度、后端环境页报错。下面是它展开后的样子：
+
 ```bash
 pkill -x mqde; sleep 1
 cd /cache/wuzhiping/MQDEsys
