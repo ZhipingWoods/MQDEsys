@@ -20,7 +20,7 @@
 
 ### 2026-10-19 · @claude-opus-5-5 · T-E/T-F/T-G deploy_backends data-driven gate
 
-- **状态**：DONE de80907
+- **状态**：PARTIAL de80907 (data-driven gate + feasibility; T-E python registry and T-F real VLM export still open)
 - **本次完成**：
   - `Domain` struct + loader + `to_json` 新增 `deploy_backends` 和 `deploy_note` 字段
   - `data/domains/*.yaml` 全部补齐两个字段（llm: 3 后端；vlm/vla/world/ewm: 空列表 + 原因说明）
@@ -37,8 +37,9 @@
   - `cmake --build build/dev` → 全量编译通过（4090）
   - `node web/e2e/backend_cards.mjs` → 44/44 通过
 - **未完成 / 下一步**：
-  - VLM 真实部署（export 步骤 + VLMJobSpec backend 字段）是独立任务，vlm.yaml 已记录前置条件
-  - 可以考虑再跑其余 e2e 套件确保全量回归（backend_cards/newjob/wizard_steps 等）
+  - T-E 的 python/mqde/backend/** 注册表还没写；本次只做了数据层（deploy_backends/deploy_note）
+  - T-F 的真实 VLM 导出/部署链路还没写；vlm.yaml 已记录前置条件
+  - 其余 e2e 套件的全量回归还没跑
 - **发现的问题**：无
 ### 快速复现
 
