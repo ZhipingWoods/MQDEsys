@@ -58,12 +58,13 @@ def main() -> int:
         print(f"ERROR: {registry_py} not found", file=sys.stderr)
         return 1
 
+    backend_dir = registry_py.parent
     domains_dir = root / "data" / "domains"
     if not domains_dir.is_dir():
         print(f"ERROR: {domains_dir} not found", file=sys.stderr)
         return 1
 
-    registered = registered_ids(registry_py)
+    registered = registered_ids(backend_dir)
     domains = domain_deploy_backends(domains_dir)
 
     errors: list[str] = []
