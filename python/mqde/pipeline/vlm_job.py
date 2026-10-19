@@ -535,7 +535,7 @@ class VLMJob:
         else:
             from mqde.backend.sglang_server import SglangServer
 
-            srv = SglangServer(ckpt, log, max_model_len=max_len, dtype="float16",
+            srv = SglangServer(ckpt, log, max_model_len=max_len, dtype="auto",
                                mem_fraction_static=float(cfg.get("mem_fraction_static", 0.5)),
                                disable_cuda_graph=bool(cfg.get("disable_cuda_graph", True)), max_running_requests=max(8, conc))
         self.ev.log(f"{title} {ckpt.name}: starting on {srv.port} (max_model_len {max_len})")
