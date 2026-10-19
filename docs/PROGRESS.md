@@ -130,7 +130,7 @@ embedding/lm_head、GatedDeltaNet 的 in_proj_a/b、DiT 动作头保持原精度
 | B-7 | 2026-10-08 | AGENTS.md / DEVELOPMENT.md 提到 `pip install -e ".[dev,quant]"`、`pnpm lint/test/e2e`、`scripts/gen_api.sh`、`scripts/contract_test.sh`、`data/golden/`、`tests/integration/test_e2e_tiny.py`、`mqde list recipes\|hardware\|families`：这些都不存在（根目录没有 `pyproject.toml`；`web/package.json` 只有 dev/build/typecheck/preview；子命令是 `mqde recipes`、`mqde hardware`） | 文档里的命令照抄会失败 | 改文档（L2）或补实现 |
 | B-8 | 2026-10-08 | `CMakePresets.json` 只有 `dev`、`asan`，TASKS T-0002 写的是 dev/release/asan/cuda；`dev` 预设依赖 `$CONDA_PREFIX`，macOS 需手动 configure（见 mqde-dev-gate skill）；`check_all.sh` 默认 `BUILD_DIR=build/dev` | 非 conda 环境无法直接用预设 | T-0006 / 构建配置（L2） |
 | B-9 | 2026-10-08 | **待核实**（demo 录制子任务的观察，隧道断开时无法复查）：“模型结构”页面可能显示服务器模型库里的所有检查点名（包括不对外的检查点），录 demo 时跳过了该页；文档站截图已确认只含公开名字 | 任何能打开页面的人都能看到库里的内部名字 | 增加按 `--allow` 之外或配置隐藏的过滤；暂不影响仓库内容 |
-| B-10 | 2026-10-08 | **待核实**（同上，来自 demo 录制）Web UI：作业页不会进入 network idle（持续轮询 / 流）；预估表 notes 列换行过长；llama.cpp 表右侧 TTFT/TPOT 列在 1440 px 宽下被裁；FP8 的量化方案显示为 `fp8_e4m38` | 观感与自动化截图 | 前端（L1） |
+| B-10 | 2026-10-08 | Web UI：作业页不会进入 network idle（持续轮询 / 流）；预估表 notes 列换行过长；llama.cpp 表右侧 TTFT/TPOT 列在 1440 px 宽下被裁；FP8 显示为 `fp8_e4m38`（**已修 9cab9c9**：format 已包含位宽时不再追加 bits 数字） | 观感与自动化截图 | 前端（L1）；network idle + table clip 仍开放 |
 
 ---
 

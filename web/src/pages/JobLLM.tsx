@@ -251,30 +251,29 @@ function LlamaCppCard({ d }: { d: LlamaCppDeploy }) {
   return (
     <div className="card">
       <h2>llama.cpp 部署实测（{deviceLabel(d)}，GGUF）</h2>
-      <div className="grid-2">
-        <Chart
-          height={260}
-          option={() => {
-            const o = baseOption();
-            return {
-              ...o,
-              legend: { ...(o.legend as object), data: ["解码 tok/s", "PPL"] },
-              grid: { ...(o.grid as object), top: 48 },
-              tooltip: { ...(o.tooltip as object), trigger: "axis", axisPointer: { type: "shadow" } },
-              xAxis: { ...(o.xAxis as object), type: "category", data: rows.map((r) => r.type.toUpperCase()) },
-              yAxis: [
-                { ...(o.yAxis as object), type: "value", name: "tok/s", nameTextStyle: { color: token("--text-muted") } },
-                { ...(o.yAxis as object), type: "value", name: "PPL", scale: true, splitLine: { show: false }, nameTextStyle: { color: token("--text-muted") } },
-              ],
-              series: [
-                { name: "解码 tok/s", type: "bar", barMaxWidth: 28, itemStyle: { color: series(0), borderRadius: [4, 4, 0, 0] }, data: rows.map((r) => llamaSpeed(r).tg ?? null) },
-                { name: "PPL", type: "line", yAxisIndex: 1, symbolSize: 8, lineStyle: { color: series(1), width: 2 }, itemStyle: { color: series(1) }, data: rows.map((r) => r.ppl) },
-              ],
-            };
-          }}
-        />
-        <div className="table-wrap">
-          <table>
+      <Chart
+        height={260}
+        option={() => {
+          const o = baseOption();
+          return {
+            ...o,
+            legend: { ...(o.legend as object), data: ["解码 tok/s", "PPL"] },
+            grid: { ...(o.grid as object), top: 48 },
+            tooltip: { ...(o.tooltip as object), trigger: "axis", axisPointer: { type: "shadow" } },
+            xAxis: { ...(o.xAxis as object), type: "category", data: rows.map((r) => r.type.toUpperCase()) },
+            yAxis: [
+              { ...(o.yAxis as object), type: "value", name: "tok/s", nameTextStyle: { color: token("--text-muted") } },
+              { ...(o.yAxis as object), type: "value", name: "PPL", scale: true, splitLine: { show: false }, nameTextStyle: { color: token("--text-muted") } },
+            ],
+            series: [
+              { name: "解码 tok/s", type: "bar", barMaxWidth: 28, itemStyle: { color: series(0), borderRadius: [4, 4, 0, 0] }, data: rows.map((r) => llamaSpeed(r).tg ?? null) },
+              { name: "PPL", type: "line", yAxisIndex: 1, symbolSize: 8, lineStyle: { color: series(1), width: 2 }, itemStyle: { color: series(1) }, data: rows.map((r) => r.ppl) },
+            ],
+          };
+        }}
+      />
+      <div className="table-wrap" style={{ marginTop: 12 }}>
+        <table>
             <thead>
               <tr>
                 <th>类型</th>
@@ -305,7 +304,6 @@ function LlamaCppCard({ d }: { d: LlamaCppDeploy }) {
               ))}
             </tbody>
           </table>
-        </div>
       </div>
       <p className="note">
         {d.protocol}（与上方 PPL 协议不同，只在本表内比较）。GGUF 用 llama.cpp 自己的块量化（与 ggml 参考实现逐字节一致）量化原始权重，与配方/算法无关；行长不是 256 的倍数的层按 llama-quantize 的规则回退（Q4_K→Q5_0，Q2_K→Q4_0，仍不整除则 F16）。
