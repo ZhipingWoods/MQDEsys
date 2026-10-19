@@ -19,6 +19,7 @@ answer positions only (the image and the question are conditioning, not output):
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import json
 import math
@@ -28,7 +29,7 @@ import re
 import subprocess
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -336,12 +337,16 @@ class VLMJob:
             # Export the still-quantized model to disk (before engine.restore()), then optionally serve with vLLM.
             if s.export and not s.quantize_only:
                 rep["export"] = self._export_recipe(ad, recipe.name, engine)
-                for backend in [b for b in ("vllm", "sglang") if getattr(s, b) is not None]:
-                    for fmt, exp in rep["export"].items():
-                        if exp.get("status") == "exported":
-                            ckpt = Path(self.out / "export" / f"{recipe.name.lower()}-{fmt}")
-                            exp[backend] = self._stage(f"deploy_{backend}", lambda ckpt=ckpt, b=backend: self._serve(b, ckpt, evals),
-                                                       msg=f"{recipe.name}/{fmt}")
+                backends = [b for b in ("vllm", "sglang") if getattr(s, b) is not None]
+                exported = [f for f, e in rep["export"].items() if e.get("status") == "exported"]
+                if backends and exported:
+                    # the server needs the GPU memory this process is holding: park the model on the CPU while it serves
+                    with self._model_offloaded(ad):
+                        for backend in backends:
+                            for fmt in exported:
+                                ckpt = Path(self.out / "export" / f"{recipe.name.lower()}-{fmt}")
+                                rep["export"][fmt][backend] = self._stage(
+                                    f"deploy_{backend}", lambda ckpt=ckpt, b=backend: self._serve(b, ckpt, evals), msg=f"{recipe.name}/{fmt}")
             engine.restore()
             self.report["recipes"][recipe.name] = rep
             self._save()
@@ -425,6 +430,22 @@ class VLMJob:
                 out[fmt] = {"status": "failed", "error": f"{type(e).__name__}: {e}"[:1500]}
                 self.ev.log(f"{recipe}: {fmt} export failed: {e}", level="warning")
         return out
+
+    @contextlib.contextmanager
+    def _model_offloaded(self, ad: Any) -> Iterator[None]:
+        """Move the in-process model to the CPU (and release the cached CUDA blocks) for the duration, then back."""
+        model = getattr(ad, "model", None)
+        dev = next(model.parameters()).device if model is not None and any(True for _ in model.parameters()) else None
+        if dev is None or dev.type != "cuda":
+            yield
+            return
+        model.to("cpu")
+        torch.cuda.empty_cache()
+        self.ev.log(f"model parked on the CPU while serving ({torch.cuda.memory_allocated(dev) / 2**30:.2f} GiB still allocated on {dev})")
+        try:
+            yield
+        finally:
+            model.to(dev)
 
     def _serve(self, backend: str, ckpt: Path, evals: list[Any]) -> dict[str, Any]:
         """Serve the exported VLM checkpoint with vLLM or SGLang and score it on the eval set.
