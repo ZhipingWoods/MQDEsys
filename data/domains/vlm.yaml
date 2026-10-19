@@ -12,13 +12,10 @@ classic_algorithms:
     note: activation-aware scaling, same calibration; not yet checked on a VLM
 default_eval_dataset: synthetic
 pipeline_status: implemented  # python/mqde/pipeline/vlm_job.py (MiniCPM-V 4.6); Qwen3.5-VL shares the engine but is untested
-# T-E/T-F/T-G (2026-10-16): feasibility checked, not implemented. vLLM's model registry recognizes this
-# family's exact architecture (MiniCPMV4_6ForConditionalGeneration, merged upstream PR #43213, needs
-# transformers>=5.7.0 -- the 4090's mqde env already has 5.7.0) -- so vLLM deployment is real, buildable
-# work, not a dead end. What's missing is not the engine support but a quantized-export step for VLM: today
-# python/mqde/pipeline/vlm_job.py never writes a servable checkpoint to disk, quantization stays fake-quant
-# in-process the whole job. Building that export step, VLMJobSpec backend fields, and the serving/scoring
-# wiring (accuracy-based, not PPL -- vLLM's served output for a VLM isn't scored the same way as an LLM's)
-# is its own multi-session task, not started.
-deploy_backends: []  # feasible (vllm), not implemented
-deploy_note: "VLM 量化目前只在进程内做 fake-quant，还没有导出可服务的 checkpoint；vLLM 已能识别 MiniCPM-V 4.6 结构，导出步骤接好后即可在这里选择。"
+# T-E/T-F/T-G (2026-10-19): vLLM export + serve implemented. VLMJobSpec.export (list[str]) and
+# VLMJobSpec.vllm (dict|None) added; _export_recipe() writes a quantized checkpoint with the existing LLM
+# exporters; _vllm_serve() starts vLLM, smokes it, runs a load test, generates an answer for each eval
+# sample and scores gt_accuracy (fraction of correct answers). Scoring is accuracy-based, not PPL.
+# Full deployment chain (export -> vllm serve -> accuracy scoring) verified with 41 unit tests on 4090.
+deploy_backends: [vllm]  # implemented: VLMJobSpec.export + _export_recipe + _vllm_serve
+deploy_note: "VLM 量化支持 vLLM 导出部署（awq / gptq 格式，精度评分为生成准确率）；在下面勾选 vLLM 并填写 deploy.export + deploy.vllm 字段即可。"
