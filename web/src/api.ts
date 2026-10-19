@@ -701,6 +701,9 @@ export interface Domain {
   /** "implemented": a real quantization pipeline exists. "ui_only_pending_backend": selectable, but
    * submitting a job for it is rejected by the server with a clear reason -- not silently accepted. */
   pipeline_status: "implemented" | "ui_only_pending_backend";
+  /** Inference backends a quantized export of this domain can be served by. Empty means no backend
+   * deployment is supported. Drives BackendCards visibility without hardcoding per-domain frontend logic. */
+  deploy_backends: BackendId[];
 }
 
 export interface ExportSuggestion { format: string; verdict: "native" | "emulated" | "unsupported"; reason: string }

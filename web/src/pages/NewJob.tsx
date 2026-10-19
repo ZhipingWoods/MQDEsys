@@ -547,7 +547,7 @@ export default function NewJobPage() {
           2: algorithm === "recipe" ? "按配方默认" : algorithm,
           3: artifact ? "沿用父作业产物" : picked.map((x) => x.toUpperCase()).join("、") || "—",
           4: kind === "llm" ? (artifact ? `${windows} 窗口 × ${seqLen}` : `${windows} 窗口 × ${seqLen} · 量化 ${quantDevice.toUpperCase()} / 评估 ${evalDevice.toUpperCase()}`) : `${dataset.split("/").pop()}${evalDataset !== dataset ? ` → ${evalDataset.split("/").pop()}` : ""} · ${nEval} 样本`,
-          5: `${profiles.data?.find((p) => p.id === hw)?.name ?? hw}${kind === "llm" && chosenBackends.length ? ` · ${chosenBackends.join(" + ")}` : ""}`,
+          5: `${profiles.data?.find((p) => p.id === hw)?.name ?? hw}${chosenBackends.length ? ` · ${chosenBackends.join(" + ")}` : ""}`,
         }}
       />
       <div className="card" style={{ display: show(1) || show(2) || show(3) ? undefined : "none" }}>
@@ -966,7 +966,7 @@ export default function NewJobPage() {
             </select>
           </div>
         </div>
-        {kind === "llm" && (
+        {(currentDomain?.deploy_backends?.length ?? 0) > 0 && (
           <div data-testid="backend-section" style={{ marginTop: 10 }}>
             <label className="small">部署后端（真实部署并实测；可以同时选几个来对比）</label>
             <BackendCards
@@ -978,7 +978,7 @@ export default function NewJobPage() {
               }}
               onToggle={toggleBackend}
               single={!!artifact}
-              allowed={artifact ? (isGguf ? ["llamacpp"] : ["vllm", "sglang"]) : undefined}
+              allowed={artifact ? (isGguf ? ["llamacpp"] : ["vllm", "sglang"]) : (kind !== "llm" ? currentDomain!.deploy_backends as BackendId[] : undefined)}
               disabled={quantizeOnly}
               disabledNote="仅量化不评测已开启：导出/部署需要评测得到的 fake-quant 基线，本次跳过。"
               options={{
@@ -1060,7 +1060,7 @@ export default function NewJobPage() {
       )}
       <div className="card" style={{ display: show(6) ? undefined : "none" }} data-testid="step-confirm">
         <h2>⑥ 确认提交 · JobSpec 预览</h2>
-        {!singlePage && <StepSummary rows={[["领域 / 模型", `${domain.toUpperCase()} · ${model}`], ["算法 / 配方", artifact ? `沿用父作业产物 ${artifact.format === "gguf" ? `GGUF ${artifact.type}` : `${artifact.recipe} · ${artifact.format}`}` : `${algorithm === "recipe" ? "按配方默认" : algorithm} · ${picked.map((x) => x.toUpperCase()).join("、")}`], ["校准数据", kind === "llm" ? `${usePaste && pasteSamples.length ? `粘贴的文本 ${pasteSamples.length} 段` : calibText === "wikitext-2-raw-v1:train" ? "wikitext-2 train" : calibText} · ${nCalib} 段 × ${seqLen}` : `${dataset} · ${nCalib} 样本`], ["评估", kind === "llm" ? (quantizeOnly ? "仅量化不评测" : `${artifact ? "wikitext-2 test" : evalTextDataset === "wikitext-2-raw-v1:test" ? "wikitext-2 test" : evalTextDataset} · ${windows} 窗口 × ${seqLen}`) : `${evalDataset} · ${nEval} 样本${kind === "vlm" ? ` · 最长回答 ${maxNewTokens}` : ""}`], ["设备", kind === "llm" ? (artifact ? (isGguf ? evalDevice.toUpperCase() : "GPU 池") : `量化 ${quantDevice.toUpperCase()} · 评估 ${evalDevice.toUpperCase()}`) : "GPU 池"], ["部署", kind === "llm" && chosenBackends.length ? `${chosenBackends.join(" + ")}${exportFmts.length ? ` · 导出 ${exportFmts.join("/")}` : ""}${gguf.length ? ` · GGUF ${gguf.join("/")}` : ""}` : "不部署"]]} />}
+        {!singlePage && <StepSummary rows={[["领域 / 模型", `${domain.toUpperCase()} · ${model}`], ["算法 / 配方", artifact ? `沿用父作业产物 ${artifact.format === "gguf" ? `GGUF ${artifact.type}` : `${artifact.recipe} · ${artifact.format}`}` : `${algorithm === "recipe" ? "按配方默认" : algorithm} · ${picked.map((x) => x.toUpperCase()).join("、")}`], ["校准数据", kind === "llm" ? `${usePaste && pasteSamples.length ? `粘贴的文本 ${pasteSamples.length} 段` : calibText === "wikitext-2-raw-v1:train" ? "wikitext-2 train" : calibText} · ${nCalib} 段 × ${seqLen}` : `${dataset} · ${nCalib} 样本`], ["评估", kind === "llm" ? (quantizeOnly ? "仅量化不评测" : `${artifact ? "wikitext-2 test" : evalTextDataset === "wikitext-2-raw-v1:test" ? "wikitext-2 test" : evalTextDataset} · ${windows} 窗口 × ${seqLen}`) : `${evalDataset} · ${nEval} 样本${kind === "vlm" ? ` · 最长回答 ${maxNewTokens}` : ""}`], ["设备", kind === "llm" ? (artifact ? (isGguf ? evalDevice.toUpperCase() : "GPU 池") : `量化 ${quantDevice.toUpperCase()} · 评估 ${evalDevice.toUpperCase()}`) : "GPU 池"], ["部署", chosenBackends.length ? `${chosenBackends.join(" + ")}${exportFmts.length ? ` · 导出 ${exportFmts.join("/")}` : ""}${gguf.length ? ` · GGUF ${gguf.join("/")}` : ""}` : "不部署"]]} />}
         <pre className="log" style={{ height: "auto", maxHeight: 240 }}>
           {JSON.stringify(job, null, 2)}
         </pre>

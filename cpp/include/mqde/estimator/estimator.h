@@ -79,6 +79,10 @@ struct Domain {
   // Position of this domain's tab in the new-job wizard (ascending); a domain without one sorts after every
   // numbered one, by id. The order is data so adding a domain never touches frontend code.
   int order = 1000;
+  // Inference backends a quantized export of this domain can be served by (e.g. "vllm", "sglang",
+  // "llamacpp"). Empty means no backend deployment is supported or implemented. Drives the frontend's
+  // BackendCards gate so new domains never require a frontend code change.
+  std::vector<std::string> deploy_backends;
 };
 
 Result<Recipe> load_recipe(std::string_view name_or_path);
