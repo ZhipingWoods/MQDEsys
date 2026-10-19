@@ -18,6 +18,20 @@
 | 下一步建议 | ① 真实部署路径（T-0405 打包 → T-0705 llama.cpp / T-0701 vLLM）让显存真正下降；② GPTQ/AWQ/SmoothQuant（T-0601~0603）改善 W4A8/W2；③ 敏感层混合精度（T-0608/T-0904，数据已指向视觉前 5 块）；④ T-0005/T-0006 CI |
 | 最后更新 | 2026-09-30 · Claude（Opus 5） |
 
+### 2026-10-19 · @claude-opus-5-5 · T-E Python backend registry
+
+- **状态**：DONE 4c8700c
+- **本次完成**：
+  - `python/mqde/backend/registry.py`：`BACKEND_REGISTRY` dict + `@register_backend` 装饰器，镜像 `ALGO_REGISTRY` 的模式；每个 `BackendEntry` 携带 id / server_class / spec_field / export_formats / needs_cuda / bin_check / module
+  - 三个 server 模块各追加 `_register()` 调用（`vllm_server.py` / `sglang_server.py` / `llamacpp_server.py`），import 时自注册
+  - `scripts/check_backend_registry_sync.py`：扫描 backend/ 包内所有 `.py` 文件的 `BackendEntry(id=...)` 调用，与 `data/domains/*.yaml` 的 `deploy_backends` 做双向校验；`OK registry has ['llamacpp', 'sglang', 'vllm']`
+  - `python/tests/test_backend_registry.py`：6 项测试（注册/查询、重复报错、未知 key 报错、domain 过滤、三个 server 模块注册、llm.yaml deploy_backends 校验）
+  - `llm_job.py` 三个 `_serve` 方法不动——注册表是发现层，不是调度替换
+- **校验结果**：
+  - `python3 scripts/check_backend_registry_sync.py` → `OK registry has ['llamacpp', 'sglang', 'vllm']`
+  - `pytest python/tests/test_backend_registry.py -v` → 6/6 通过（4090，mqde conda 环境）
+  - `pytest python/tests/test_llm_job_e2e.py python/tests/test_deploy_job.py python/tests/test_algorithms.py` → 70 通过（无 regression）
+- **未完成 / 下一步**：T-F 的真实 VLM 导出/部署链路还没写；vlm.yaml 已记录前置条件
 ### 2026-10-19 · @claude-opus-5-5 · T-E/T-F/T-G deploy_backends data-driven gate
 
 - **状态**：PARTIAL de80907 (data-driven gate + feasibility; T-E python registry and T-F real VLM export still open)
@@ -985,4 +999,5 @@ P13（领域泛化与前端重构）全部 8 个任务（T-1301～T-1308）完�
 `scripts/setup_backend.py` + `mqde.backend.envs` + `/api/v1/backend-envs` + 硬件页卡片，真机（4090）验证：全新目录装出 vLLM 0.31.0（61 s）、SGLang 0.5.21（151 s），不导出任何 `MQDE_*_BIN` 两者都能启动并压测；llama.cpp 识别 CUDA 包与 glibc 不兼容并回退 CPU 包 `b11569`。细节与踩坑见 TASKS.md T-0704。测试：C++ 13 + Python 81 + 前端 e2e 27，每个新逻辑都做了变异测试。
 
 **待你定**：①生产服务（18080）目前用 `MQDE_VLLM_BIN`/`MQDE_SGLANG_PYTHON` 指向现有环境，这样按钮是禁用的（见上）。要启用按钮，需取消这两个变量并让按钮装一份托管环境（约 11 GB 下载）——我没替你切，因为 `/cache/wuzhiping/envs/vllm` 是你已有的环境，原地更新会改它的版本。②MiniCPM-V-4.6 等你下载完再继续 VLM 流水线。
+
 
