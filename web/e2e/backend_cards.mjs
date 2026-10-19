@@ -251,10 +251,13 @@ try {
   await page.getByTestId('domain-tab-vlm').click();
   await page.getByTestId('backend-cards').waitFor({ timeout: 10000 });
   const allOff = async () => (await page.getByTestId('backend-toggle-vllm').isDisabled()) && (await page.getByTestId('backend-toggle-sglang').isDisabled()) && (await page.getByTestId('backend-toggle-llamacpp').isDisabled()) && !(await page.getByTestId('backend-toggle-vllm').isChecked());
-  // VLM now supports vLLM deployment (T-F), so vLLM card is selectable; SGLang and llama.cpp remain unavailable.
-  const vllmEnabled = async () => !(await page.getByTestId('backend-toggle-vllm').isDisabled()) && (await page.getByTestId('backend-toggle-sglang').isDisabled()) && (await page.getByTestId('backend-toggle-llamacpp').isDisabled());
-  check('VLM: vLLM card is selectable, SGLang and llama.cpp are not (deploy_backends: [vllm] in vlm.yaml)', await vllmEnabled());
-  check('VLM: the section does not show a global disabled note (vLLM is available)', (await page.getByTestId('backend-disabled-note').count()) === 0);
+  // VLM now supports both vLLM and SGLang (T-F); both cards are selectable; only llama.cpp is not.
+  const vllmAndSglangEnabled = async () =>
+    !(await page.getByTestId('backend-toggle-vllm').isDisabled()) &&
+    !(await page.getByTestId('backend-toggle-sglang').isDisabled()) &&
+    (await page.getByTestId('backend-toggle-llamacpp').isDisabled());
+  check('VLM: vLLM and SGLang cards are selectable, llama.cpp is not (deploy_backends: [vllm, sglang])', await vllmAndSglangEnabled());
+  check('VLM: the section does not show a global disabled note (vLLM and SGLang available)', (await page.getByTestId('backend-disabled-note').count()) === 0);
   check('VLM: the vLLM tick from the LLM tab does not reach the VLM job', !(await preview()).deploy?.vllm && (await preview()).model?.type === 'vlm');
   await page.getByTestId('domain-tab-vla').click();
   await until(() => /VLA 暂不能部署/.test(document.querySelector('[data-testid="backend-disabled-note"]')?.textContent ?? ''));
