@@ -378,7 +378,17 @@ class VLMJob:
 
         # Layer name suffixes that vLLM's VLM models do not register as AWQ-quantizable.
         # Restoring these to FP16 before export prevents qweight keys from landing in safetensors.
-        vlm_fp_suffixes = ("linear_1", "linear_2")
+        # Layers that must be exported as plain FP16 weights for both vLLM and SGLang:
+        #  - "linear_1" / "linear_2" last-segment match: covers model.merger.mlp.0.{linear_1,2}
+        #    and model.vision_tower.vit_merger.{linear_1,2} — plain nn.Linear in vLLM, and
+        #    ColumnParallelLinear/RowParallelLinear with non-128-multiple dims in SGLang.
+        #  - "vit_merger.self_attn" substring match: the four attention projections
+        #    (k_proj/q_proj/v_proj/out_proj) inside the ViT window-attention merger have
+        #    non-group-128-aligned shapes and cause "input size not aligned" in SGLang.
+        #    Using a substring guard prevents sweeping the regular vision encoder layers
+        #    (model.vision_tower.encoder.layers.*.self_attn.*) which are legitimately AWQ.
+        vlm_fp_suffixes = ("linear_1", "linear_2")  # matched by last segment
+        vlm_fp_substrings = ("vit_merger.self_attn",)  # matched by substring
 
         out: dict[str, Any] = {}
         for fmt in self.spec.export:
@@ -388,7 +398,8 @@ class VLMJob:
             restored: list[tuple[str, Any]] = []
             if engine is not None and fmt == "awq":
                 for name, orig_lin in list(engine.originals.items()):
-                    if name.split(".")[-1] in vlm_fp_suffixes:
+                    last = name.split(".")[-1]
+                    if last in vlm_fp_suffixes or any(sub in name for sub in vlm_fp_substrings):
                         from mqde.quant.modules import FakeQuantLinear
                         current = dict(ad.model.named_modules()).get(name)
                         if isinstance(current, FakeQuantLinear):
