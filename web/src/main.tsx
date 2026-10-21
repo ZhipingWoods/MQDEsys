@@ -47,13 +47,44 @@ function ThemeToggle() {
   );
 }
 
+// Collapsed = an icon-only rail; the choice is remembered per browser. "[" toggles it from anywhere but a text field.
+function useSidebarCollapsed(): [boolean, () => void] {
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("mqde-sidebar") === "collapsed";
+    } catch {
+      return false;
+    }
+  });
+  const toggle = () => setCollapsed((c) => !c);
+  useEffect(() => {
+    try {
+      localStorage.setItem("mqde-sidebar", collapsed ? "collapsed" : "expanded");
+    } catch {
+      /* storage unavailable: the choice holds for this session */
+    }
+  }, [collapsed]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.key !== "[" || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (t && (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))) return;
+      setCollapsed((c) => !c);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  return [collapsed, toggle];
+}
+
 function App() {
+  const [collapsed, toggle] = useSidebarCollapsed();
   return (
-    <div className="layout">
-      <aside className="sidebar">
+    <div className={`layout ${collapsed ? "collapsed" : ""}`}>
+      <aside className="sidebar" data-testid="sidebar" data-collapsed={collapsed ? "1" : "0"}>
         <div className="brand">
           <div className="brand-mark">MQ</div>
-          <div>
+          <div className="brand-text">
             <div className="brand-name">MQDEsys</div>
             <div className="brand-sub">模型量化部署评估</div>
           </div>
@@ -63,17 +94,27 @@ function App() {
             <div key={g.group}>
               <div className="nav-group">{g.group}</div>
               {g.items.map(([to, ico, label]) => (
-                <NavLink key={to} to={to} end={to === "/"}>
+                <NavLink key={to} to={to} end={to === "/"} aria-label={label} data-tip={collapsed ? label : undefined}>
                   <span className="ico">{ico}</span>
-                  {label}
+                  <span className="nav-label">{label}</span>
                 </NavLink>
               ))}
             </div>
           ))}
         </nav>
         <div className="sidebar-foot">
-          <span>v0.2</span>
-          <ThemeToggle />
+          {!collapsed && <span>v0.2</span>}
+          {!collapsed && <ThemeToggle />}
+          <button
+            className="ghost sidebar-toggle"
+            onClick={toggle}
+            aria-label={collapsed ? "展开导航栏" : "收起导航栏"}
+            aria-expanded={!collapsed}
+            data-tip={collapsed ? "展开导航栏 [" : "收起导航栏 ["}
+            data-testid="sidebar-toggle"
+          >
+            {collapsed ? "»" : "«"}
+          </button>
         </div>
       </aside>
       <main className="main">
