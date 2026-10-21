@@ -1,18 +1,18 @@
 // Model structure viewer, modeled on netron: hierarchy tree (left), block graph with op-colored
 // nodes (center), property panel with tensor dtype/shape, value histogram and a quantization
 // preview for a chosen recipe (right). Data comes from safetensors headers; values are read on demand.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import GgufView from "./GgufView";
-import { api, fmt, fmtBytes, GraphNode, GraphTensor } from "../api";
+import { api, fmt, fmtBytes, fmtParams, GraphNode, GraphTensor } from "../api";
 import { baseOption, Chart, token } from "../charts";
 import { useAsync } from "../hooks";
+import { modelInDomain, useDomain } from "../domain";
 
 const OP_VAR: Record<string, string> = {
   Attention: "--op-attention", MLP: "--op-mlp", Linear: "--op-linear", Norm: "--op-norm", Embedding: "--op-embedding",
   Conv: "--op-conv", Expert: "--op-expert", Router: "--op-router", Param: "--op-param",
 };
-const fmtParams = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n));
 
 /** 模型结构 = 两种来源：HF 目录（safetensors，按组件/块/模块的 netron 式图）和 GGUF 文件（逐块的量化类型与张量表）。 */
 export default function GraphPage() {
@@ -35,13 +35,24 @@ export default function GraphPage() {
 
 function HfGraph() {
   const lib = useAsync(api.models, []);
-  const [model, setModel] = useState("");
+  const [params] = useSearchParams();
+  const urlModel = useRef(params.get("model") ?? "");
+  const [model, setModel] = useState(urlModel.current);
   const [hfInput, setHfInput] = useState("");
   const [focus, setFocus] = useState("");
   const [picked, setPicked] = useState<GraphNode | null>(null);
+  const { domain } = useDomain();
+  const mine = (lib.data ?? []).filter((m) => modelInDomain(m, domain));
+  const others = (lib.data ?? []).filter((m) => !modelInDomain(m, domain));
+  // default: the first model of the navigation bar's domain (again whenever the domain changes)
   useEffect(() => {
-    if (!model && lib.data?.[0]) setModel(lib.data[0].path);
-  }, [lib.data, model]);
+    if (urlModel.current) {
+      urlModel.current = ""; // a ?model= link wins once
+      return;
+    }
+    const first = mine[0] ?? lib.data?.[0];
+    if (first && (!model || !mine.some((m) => m.path === model))) setModel(first.path);
+  }, [lib.data, domain]); // eslint-disable-line react-hooks/exhaustive-deps
   const root = useAsync(() => (model ? api.graph(model, "", 2) : Promise.resolve(null)), [model]);
   const view = useAsync(() => (model && focus ? api.graph(model, focus, 1) : Promise.resolve(null)), [model, focus]);
   useEffect(() => {
@@ -65,11 +76,17 @@ function HfGraph() {
           <label>模型</label>
           <select value={model.startsWith("hf:") ? "" : model} onChange={(e) => setModel(e.target.value)}>
             {model.startsWith("hf:") && <option value="">{model}</option>}
-            {lib.data?.map((m) => (
-              <option key={m.path} value={m.path}>
-                {m.name} {m.family ? `(${m.family})` : ""}
-              </option>
-            ))}
+            {[["当前领域", mine], ["其他领域", others]].map(([label, ms]) =>
+              (ms as typeof mine).length ? (
+                <optgroup key={label as string} label={label as string}>
+                  {(ms as typeof mine).map((m) => (
+                    <option key={m.path} value={m.path}>
+                      {m.name} {m.family ? `(${m.family})` : ""}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null,
+            )}
           </select>
         </div>
         <div className="field" style={{ minWidth: 280 }}>

@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, JobDetail, LLMJobReport, VLMJobReport } from "../api";
 import { ordered, RecipeSuggestion } from "./JobLLM";
+import { DomainJobPicker } from "../components/DomainJobPicker";
+import { DomainPendingNote } from "../domain";
 import { orderedVlm, VLMSuggestion } from "./JobVLM";
 
 export default function SuggestPage() {
@@ -26,8 +28,9 @@ export default function SuggestPage() {
     return (
       <>
         <h1>优化建议</h1>
-        <p className="subtitle">从某个 LLM / VLM 作业的详情页里，每个配方的"误差分析"旁边有一个带上下文的链接会跳到这里。先去挑一个已完成的作业。</p>
-        <Link to="/jobs">前往作业与执行 →</Link>
+        <p className="subtitle">按敏感度给出哪些层保持高精度（混合精度），可一键派生新作业。目前支持 LLM 与 VLM 作业。</p>
+        <DomainPendingNote />
+        <DomainJobPicker base="/suggest" kinds={["llm", "vlm"]} what="优化建议" />
       </>
     );
   }

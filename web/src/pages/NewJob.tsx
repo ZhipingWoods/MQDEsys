@@ -6,6 +6,7 @@ import { BackendCards } from "../components/BackendCards";
 import { DatasetPicker } from "../components/DatasetPicker";
 import { DEFAULT_DATASET, DEFAULT_LLM, DEFAULT_MODEL, DEFAULT_VLM, useAsync, useDebounced } from "../hooks";
 import { Meter } from "./Fit";
+import { useDomain } from "../domain";
 
 const LIVE_RUNTIME: RuntimeParams = { concurrency: 1, images_per_step: 2, text_tokens: 42, image_resolution: 448, gpu_memory_utilization: 0.9, extra_modalities: [] };
 
@@ -32,8 +33,8 @@ export default function NewJobPage() {
   const [algorithm, setAlgorithm] = useState("recipe");
   const profiles = useAsync(api.hardwareProfiles, []);
   const cfg = useAsync(api.config, []);
-  // the wizard opens on the first tab, LLM (domain order is data/domains/*.yaml `order`: LLM, VLM, VLA, WM, EWM)
-  const [domain, setDomain] = useState("llm");
+  // the domain is the global one from the navigation bar (domain.tsx); the wizard's own step-1 tabs set the same value
+  const { domain, setDomain } = useDomain();
   const [name, setName] = useState("qwen-wikitext-ppl");
   const [model, setModel] = useState(DEFAULT_LLM);
   const [modelMode, setModelMode] = useState<"custom" | "catalog">("custom");
@@ -141,8 +142,28 @@ export default function NewJobPage() {
   const currentDomain = domainsQ.data?.find((d) => d.id === domain);
   const blocked = currentDomain != null && currentDomain.pipeline_status !== "implemented";
 
-  const switchDomain = (d: string) => {
-    setDomain(d);
+  const switchDomain = (d: string) => setDomain(d);
+  // The form's initial values are LLM's. Whenever the domain differs from the one the form was last set up for
+  // (opened in another domain, or switched from the sidebar) reset it to that domain's defaults. In single-page
+  // mode (?mode=all) the domain tabs are part of the wizard itself, not global nav; disable the reset effect
+  // entirely for the session (checked once on mount, never re-evaluated). A derived job sets `appliedDomain`
+  // before changing the domain, same reason.
+  const disableDomainReset = useRef(singlePage);
+  const appliedDomain = useRef("llm");
+  useEffect(() => {
+    if (disableDomainReset.current || appliedDomain.current === domain) return;
+    appliedDomain.current = domain;
+    resetForDomain(domain);
+  }, [domain]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ?model=<path> (a 模型库 card): start from that model; declared after the domain reset so it wins on first render
+  useEffect(() => {
+    const m = params.get("model");
+    if (m && !params.get("from")) {
+      setModel(m);
+      setModelMode("custom");
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const resetForDomain = (d: string) => {
     const k = kindOf(d);
     setModel({ llm: DEFAULT_LLM, vlm: DEFAULT_VLM, vla: DEFAULT_MODEL }[k]);
     setName({ llm: "qwen-wikitext-ppl", vlm: "minicpmv-vqa-eval", vla: "minicpm-vla-eval" }[k]);
@@ -287,7 +308,7 @@ export default function NewJobPage() {
           exportFmts, sens, probe, probeExact,
         });
         keepParentDeploy.current = d.useVllm || d.useSglang; // only a vLLM / SGLang parent has export formats of its own to keep
-        setDomain(d.domain); setName(d.name); setModel(d.model); setModelMode("custom");
+        appliedDomain.current = d.domain; setDomain(d.domain); setName(d.name); setModel(d.model); setModelMode("custom");
         setNoQuant(d.picked.length === 1 && d.picked[0] === "bf16"); setPicked(d.picked);
         setAlgorithm(d.algorithm); setGroupSizeOverride(d.groupSizeOverride); setAdvancedOpen(d.groupSizeOverride !== "");
         setAction(d.action); setActStatic(d.actStatic); setKv(d.kv); setKvMethod(d.kvMethod); setKeepEnds(d.keepEnds);

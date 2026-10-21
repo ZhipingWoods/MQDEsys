@@ -127,6 +127,19 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .nav a:hover { background: var(--surface-2); color: var(--text-primary); text-decoration: none; }
 .sidebar-foot { margin-top: auto; padding: 10px; color: var(--text-muted); font-size: 11.5px; display: flex; justify-content: space-between; align-items: center; }
 .main { padding: 22px 28px 64px; min-width: 0; max-width: 1560px; }
+.domain-switch { padding: 0 6px 6px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.domain-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.domain-chip {
+  min-height: 24px; padding: 2px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em;
+  background: var(--surface-2); color: var(--text-secondary); border: 1px solid var(--border);
+}
+.domain-chip:hover { color: var(--text-primary); border-color: var(--border-md); }
+.domain-chip.on { background: var(--accent-dim); color: var(--text-primary); border-color: var(--accent); }
+.domain-chip.pending { border-style: dashed; }
+.domain-switch.vertical { padding: 0 0 8px; }
+.domain-switch.vertical .domain-chips { flex-direction: column; align-items: stretch; }
+.domain-switch.vertical .domain-chip { padding: 2px 0; font-size: 10px; }
+.layout.collapsed .domain-chip[data-tip]:hover::after { left: calc(100% + 8px); right: auto; top: 50%; bottom: auto; transform: translateY(-50%); margin-bottom: 0; }
 .sidebar-toggle { min-height: 26px; padding: 2px 8px; font-size: 14px; line-height: 1; }
 /* collapsed: icon-only rail; labels move into the data-tip hover bubble (shown to the right) */
 .layout.collapsed { grid-template-columns: 60px 1fr; }
@@ -371,3 +384,17 @@ button.small { padding: 4px 10px; font-size: 12px; }
 .backend-facts dt { color: var(--text-muted); }
 .backend-facts dd { margin: 0; color: var(--text-secondary, var(--text-primary)); overflow-wrap: anywhere; }
 .backend-options { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 8px; }
+
+/* ---------- model library cards ---------- */
+.model-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.model-card { margin-bottom: 0; display: flex; flex-direction: column; gap: 10px; }
+.model-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.model-card-name { font-weight: 650; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-card-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.model-card-stats > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.model-card-stats b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stackbar { display: flex; height: 8px; border-radius: 999px; overflow: visible; background: var(--surface-3); gap: 2px; }
+.stackbar > span { display: block; height: 100%; min-width: 3px; border-radius: 999px; }
+.legend-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.legend-row i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+.model-card-actions { display: flex; gap: 14px; font-size: 12.5px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border); }

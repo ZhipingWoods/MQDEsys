@@ -1,12 +1,11 @@
 // GGUF file inspector (T-R05): header only -- metadata, the tensor table, and how the quantization types are spread over
 // the blocks (a Q4_K_M file keeps some blocks' down_proj at Q6_K, which only shows per block).
 import { useEffect, useMemo, useState } from "react";
-import { api, fmt, fmtBytes, GgufSummary } from "../api";
+import { api, fmt, fmtBytes, GgufSummary, fmtParams } from "../api";
 import { baseOption, Chart, series, token } from "../charts";
 import { useAsync } from "../hooks";
 import { Tile } from "./Estimate";
 
-const fmtParams = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n));
 const SHOW = 200;
 
 function metaText(v: unknown): string {

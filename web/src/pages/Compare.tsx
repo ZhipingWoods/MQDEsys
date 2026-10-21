@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api, DeployJobReport, fmt, fmtBytes, gib, JobListItem, JobReport, llamaSpeed, LLMJobReport, VLMJobReport } from "../api";
 import { ScoreMatrix } from "../components/ScoreMatrix";
 import { matrixEntries } from "../matrix";
+import { DomainPendingNote, useDomain } from "../domain";
 import { engineNote, servingRuns } from "../perf";
 import { baseOption, Chart, series, token } from "../charts";
 
@@ -11,7 +12,17 @@ export default function ComparePage() {
   const [jobs, setJobs] = useState<JobListItem[]>([]);
   const [reports, setReports] = useState<(JobReport | LLMJobReport | VLMJobReport | DeployJobReport)[]>([]);
   const [params, setParams] = useSearchParams();
-  const tab = params.get("tab") === "vla" ? "vla" : params.get("tab") === "vlm" ? "vlm" : "llm";
+  const { domain, setDomain } = useDomain();
+  // a ?tab= link (from a job page) wins once; after that the tab is the navigation bar's domain
+  const urlTab = params.get("tab");
+  useEffect(() => {
+    if (urlTab && ["llm", "vlm", "vla"].includes(urlTab) && urlTab !== domain) setDomain(urlTab);
+  }, [urlTab]); // eslint-disable-line react-hooks/exhaustive-deps
+  const tab = ["llm", "vlm", "vla"].includes(domain) ? domain : null;
+  const pick = (t: string) => {
+    setDomain(t);
+    setParams({ tab: t }, { replace: true });
+  };
   useEffect(() => {
     api.jobs().then(async (js) => {
       const done = js.filter((j) => j.state === "SUCCEEDED");
@@ -26,20 +37,21 @@ export default function ComparePage() {
   const vla = reports.filter((r): r is JobReport => r.kind !== "llm" && (r.kind as string) !== "vlm" && r.kind !== "llm_deploy");
   return (
     <>
-      <h1>配方对比</h1>
+      <h1>评测结果对比</h1>
       <p className="subtitle">汇总已完成作业：精度与成本的权衡。LLM {llm.length} 个作业 · VLM {vlm.length} 个作业 · VLA {vla.length} 个作业。</p>
       <div className="tabs">
-        <div className={`tab ${tab === "llm" ? "on" : ""}`} onClick={() => setParams({ tab: "llm" }, { replace: true })}>
+        <div className={`tab ${tab === "llm" ? "on" : ""}`} onClick={() => pick("llm")}>
           LLM（PPL）
         </div>
-        <div className={`tab ${tab === "vlm" ? "on" : ""}`} onClick={() => setParams({ tab: "vlm" }, { replace: true })} data-testid="compare-tab-vlm">
+        <div className={`tab ${tab === "vlm" ? "on" : ""}`} onClick={() => pick("vlm")} data-testid="compare-tab-vlm">
           VLM（答案分布）
         </div>
-        <div className={`tab ${tab === "vla" ? "on" : ""}`} onClick={() => setParams({ tab: "vla" }, { replace: true })}>
+        <div className={`tab ${tab === "vla" ? "on" : ""}`} onClick={() => pick("vla")}>
           VLA（动作误差）
         </div>
       </div>
-      {tab === "llm" ? <LLMCompare reps={llm} deploys={dep} /> : tab === "vlm" ? <VLMCompare reps={vlm} /> : <VLACompare reps={vla} />}
+      <DomainPendingNote />
+      {tab === "llm" ? <LLMCompare reps={llm} deploys={dep} /> : tab === "vlm" ? <VLMCompare reps={vlm} /> : tab === "vla" ? <VLACompare reps={vla} /> : null}
       {jobs.length === 0 && <p className="muted">暂无已完成作业</p>}
     </>
   );

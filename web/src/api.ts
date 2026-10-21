@@ -720,6 +720,9 @@ export interface ConcurrencyEstimate {
   resource_probe: ResourceProbe; // T-A
 }
 
+/** 1.54B / 235.8M / 12.3K style parameter counts. */
+export const fmtParams = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n));
+
 export const api = {
   health: () => req<{ status: string; version: string }>("GET", "/health"),
   config: () => req<{ allowed_roots: string[]; gpus: number[]; runs_dir: string }>("GET", "/config"),

@@ -301,7 +301,7 @@ export default function FitPage() {
 }
 
 // ---- HF live search + download (llmfit hf-search / download) ----
-function HubPanel() {
+export function HubPanel() {
   const [q, setQ] = useState("");
   const [dq, setDq] = useState("");
   const [nonce, setNonce] = useState(0);

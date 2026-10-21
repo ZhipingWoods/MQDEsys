@@ -1,7 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, Estimate, fmt, fmtBytes, gib, probeNote, RuntimeParams } from "../api";
 import { barItem, baseOption, Chart, refLine, series, token } from "../charts";
 import { DEFAULT_MODEL, useAsync, useDebounced } from "../hooks";
+import { domainDefaultModel, useDomain } from "../domain";
+import { useSearchParams } from "react-router-dom";
 
 const PARTS: { key: keyof Estimate["breakdown"]; label: string }[] = [
   { key: "weights", label: "权重" },
@@ -12,7 +14,16 @@ const PARTS: { key: keyof Estimate["breakdown"]; label: string }[] = [
 ];
 
 export default function EstimatePage() {
-  const [model, setModel] = useState(DEFAULT_MODEL);
+  const { domain } = useDomain();
+  const [params] = useSearchParams();
+  const [model, setModel] = useState(() => params.get("model") || domainDefaultModel(domain) || DEFAULT_MODEL);
+  const firstDomain = useRef(domain);
+  useEffect(() => {
+    if (firstDomain.current === domain) return; // keep a model the user typed until the domain actually changes
+    firstDomain.current = domain;
+    const m = domainDefaultModel(domain);
+    if (m) setModel(m);
+  }, [domain]);
   const [hw, setHw] = useState("nvidia/rtx4090");
   const [backend, setBackend] = useState("hf_transformers");
   const backends = useAsync(api.backends, []);

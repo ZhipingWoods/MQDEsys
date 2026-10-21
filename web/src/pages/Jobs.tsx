@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, JobListItem } from "../api";
+import { DOMAIN_SHORT, jobDomain, useDomain } from "../domain";
 
 export function StateBadge({ state }: { state: string }) {
   const cls = state === "SUCCEEDED" ? "good" : state === "FAILED" ? "critical" : state === "RUNNING" || state === "QUEUED" ? "running" : "warning";
@@ -12,13 +13,14 @@ export default function JobsPage() {
   const [jobs, setJobs] = useState<JobListItem[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState("");
-  const [kind, setKind] = useState("");
+  const { domain } = useDomain();
+  const [kind, setKind] = useState("domain"); // "domain" = the navigation bar's domain; "" = every domain
   const [state, setState] = useState("");
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return (jobs ?? []).filter((j) => (!kind || (j.kind ?? "vla") === kind) && (!state || j.state === state) &&
+    return (jobs ?? []).filter((j) => (!kind || (kind === "domain" ? jobDomain(j.kind) === domain : (j.kind ?? "vla") === kind)) && (!state || j.state === state) &&
       (!needle || [j.job_id, j.name, j.model, ...(j.recipes ?? [])].some((x) => (x ?? "").toLowerCase().includes(needle))));
-  }, [jobs, q, kind, state]);
+  }, [jobs, q, kind, state, domain]);
   const counts = useMemo(() => {
     const c = { running: 0, failed: 0, ok: 0 };
     for (const j of jobs ?? []) { if (j.state === "RUNNING" || j.state === "QUEUED") c.running++; else if (j.state === "FAILED") c.failed++; else if (j.state === "SUCCEEDED") c.ok++; }
@@ -48,9 +50,10 @@ export default function JobsPage() {
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="如 minicpm、w4a16、20261013" data-testid="jobs-search" />
           </div>
           <div className="field">
-            <label>类型</label>
+            <label>领域 / 类型</label>
             <select value={kind} onChange={(e) => setKind(e.target.value)} data-testid="jobs-kind">
-              <option value="">全部</option>
+              <option value="domain">当前领域（{DOMAIN_SHORT[domain] ?? domain}）</option>
+              <option value="">全部领域</option>
               <option value="llm">LLM</option>
               <option value="vlm">VLM</option>
               <option value="vla">VLA</option>

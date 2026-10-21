@@ -6,6 +6,8 @@ import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, JobDetail, LLMJobReport, VLMJobReport } from "../api";
 import { LayerAnalysis } from "./LayerAnalysis";
+import { DomainJobPicker } from "../components/DomainJobPicker";
+import { DomainPendingNote } from "../domain";
 import { orderedVlm } from "./JobVLM";
 import { ordered, RecipeErrorAnalysis } from "./JobLLM";
 import { orderedRecipes, VLARecipeErrorAnalysis } from "./Job";
@@ -29,8 +31,9 @@ export default function AnalysisPage() {
     return (
       <>
         <h1>误差分析</h1>
-        <p className="subtitle">从某个作业的详情页里，每个配方的"误差分析"旁边有一个带上下文的链接会跳到这里。先去挑一个已完成的作业。</p>
-        <Link to="/jobs">前往作业与执行 →</Link>
+        <p className="subtitle">逐层量化误差热力图、各块平均 SQNR、误差 vs 激活峰度、误差最大的 15 层。作业详情页每个配方旁也有带上下文的链接。</p>
+        <DomainPendingNote />
+        <DomainJobPicker base="/analysis" what="误差分析" />
       </>
     );
   }

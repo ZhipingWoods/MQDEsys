@@ -1,13 +1,15 @@
-// HF model catalog (data/models/catalog.json, built by `mqde catalog update`). Filters run on the
-// server; picking a row opens the deployment pre-evaluation for that catalog entry (no weights needed).
+// 模型库 (framework: 模型量化 → 模型选择): models already on this server, the HF catalog (data/models/catalog.json,
+// refreshed daily, two-level grouping), HF search & download, and ModelScope (not integrated yet -- said so, not hidden).
 import { Fragment, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { api, CatalogModel, fmt } from "../api";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { api, CatalogModel, fmt, fmtBytes, fmtParams, LibraryModel } from "../api";
+import { DOMAIN_SHORT, modelInDomain, useDomain } from "../domain";
 import { useAsync, useDebounced } from "../hooks";
+import { HubPanel } from "./Fit";
 
 const CAP_LABEL: Record<string, string> = { text: "文本", vision: "视觉", moe: "MoE", audio: "音频" };
 
-export default function CatalogPage() {
+function HfCatalog() {
   const [search, setSearch] = useState("");
   const [provider, setProvider] = useState("");
   const [capability, setCapability] = useState("");
@@ -48,7 +50,7 @@ export default function CatalogPage() {
     <>
       <div className="page-head">
         <div>
-          <h1>模型目录</h1>
+          <h2 style={{ margin: 0 }}>HF 模型库 · 后台每日增量同步</h2>
           <p className="subtitle">
             HF 模型库（{all.data?.total ?? "–"} 条，{all.data?.demoted ?? 0} 条降级；更新于 {all.data?.updated_at || "–"}）。
             {all.data && all.data.refresh_interval_s > 0
@@ -175,5 +177,123 @@ export default function CatalogPage() {
         </div>
       </div>
     </>
+  );
+}
+
+const TABS: [string, string][] = [["local", "本地模型"], ["catalog", "HF 模型库"], ["hf", "HF 搜索与下载"], ["modelscope", "ModelScope"]];
+
+export default function ModelLibraryPage() {
+  const [params, setParams] = useSearchParams();
+  const tab = TABS.some(([t]) => t === params.get("tab")) ? (params.get("tab") as string) : "local";
+  return (
+    <>
+      <h1>模型库</h1>
+      <p className="subtitle">本地模型加载、HuggingFace 模型库（每日增量同步）、在线搜索下载。本地模型按导航栏的领域筛选。</p>
+      <div className="tabs" data-testid="library-tabs">
+        {TABS.map(([t, label]) => (
+          <div key={t} className={`tab ${tab === t ? "on" : ""}`} onClick={() => setParams({ tab: t }, { replace: true })} data-testid={`library-tab-${t}`}>
+            {label}
+            {t === "modelscope" && <span className="badge" style={{ marginLeft: 6 }}>未接入</span>}
+          </div>
+        ))}
+      </div>
+      {tab === "local" ? <LocalModels /> : tab === "catalog" ? <HfCatalog /> : tab === "hf" ? <HubPanel /> : <ModelScopeNote />}
+    </>
+  );
+}
+
+function ModelScopeNote() {
+  return (
+    <div className="card" data-testid="modelscope-note">
+      <h2>ModelScope 下载</h2>
+      <p className="note">
+        还没有接入：服务端的下载器（hub::download_file）目前只认 HuggingFace 的 resolve 接口（含 HF_ENDPOINT 镜像）。ModelScope 的
+        文件列表与下载接口不同，需要单独的适配（任务 T-0204）。国内网络下载 HF 模型可以先设置 HF_ENDPOINT 指向镜像，在「HF 搜索与下载」里使用。
+      </p>
+    </div>
+  );
+}
+
+// one colour per component modality, shared by every card so the bars are comparable at a glance
+const MOD_COLOR: Record<string, string> = { language: "--series-1", vision: "--series-2", action: "--series-3", audio: "--series-4", tts: "--series-5", mtp: "--series-6" };
+
+function LocalModels() {
+  const { domain } = useDomain();
+  const lib = useAsync(api.models, []);
+  const [all, setAll] = useState(false);
+  const rows = (lib.data ?? []).filter((m) => all || modelInDomain(m, domain));
+  return (
+    <>
+      <div className="form-row" style={{ alignItems: "center", marginBottom: 10 }}>
+        <span className="small muted" data-testid="local-count">
+          {all ? "全部领域" : `${DOMAIN_SHORT[domain] ?? domain} 领域`}：{rows.length} 个模型（服务器允许目录下的 HF 格式检查点，含 config.json + safetensors）
+        </span>
+        <label className="small" style={{ marginLeft: "auto" }}>
+          <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} data-testid="local-all" /> 显示全部领域
+        </label>
+      </div>
+      {lib.error && <div className="error-box">{lib.error}</div>}
+      <div className="model-grid" data-testid="local-models">
+        {rows.map((m) => <LocalModelCard key={m.path} m={m} />)}
+        {lib.data && rows.length === 0 && (
+          <div className="card empty">
+            当前领域还没有本地模型。去「HF 搜索与下载」下载一个，或把检查点放到服务器的允许目录下。
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function LocalModelCard({ m }: { m: LibraryModel }) {
+  const comps = m.components ?? [];
+  const total = comps.reduce((a, c) => a + c.bytes, 0) || 1;
+  const q = encodeURIComponent(m.path);
+  return (
+    <div className="card model-card" data-testid={`local-model-${m.name}`}>
+      <div className="model-card-head">
+        <div style={{ minWidth: 0 }}>
+          <div className="model-card-name" title={m.path}>{m.name}</div>
+          <div className="small muted mono" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.path}</div>
+        </div>
+        <span className="badge accent">{(m.modality ?? "?").toUpperCase()}</span>
+      </div>
+      {m.error ? (
+        <div className="note warn">{m.error}</div>
+      ) : (
+        <>
+          <div className="model-card-stats">
+            <div><span className="muted small">参数</span><b>{fmtParams(m.logical_params ?? m.total_params ?? 0)}</b></div>
+            <div><span className="muted small">权重</span><b>{m.total_bytes ? fmtBytes(m.total_bytes) : "–"}</b></div>
+            <div><span className="muted small">结构</span><b className="mono small">{m.family ?? m.model_type ?? "–"}</b></div>
+          </div>
+          {comps.length > 0 && (
+            <>
+              <div className="stackbar" aria-label="各组件权重占比">
+                {comps.map((c, i) => (
+                  <span key={i} style={{ width: `${(100 * c.bytes) / total}%`, background: `var(${MOD_COLOR[c.modality] ?? "--series-7"})` }}
+                    data-tip={`${c.name}（${c.modality}）${fmtBytes(c.bytes)} · ${c.n_blocks} 块`} />
+                ))}
+              </div>
+              <div className="legend-row small muted">
+                {[...new Set(comps.map((c) => c.modality))].map((mod) => (
+                  <span key={mod}><i style={{ background: `var(${MOD_COLOR[mod] ?? "--series-7"})` }} />{mod}</span>
+                ))}
+              </div>
+            </>
+          )}
+          {m.checkpoint_quant && (
+            <div className="small" style={{ marginTop: 6 }}>
+              <span className="badge warn">已量化检查点</span> {m.checkpoint_quant.method} · {m.checkpoint_quant.bits} bit · g{m.checkpoint_quant.group_size}
+            </div>
+          )}
+        </>
+      )}
+      <div className="model-card-actions">
+        <Link to={`/new?model=${q}`}>新建作业</Link>
+        <Link to={`/graph?model=${q}`}>模型结构</Link>
+        <Link to={`/estimate?model=${q}`}>资源预估</Link>
+      </div>
+    </div>
   );
 }

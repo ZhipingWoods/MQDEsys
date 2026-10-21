@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
 import "./styles.css";
+import { DomainProvider, DomainSwitcher } from "./domain";
 import HomePage from "./pages/Home";
 import FitPage from "./pages/Fit";
 import GraphPage from "./pages/Graph";
@@ -15,13 +16,16 @@ import CatalogPage from "./pages/Catalog";
 import AnalysisPage from "./pages/Analysis";
 import SuggestPage from "./pages/Suggest";
 
-// T-1306: "误差分析"/"优化建议" used to live only as tabs buried inside a job's own detail page; promoted
-// to their own top-level nav items (standalone /analysis, /suggest routes) so the site map is flat.
+// Grouped as the framework (MQEsys框架.md) lays the system out: 模型量化 → 任务作业 → bench评估 → 模型导出 → 硬件部署 →
+// 误差评估 → 资源预估, with 总览 first as the landing page. The domain switch above the groups scopes every page.
 const NAV: { group: string; items: [string, string, string][] }[] = [
   { group: "总览", items: [["/", "⌂", "总览"]] },
-  { group: "评估前", items: [["/fit", "◎", "部署预评估"], ["/graph", "◇", "模型结构"], ["/estimate", "▦", "资源预估"]] },
-  { group: "量化与评测", items: [["/new", "＋", "新建作业"], ["/jobs", "▶", "作业与执行"], ["/analysis", "△", "误差分析"], ["/suggest", "☆", "优化建议"], ["/compare", "⇄", "配方对比"]] },
-  { group: "部署", items: [["/hardware", "▣", "硬件与后端"], ["/catalog", "◈", "模型目录"]] },
+  { group: "模型量化", items: [["/catalog", "◈", "模型库"]] },
+  { group: "任务作业", items: [["/new", "＋", "新建作业"], ["/jobs", "▶", "作业与执行"]] },
+  { group: "bench 评估", items: [["/compare", "⇄", "评测结果对比"]] },
+  { group: "硬件部署", items: [["/hardware", "▣", "硬件与后端"]] },
+  { group: "误差评估", items: [["/graph", "◇", "模型结构"], ["/analysis", "△", "误差分析"], ["/suggest", "☆", "优化建议"]] },
+  { group: "资源预估", items: [["/estimate", "▦", "资源预估"], ["/fit", "◎", "部署预评估"]] },
 ];
 
 function ThemeToggle() {
@@ -89,6 +93,7 @@ function App() {
             <div className="brand-sub">模型量化部署评估</div>
           </div>
         </div>
+        <DomainSwitcher collapsed={collapsed} />
         <nav className="nav">
           {NAV.map((g) => (
             <div key={g.group}>
@@ -142,7 +147,9 @@ function App() {
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BrowserRouter>
-      <App />
+      <DomainProvider>
+        <App />
+      </DomainProvider>
     </BrowserRouter>
   </React.StrictMode>,
 );
