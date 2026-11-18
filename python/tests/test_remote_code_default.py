@@ -1,6 +1,9 @@
-"""AGENTS.md section 6: `trust_remote_code=false` by default. Loading a model directory with it on runs whatever Python the directory
-ships, so a model adapter must not turn it on by itself. MiniCPM-V 4.6 is a native transformers architecture (no auto_map, no .py
-files in its directory) and does not need it."""
+"""Remote model code is disabled by default.
+
+Loading a model directory with it enabled can execute Python shipped with the
+checkpoint, so a model adapter must not turn it on by itself. MiniCPM-V 4.6 is
+a native transformers architecture and does not need it.
+"""
 
 from __future__ import annotations
 

@@ -2,7 +2,7 @@
 metadata:
   name: qwen25-05b-wikitext
 model:
-  path: /cache/wuzhiping/hub/Qwen2.5-0.5B-Instruct
+  path: /path/to/models/Qwen2.5-0.5B-Instruct
 quant:
   recipe: [w4a16, w4a8, w2a16]
   algorithm: gptq          # rtn | gptq | awq | smoothquant | awq+gptq | smoothquant+gptq | recipe

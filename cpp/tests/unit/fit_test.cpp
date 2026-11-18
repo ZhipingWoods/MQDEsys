@@ -131,7 +131,7 @@ TEST(fit, measured_speed_overrides_estimate) {
   EXPECT_NE(f->formula_tps, 123.0) << "the formula estimate is kept alongside the measurement";
 }
 
-// ---- T-R17: llmfit score calibration (docs/REFERENCES.md A.1-A.6) ----
+// ---- T-R17: llmfit score calibration (the reference notes A.1-A.6) ----
 
 TEST(fit, quality_tiers_match_llmfit_strict_bounds) {
   auto c = load_fit_config();
@@ -200,7 +200,7 @@ TEST(fit, many_cores_bonus_on_k_constant_path) {
   EXPECT_NEAR(many->estimated_tps / few->estimated_tps, 1.1, 1e-9);
 }
 
-// ---- T-R18: MoE two-tier decode model (docs/REFERENCES.md A.5) ----
+// ---- T-R18: MoE two-tier decode model (the reference notes A.5) ----
 
 namespace {
 // dense_llm geometry turned into a Mixtral-like MoE: 8 experts, top-2, expert FFN 14336.

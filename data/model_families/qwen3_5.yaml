@@ -1,5 +1,5 @@
 # Architecture template: Qwen3.5 / Qwen3.8 VL (hybrid Gated-DeltaNet + full attention LM, ViT, MTP head).
-# Seen on: /cache/wuzhiping/hub/Qwen3.8-27B-FP8 (block-wise FP8 checkpoint, weight_block_size 128x128).
+# Validated with a block-wise FP8 checkpoint using 128x128 weight blocks.
 family: qwen3_5
 modality: vlm
 match:

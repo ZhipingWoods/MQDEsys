@@ -322,7 +322,7 @@ TEST(estimator_batched, max_concurrency_is_the_largest_count_that_fits) {
 
 TEST(estimator_batched, regression_against_what_vllm_reported) {
   // vLLM 0.30 on an RTX 4090, Qwen2.5-0.5B AWQ, gpu_memory_utilization 0.3: it logged a capacity of 547.03
-  // sequences at 1024 tokens and 17.09 at 32768 tokens (docs/PROGRESS.md 2026-10-08). The estimator with the
+  // sequences at 1024 tokens and 17.09 at 32768 tokens. The estimator with the
   // repository's own vllm backend profile and no fitted coefficient must land within [0.5, 1.5] of that; the
   // per-sequence model, which is what these profiles used before, was 7 to 8.5 times too low.
   auto spec = qwen05b();

@@ -3,7 +3,7 @@ kind: Job
 metadata: {name: minicpm-vla-smoke}
 model:
   source: local
-  path: /cache/wuzhiping/hub/MiniCPM-RobotManip
+  path: /path/to/models/MiniCPM-RobotManip
   modality: vla
 quant:
   recipe: [w4a16]

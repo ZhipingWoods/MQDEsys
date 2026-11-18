@@ -1,4 +1,4 @@
-"""Model abstraction layer (docs/ARCHITECTURE.md §6.7).
+"""Model abstraction layer (the architecture specification §6.7).
 
 A QuantModel exposes a uniform block view over any architecture so algorithms never hard-code
 module paths. Grouping comes from the data-driven family template (data/model_families/*.yaml),

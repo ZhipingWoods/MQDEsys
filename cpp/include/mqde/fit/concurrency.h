@@ -1,6 +1,6 @@
 #pragma once
 // Concurrency solve-back: given a model + recipe + system, how many parallel users fit?
-// Implements the memory model from docs/REFERENCES.md A.9 and llmfit analysis.rs concurrency helpers.
+// Implements the memory model from the reference notes A.9 and llmfit analysis.rs concurrency helpers.
 
 #include <cstdint>
 #include <string>

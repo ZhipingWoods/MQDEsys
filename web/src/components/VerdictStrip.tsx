@@ -48,7 +48,7 @@ export function VerdictStrip({ base, rs }: { base: number; rs: LLMRecipeReport[]
         </tbody>
       </table>
       <p className="note">
-        门槛来自 docs/ARCHITECTURE.md §11.4（wikitext-2 PPL 相对劣化：FP8 ≤ 1%，W4A16 ≤ 5%，W4A8 ≤ 8%，W2 只记录）。
+        参考阈值为：FP8 ≤ 1%，W4A16 ≤ 5%，W4A8 ≤ 8%，W2 只记录。
         {gated.length > 0 && ` 本作业有门槛的 ${gated.length} 个配方中 ${gated.filter((x) => x.v.status === "pass").length} 个达标。`}
         PPL 越低越好，所以变化为负是变好。这是伪量化（fake-quant）评估的结果，真实导出与部署后的数字在下面各卡片里。
       </p>

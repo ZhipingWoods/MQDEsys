@@ -1,6 +1,6 @@
 """End-to-end VLA quantization evaluation job.
 
-Stages (subset of docs/ARCHITECTURE.md §5.1):
+Stages (subset of the architecture specification §5.1):
   S00 validate      parse + check the job spec
   S01 preflight     C++ estimator: memory / KV / state / concurrency / latency floor
   S03 inspect       load model, build the block view

@@ -9,7 +9,7 @@ Stages (same event protocol as the VLA job so the server/UI show it identically)
 
 Eval positions follow the design doc: pretrain / fake_quant_wo_kv / fake_quant.
 
-    python -m mqde.pipeline.llm_job --model /cache/wuzhiping/hub/Qwen2.5-0.5B-Instruct \
+    python -m mqde.pipeline.llm_job --model <model-dir> \
         --recipes w4a16,w4a8 --algorithm gptq --device cpu
 """
 

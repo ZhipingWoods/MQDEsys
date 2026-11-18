@@ -1,5 +1,5 @@
 #pragma once
-// Resource estimator (docs/ARCHITECTURE.md §9): weights, quantization metadata, KV cache,
+// Resource estimator (the architecture specification §9): weights, quantization metadata, KV cache,
 // linear-attention recurrent state, activations, runtime overhead, concurrency limits and a
 // roofline latency floor. Pure functions, no I/O beyond the loaders below.
 
@@ -69,7 +69,7 @@ struct Domain {
   struct ClassicAlgorithm {
     std::string name, note;
   };
-  std::vector<ClassicAlgorithm> classic_algorithms;  // reference list (docs/REFERENCES.md-style); an entry
+  std::vector<ClassicAlgorithm> classic_algorithms;  // reference list (the reference notes-style); an entry
                                                      // here does not imply it is implemented
   std::string default_eval_dataset;
   // "implemented": a real quantization pipeline exists for this domain (see python/mqde/pipeline/*).

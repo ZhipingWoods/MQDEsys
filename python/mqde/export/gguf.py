@@ -33,7 +33,12 @@ LINEAR = re.compile(r"^blk\.\d+\..+\.weight$")
 
 
 def llama_cpp_dir() -> Path:
-    for c in [os.environ.get("MQDE_LLAMACPP_SRC", ""), *sorted(map(str, Path("/cache/wuzhiping").glob("llama.cpp*")))]:
+    candidates = [os.environ.get("MQDE_LLAMACPP_SRC", "")]
+    candidates.extend(
+        str(Path.cwd() / name)
+        for name in ("llama.cpp", "llama-cpp", "third_party/llama.cpp")
+    )
+    for c in candidates:
         if c and (Path(c) / "convert_hf_to_gguf.py").is_file():
             return Path(c)
     raise FileNotFoundError("llama.cpp source with convert_hf_to_gguf.py not found (set MQDE_LLAMACPP_SRC)")

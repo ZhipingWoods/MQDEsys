@@ -201,9 +201,8 @@ try {
   check('switching back brings deploy.vllm back', (await preview()).deploy.vllm !== undefined);
   await pickBackend(page, 'none');
 
-  // ---- 3c. quant_device/eval_device split (T-1304/T-1306 follow-up): omitted when equal (today's
-  // default, unchanged job shape), appear only once they differ, resolved for real end to end by
-  // JobRunner (see job_runner_test.cpp / docs/PROGRESS.md for the server-side half of this) ----
+  // ---- 3c. quant_device/eval_device split: omitted when equal (today's
+  // default, unchanged job shape), appear only once they differ, and are resolved by the server.
   const j5a = await preview();
   check('both devices default to cpu and add no new fields', j5a.quant_device === undefined && j5a.evaluation.device === undefined && j5a.deploy.device === 'cpu', JSON.stringify({ quant_device: j5a.quant_device, eval_device: j5a.evaluation.device, deploy_device: j5a.deploy.device }));
   await page.getByTestId('quant-device-select').selectOption('gpu');

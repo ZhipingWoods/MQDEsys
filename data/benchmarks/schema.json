@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "mqde/benchmarks/submission/v1",
   "title": "MQDEsys measured throughput submission",
-  "description": "One file per `mqde bench` run (local/<hw-slug>/) or per imported record (community/<hw-slug>/). Field names follow llmfit's community format (docs/REFERENCES.md A.8). Matching is identical hardware only: hardware.hardwareName and hardware.cpu must equal this machine's, case-insensitive.",
+  "description": "One file per `mqde bench` run (local/<hw-slug>/) or per imported record (community/<hw-slug>/). Field names follow llmfit's community format (the reference notes A.8). Matching is identical hardware only: hardware.hardwareName and hardware.cpu must equal this machine's, case-insensitive.",
   "type": "object",
   "required": ["schemaVersion", "hardware", "results"],
   "properties": {

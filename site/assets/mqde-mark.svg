@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">MQDEsys mark</title>
+  <desc id="desc">A Möbius-inspired quantization loop collapsing into a black hole.</desc>
+  <defs>
+    <linearGradient id="bg" x1="16" y1="12" x2="111" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#171638"/>
+      <stop offset=".58" stop-color="#30206e"/>
+      <stop offset="1" stop-color="#073c43"/>
+    </linearGradient>
+    <linearGradient id="ribbon" x1="19" y1="26" x2="108" y2="102" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#c8c2ff"/>
+      <stop offset=".42" stop-color="#7568ff"/>
+      <stop offset=".76" stop-color="#35d4c1"/>
+      <stop offset="1" stop-color="#b7fff2"/>
+    </linearGradient>
+    <linearGradient id="ribbonShadow" x1="22" y1="28" x2="106" y2="103" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8b82ff" stop-opacity=".42"/>
+      <stop offset=".56" stop-color="#1b1954" stop-opacity=".82"/>
+      <stop offset="1" stop-color="#10a99f" stop-opacity=".7"/>
+    </linearGradient>
+    <linearGradient id="disk" x1="34" y1="50" x2="95" y2="78" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#b9fff4"/>
+      <stop offset=".5" stop-color="#7a6cff"/>
+      <stop offset="1" stop-color="#ffb56b"/>
+    </linearGradient>
+    <radialGradient id="core" cx="42%" cy="35%" r="68%">
+      <stop stop-color="#111326"/>
+      <stop offset=".68" stop-color="#05060d"/>
+      <stop offset="1" stop-color="#000"/>
+    </radialGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="3.2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+
+  <rect x="4" y="4" width="120" height="120" rx="34" fill="url(#bg)"/>
+  <rect x="5" y="5" width="118" height="118" rx="33" fill="none" stroke="#fff" stroke-opacity=".18" stroke-width="2"/>
+
+  <!-- A soft gravitational well behind the loop. -->
+  <circle cx="64" cy="64" r="25" fill="#6f63ff" opacity=".18" filter="url(#softGlow)"/>
+
+  <!-- The rear half of the Möbius-inspired ribbon. -->
+  <path d="M22 77 C14 55 27 31 52 23 C78 15 103 29 107 53 C112 78 95 101 71 106 C47 111 24 98 20 77"
+        fill="none" stroke="url(#ribbonShadow)" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M22 77 C14 55 27 31 52 23 C78 15 103 29 107 53 C112 78 95 101 71 106 C47 111 24 98 20 77"
+        fill="none" stroke="url(#ribbon)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- The returning half crosses the first ribbon, then contracts toward the core. -->
+  <path d="M21 62 C25 39 47 24 69 29 C91 34 103 53 96 73 C89 94 65 101 46 90 C28 80 23 61 32 45"
+        fill="none" stroke="#121239" stroke-opacity=".88" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M21 62 C25 39 47 24 69 29 C91 34 103 53 96 73 C89 94 65 101 46 90 C28 80 23 61 32 45"
+        fill="none" stroke="url(#ribbon)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+
+  <!-- Accretion disk and event horizon. -->
+  <ellipse cx="64" cy="64" rx="29" ry="10" transform="rotate(-18 64 64)"
+           fill="none" stroke="url(#disk)" stroke-width="5" opacity=".92" filter="url(#glow)"/>
+  <ellipse cx="64" cy="64" rx="22" ry="7" transform="rotate(-18 64 64)"
+           fill="none" stroke="#fff" stroke-opacity=".35" stroke-width="1.5"/>
+  <circle cx="64" cy="64" r="17" fill="url(#core)" stroke="#02030a" stroke-width="2"/>
+  <path d="M53 57h17M53 64h11M53 71h6" fill="none" stroke="#d8fff8" stroke-opacity=".62" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="58" cy="53" r="2" fill="#fff" opacity=".72"/>
+</svg>

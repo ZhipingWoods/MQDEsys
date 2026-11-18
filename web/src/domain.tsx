@@ -110,14 +110,13 @@ export function DomainSwitcher({ collapsed }: { collapsed: boolean }) {
   );
 }
 
-/** A one-line notice for pages viewed in a domain that has no pipeline yet. */
+/** A one-line notice for pages viewed in a domain that is unavailable. */
 export function DomainPendingNote() {
   const { current } = useDomain();
   if (!current || current.pipeline_status === "implemented") return null;
   return (
     <div className="note warn" data-testid="domain-pending" style={{ marginBottom: 12 }}>
-      {current.display_name}：该领域还没有量化流水线（只能浏览、不能提交作业）。参考方法：
-      {current.classic_algorithms.map((a) => a.name).join("、") || "—"}。
+      {current.display_name}：当前暂不支持提交作业，你仍可以浏览相关模型、硬件和评测信息。
     </div>
   );
 }

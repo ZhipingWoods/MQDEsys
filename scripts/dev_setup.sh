@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot developer environment (T-0008): conda toolchain -> Python dependency check -> CMake configure -> web deps.
+# One-shot developer environment: optional conda setup -> dependency check -> CMake configure -> web deps.
 # Idempotent: re-running updates the environment and reuses the build directory.
 #
 #   scripts/dev_setup.sh                 # Linux: conda env `mqde` from the toolchain file, then configure build/dev
@@ -13,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ENV_NAME=${ENV_NAME:-mqde}
-ENV_FILE=${ENV_FILE:-internal/docs/proposals/T-0006-ci/environment.ci.yml}
+ENV_FILE=${ENV_FILE:-}
 BUILD=${BUILD_DIR:-build/dev}
 DO_ENV=1 DO_WEB=1 CHECK=0
 for a in "$@"; do
@@ -33,7 +33,10 @@ act() { if [[ $CHECK -eq 1 ]]; then echo "(check) would run: $*"; else "$@"; fi;
 if [[ $DO_ENV -eq 1 ]]; then
   CONDA=$(command -v mamba || command -v conda || true)
   [[ -n $CONDA ]] || { echo "conda (or mamba) is required: https://github.com/conda-forge/miniforge" >&2; exit 1; }
-  [[ -f $ENV_FILE ]] || { echo "toolchain file $ENV_FILE not found (set ENV_FILE=...)" >&2; exit 1; }
+  [[ -n "$ENV_FILE" && -f $ENV_FILE ]] || {
+    echo "set ENV_FILE to a conda environment file, or rerun with --no-env" >&2
+    exit 1
+  }
   if "$CONDA" env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
     step "conda env '$ENV_NAME' exists: updating from $ENV_FILE"
     act "$CONDA" env update -n "$ENV_NAME" -f "$ENV_FILE" --prune

@@ -1,5 +1,5 @@
 // GGUF header reader (T-R05): written against byte-exact files built here, and the same parser is checked
-// against real llama.cpp output on the dev machine (see docs/TASKS.md).
+// against real llama.cpp output when the optional integration fixture is available.
 #include <gtest/gtest.h>
 #include <unistd.h>
 

@@ -68,7 +68,7 @@ std::vector<Problem> validate_jobspec(const Json& job);
 // ---- recommend (T-0211) ----
 
 // The export format planner::recommend tries for a recipe's weight spec, so check_deploy has something
-// concrete to test: int4 prefers awq (broadest vLLM support per docs/PROGRESS.md), other int bit widths
+// concrete to test: int4 prefers awq (broad backend support), other int bit widths
 // prefer gptq (wider bits_ok), fp8 uses compressed-tensors. Exposed so callers can show the reader which
 // format a recommendation assumes.
 // `backend`, when it names "llamacpp", always suggests "gguf" regardless of weight (GGUF re-quantizes from

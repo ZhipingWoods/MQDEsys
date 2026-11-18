@@ -26,9 +26,9 @@ export function useDebounced<T>(value: T, ms = 300): T {
   return v;
 }
 
-export const DEFAULT_MODEL = "/cache/wuzhiping/hub/MiniCPM-RobotManip";
-export const DEFAULT_DATASET = "/cache/wuzhiping/hub/datasets/lerobot_libero_10_image";
-export const DEFAULT_VLM = "/cache/wuzhiping/hub/MiniCPM-V-4.6";
-export const DEFAULT_LLM = "/cache/wuzhiping/hub/Qwen2.5-0.5B-Instruct";
-export const DEFAULT_WORLD = "/cache/wuzhiping/hub/MQDE-TinyDiT";
-export const DEFAULT_EWM = "/cache/wuzhiping/hub/MQDE-TinyDiT-EWM";
+export const DEFAULT_MODEL = "/path/to/models/MiniCPM-RobotManip";
+export const DEFAULT_DATASET = "/path/to/datasets/lerobot_libero_10_image";
+export const DEFAULT_VLM = "/path/to/models/MiniCPM-V-4.6";
+export const DEFAULT_LLM = "/path/to/models/Qwen2.5-0.5B-Instruct";
+export const DEFAULT_WORLD = "/path/to/models/MQDE-TinyDiT";
+export const DEFAULT_EWM = "/path/to/models/MQDE-TinyDiT-EWM";

@@ -23,6 +23,5 @@ node web/e2e/clone_from_suggestion.mjs
 Exit code: 0 all checks passed, 1 a check failed, 2 binary or `web/dist` missing, 3 Playwright missing (nothing ran).
 `MQDE_BIN` and `PLAYWRIGHT_DIR` override the server binary and the directory Playwright is installed in.
 
-Status: verified on macOS with Chrome (14/14, and 2 of them fail when the button is broken on purpose). The dev server has
-neither Playwright nor Chrome, so this is **not** part of `scripts/check_all.sh`; wiring it in changes the gate (L2, see
-internal/PROGRESS.md D-10).
+Status: verified on macOS with Chrome (14/14, and 2 of them fail when the button is broken on purpose). Browser checks are
+kept separate from the default local gate because they require a running service and a browser installation.

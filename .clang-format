@@ -1,4 +1,4 @@
-# Google style, 110-column lines (AGENTS.md §6).
+# Google style, 110-column lines.
 BasedOnStyle: Google
 ColumnLimit: 110
 IndentWidth: 2
