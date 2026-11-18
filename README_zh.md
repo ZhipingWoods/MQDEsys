@@ -86,36 +86,15 @@ MQDEsys 是面向大模型量化、评测与部署的一体化实验平台。用
 
 ## 快速开始
 
-### 构建
+MQDEsys 使用用户本地的工具链，不随项目打包服务器环境或模型权重。在 Linux、macOS 或已激活的 conda 环境中准备 C++ 编译器、Python 3.10+、CMake、Ninja 和 Node.js 后，执行：
 
 ```bash
 git clone https://github.com/zhipingwoods/MQDEsys.git
 cd MQDEsys
-
-cmake --preset dev
-cmake --build --preset dev -j 32
-ctest --preset dev
-
-pip install -e "python[dev,quant]"
-PYTHONPATH=python pytest python/tests -q
-
-cd web && npm install && npm run build && cd ..
+bash scripts/dev_setup.sh
 ```
 
-### 启动服务
-
-```bash
-build/dev/bin/mqde serve \
-  --repo "$PWD" \
-  --runs "$PWD/runs" \
-  --web "$PWD/web/dist" \
-  --python "$(which python)" \
-  --gpus 0,1 \
-  --allow /path/to/models \
-  --port 18080
-```
-
-服务默认监听 `127.0.0.1:18080`。
+脚本会调用本机包管理器安装原生依赖，在项目中创建 `.venv`，安装 Python 与量化依赖，构建 C++ 控制面和 Web 前端，并启动 [http://127.0.0.1:18080](http://127.0.0.1:18080)。将模型放入 `models/`，或设置 `MQDE_ALLOW=/data/models MQDE_GPUS=0`。如果依赖已经准备好，可设置 `MQDE_INSTALL_SYSTEM_DEPS=0`。各平台包管理器的具体依赖见[安装指南](docs/site/zh/get_started/installation.md)。
 
 ### 静态展示页与交互式 Demo
 

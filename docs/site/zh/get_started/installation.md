@@ -6,11 +6,23 @@ MQDEsys 由三部分组成，分别构建：C++ 核心（`mqde` 命令行、服�
 以下命令在 macOS（Apple M5，Homebrew 依赖，Python 3.12）与 Linux（conda 依赖）环境中验证。`<REPO>` 与 `<MODEL_DIR>` 为占位符，分别表示代码目录与本地模型目录。
 ```
 
-## 1. 构建 C++ 核心
+## 1. 准备本机工具链
+
+MQDEsys 使用目标设备上已经安装的工具，不要求用户复用开发机的 conda 环境，也不包含模型权重。在目标系统中准备支持 C++23 的编译器、CMake 3.25+、Ninja、Python 3.10+、Node.js 18+，以及下面列出的原生库，并使用本机包管理器完成安装。
+
+仓库提供适用于 Linux、使用 Homebrew 的 macOS，以及已激活 conda 环境的一键脚本：
+
+```bash
+bash scripts/dev_setup.sh
+```
+
+如果原生库已经安装，可设置 `MQDE_INSTALL_SYSTEM_DEPS=0`。脚本会在仓库内创建 `.venv`，安装 Python 依赖，构建 C++ 核心和 Web 前端，并启动服务。使用 `bash scripts/dev_setup.sh --no-start` 可只准备并构建项目。
+
+## 2. 构建 C++ 核心
 
 依赖要求：支持 C++23 的编译器（Apple clang 或 GCC 12 及以上）、CMake 3.25 及以上、Ninja，以及 nlohmann_json、yaml-cpp、fmt、CLI11、cpp-httplib。构建 Python 扩展还需要 Python 3.10 及以上与 pybind11；单元测试需要 GoogleTest。编译选项包含 `-Wall -Wextra -Werror`。
 
-仓库提供两个 CMake 预设：`dev`（RelWithDebInfo，含测试与 Python 扩展，依赖从 `$CONDA_PREFIX` 查找）和 `asan`（带 sanitizer 的 Debug）。
+仓库提供两个 CMake 预设：`dev`（RelWithDebInfo，含测试与 Python 扩展，依赖从本机工具链或 `$CONDA_PREFIX` 查找）和 `asan`（带 sanitizer 的 Debug）。
 
 ```bash
 cd <REPO>
@@ -37,7 +49,7 @@ build/mac/bin/mqde --version      # mqde 0.1.0
 build/mac/bin/mqde probe          # 本机 CPU / GPU 信息
 ```
 
-## 2. Python 环境
+## 3. Python 环境
 
 执行器需要 Python 3.10 及以上、`numpy` 与 `pyyaml`；量化流水线需要 `torch>=2.4`、`transformers>=4.44`、`safetensors` 与 `pyarrow`（`python/pyproject.toml` 的 `quant` extra）；GGUF 导出需要 `gguf`（`export` extra）。开发工具为 `pytest`、`ruff` 与 `mypy`（`dev` extra）。
 
@@ -63,7 +75,7 @@ python -c "from mqde import core; print(core.__name__)"
 
 未找到对应二进制时，该阶段标记为 `skipped` 并在报告中记录原因，不影响作业整体完成。
 
-## 3. Web 界面
+## 4. Web 界面
 
 ```bash
 cd <REPO>/web
@@ -71,7 +83,7 @@ npm install
 npm run build        # tsc -b && vite build，输出至 web/dist
 ```
 
-## 4. 启动服务
+## 5. 启动服务
 
 ```bash
 build/mac/bin/mqde serve --repo <REPO> --runs <REPO>/runs --web <REPO>/web/dist \
