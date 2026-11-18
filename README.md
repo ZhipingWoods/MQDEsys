@@ -9,6 +9,10 @@
 </p>
 
 <p align="center">
+  <a href="https://zhipingwoods.github.io/MQDEsys/">在线展示页</a>
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus" alt="C++20">
   <img src="https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB?logo=python" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react" alt="React 18">
@@ -116,6 +120,8 @@ build/dev/bin/mqde serve \
 服务默认监听 `127.0.0.1:18080`。
 
 ### 静态展示页与交互式 Demo
+
+在线展示页：[https://zhipingwoods.github.io/MQDEsys/](https://zhipingwoods.github.io/MQDEsys/)
 
 ```bash
 # 静态产品展示页

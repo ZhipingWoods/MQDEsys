@@ -8,6 +8,10 @@
 </p>
 
 <p align="center">
+  <a href="https://zhipingwoods.github.io/MQDEsys/">Live showcase</a>
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus" alt="C++20">
   <img src="https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB?logo=python" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react" alt="React 18">
@@ -115,6 +119,8 @@ build/dev/bin/mqde serve \
 The server listens on `127.0.0.1:18080` by default.
 
 ### Static showcase and interactive demo
+
+Live showcase: [https://zhipingwoods.github.io/MQDEsys/](https://zhipingwoods.github.io/MQDEsys/)
 
 ```bash
 # Static product showcase
