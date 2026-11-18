@@ -141,11 +141,28 @@ TEST(datasets, a_lerobot_path_that_is_a_file_or_missing_is_not_usable) {
 
 TEST(datasets, builtin_ids_are_recognised) {
   EXPECT_TRUE(is_builtin_dataset("synthetic"));
+  EXPECT_TRUE(is_builtin_dataset("synthetic-video"));
   EXPECT_TRUE(is_builtin_dataset("wikitext-2-raw-v1:train"));
   EXPECT_TRUE(is_builtin_dataset("wikitext-2-raw-v1:test"));
   EXPECT_FALSE(is_builtin_dataset("/data/corpus"));
   EXPECT_FALSE(is_builtin_dataset(""));
   EXPECT_FALSE(is_builtin_dataset("synthetic2"));
+}
+
+TEST(datasets, world_clips_are_npz_files_or_directories_of_them) {
+  const auto dir = std::filesystem::temp_directory_path() / "mqde-world-dataset-test";
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  {
+    std::ofstream(dir / "clip.npz", std::ios::binary) << "not really npz, metadata only";
+    std::ofstream(dir / "notes.txt") << "ignored";
+  }
+  auto i = inspect_world_dataset(dir.string());
+  EXPECT_TRUE(i.usable) << i.reason;
+  EXPECT_EQ(i.kind, "dir");
+  EXPECT_EQ(i.files, 1);
+  EXPECT_EQ(i.formats[".npz"], 1);
+  std::filesystem::remove_all(dir);
 }
 
 TEST(datasets, the_builtin_list_reports_whether_wikitext_is_in_the_hf_cache) {

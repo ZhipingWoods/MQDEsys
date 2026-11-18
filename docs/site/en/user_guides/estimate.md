@@ -1,6 +1,6 @@
 # Resource estimation and deployability
 
-**Status: implemented** (CLI, REST, web). Performance numbers are formula-based estimates unless a local measurement exists; they are not a promise.
+Resource estimation is available through the CLI, the REST API and the web UI. Performance figures are formula-based estimates unless a local measurement exists.
 
 Everything on this page reads only `config.json` and the safetensors *headers* of a model (a few KiB even for a remote model), never the weights. A model can be a local directory or `hf:<org>/<name>[@revision]`.
 
@@ -80,4 +80,4 @@ The web page [Deployment pre-evaluation](web_ui.md#deployment-pre-evaluation) sh
 
 ## Hardware and backend profiles
 
-Profiles are YAML: `data/hardware_db/<vendor>/<id>.yaml` (memory, bandwidth, per-precision peak throughput, native formats) and `data/backends/<name>.yaml`. Shipped hardware: `nvidia/rtx4090`, `nvidia/a100-80g`, `nvidia/h100-sxm`, `nvidia/jetson-agx-orin-64g`. Only NVIDIA profiles exist; AMD, Apple GPU and Ascend profiles are planned (T-1103 to T-1105). `mqde probe` detects NVIDIA GPUs through NVML (loaded dynamically) and the host CPU; on a machine without a profile match the device simply shows no profile.
+Profiles are YAML: `data/hardware_db/<vendor>/<id>.yaml` (memory, bandwidth, per-precision peak throughput, native formats) and `data/backends/<name>.yaml`. Shipped NVIDIA profiles: `rtx4090`, `a100-80g`, `h100-sxm`, `jetson-agx-orin-32g/64g`, `jetson-orin-nx-16g`, `jetson-orin-nano-8g`, `jetson-agx-thor`, `dgx-spark-gb10`, plus AMD MI300X, Intel Gaudi 2, MetaX C500 and Ascend 910B. The hardware page allows selecting any profile as a card and carrying it into a new job. `mqde probe` detects NVIDIA GPUs through NVML (loaded dynamically) and the host CPU; on a machine without a profile match the device simply shows no profile.

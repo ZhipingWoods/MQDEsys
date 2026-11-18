@@ -1,6 +1,6 @@
-# Compatibility matrix (T-0210). Every rule here is grounded in a specific, checked fact: either a constraint already
-# enforced by an exporter (python/mqde/export/*.py), or a result recorded in docs/PROGRESS.md from actually loading a
-# checkpoint. Anything not listed here falls back to the generic native_formats membership check in planner::validate.
+# Compatibility matrix. Every rule here is grounded in a specific, checked fact: either a constraint already
+# enforced by an exporter (python/mqde/export/*.py), or a result from loading a checkpoint in the compatibility
+# test suite. Anything not listed here falls back to the generic native_formats membership check in planner::validate.
 #
 # export_formats: packing / granularity constraints per container format, mirrored from the exporter that writes it.
 #   bits_ok: integer bit widths the container can represent.
@@ -52,7 +52,7 @@ backends:
         when: {symmetric: false}
         verdict: unsupported
         reason: "vLLM 0.30.0 rejects asymmetric GPTQ (ValidationError on bits=4, sym=False); export as AWQ or compressed-tensors instead, or use a symmetric recipe"
-        source: "docs/PROGRESS.md 2026-10 (GPTQ load FAIL, compressed-tensors load PASS, same checkpoint)"
+        source: "compatibility verification, 2026-10: GPTQ load failed, compressed-tensors load passed on the same checkpoint"
   sglang:
     # Each entry below was served end to end by SGLang 0.5.22.dev (3rdpart/sglang @ 86624f14eb) on an RTX 4090
     # with Qwen2.5-0.5B exported by this repo's own exporters; served PPL was within 0.05% of the real-weight PPL
@@ -63,7 +63,7 @@ backends:
         when: {symmetric: false}
         verdict: unsupported
         reason: "SGLang (86624f14eb) only registers gptq_marlin for CUDA and auto-converts Marlin-compatible (symmetric) GPTQ checkpoints; an asymmetric one falls through to plain gptq, which is not registered ('Unknown quantization method: gptq'); export as AWQ or compressed-tensors instead, or use a symmetric recipe"
-        source: "docs/PROGRESS.md 2026-10-12 (asymmetric GPTQ load FAIL, symmetric GPTQ -> gptq_marlin PASS, awq / compressed-tensors PASS, same model)"
+        source: "compatibility verification, 2026-10-12: asymmetric GPTQ load failed; symmetric GPTQ mapped to gptq_marlin, AWQ and compressed-tensors passed on the same model"
   hf_transformers:
     loads: []  # fake-quant evaluation only, never a deployment target for an exported checkpoint
   llamacpp:
@@ -72,5 +72,5 @@ backends:
     # spec at all (python/mqde/pipeline/llm_job.py's _llamacpp re-quantizes the original FP weights with
     # llama.cpp's own numerics via mqde._core.gguf_quantize, picked independently via deploy.llamacpp.types).
     # planner::check_deploy special-cases format=="gguf" to skip the weight-dependent checks entirely instead
-    # of a fabricated packing rule here (T-0705 shipped this backend; this compat entry was only added in
-    # T-1304 when the new-job wizard needed a backend->format lookup that includes it).
+    # of applying a fabricated packing rule; the new-job wizard also uses this entry for its backend-to-format
+    # lookup.

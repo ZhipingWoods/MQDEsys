@@ -1,10 +1,10 @@
 # Quick start
 
-This walk-through goes from "which recipe fits?" to a finished job in the UI. It assumes the build from [Installation](installation.md), a local Hugging Face model directory `<MODEL_DIR>` (we use Qwen2.5-0.5B-Instruct) and `PYTHONPATH=<REPO>/python`.
+This guide covers the workflow from resource estimation to inspecting quantization results in the web UI. It assumes the build from [Installation](installation.md), a local Hugging Face model directory `<MODEL_DIR>` (Qwen2.5-0.5B-Instruct is used below) and `PYTHONPATH=<REPO>/python`.
 
-## 1. Estimate without loading weights
+## 1. Estimate resources
 
-Put the CLI on your path first (the build directory depends on how you configured CMake):
+Add the CLI to `PATH` (the build directory depends on the CMake configuration):
 
 ```bash
 export PATH=<REPO>/build/mac/bin:$PATH
@@ -15,11 +15,13 @@ mqde model inspect <MODEL_DIR>
 mqde estimate -m <MODEL_DIR> -r bf16,w4a16,fp8 --hw nvidia/rtx4090 --ctx 4096 --conc 1,8,64
 ```
 
-`mqde estimate` prints, for every recipe, the weight bytes (including quantization metadata), KV cache, activation and runtime overhead, the peak against the device capacity, the maximum concurrency and a latency floor. For a model with the shape of Qwen2.5-0.5B (24 layers, hidden 896, 14/2 heads, bf16, 4096 context, RTX 4090 profile) it reports a W4A16 peak of 1.30 GiB against 1.82 GiB for BF16. [Estimation guide](../user_guides/estimate.md) explains each number.
+For each recipe, `mqde estimate` reports weight bytes (including quantization metadata), KV cache, activations, runtime overhead, peak memory relative to device capacity, maximum concurrency and a latency floor. The process reads only model configuration and tensor headers; no weights are loaded.
 
-## 2. Run an LLM quantization job
+For a model with the shape of Qwen2.5-0.5B (24 layers, hidden size 896, 14/2 heads, bf16, 4096 context, RTX 4090 profile), the W4A16 peak is 1.30 GiB versus 1.82 GiB for BF16. Metric definitions are given in [Resource estimation](../user_guides/estimate.md).
 
-From the command line the job is a single Python module; the same job can be submitted from the UI ("New job", LLM tab).
+## 2. Run a quantization job
+
+Jobs are executed by the Python pipeline and can also be submitted from the LLM entry of the **New job** page in the web UI.
 
 ```bash
 CUDA_VISIBLE_DEVICES="" PYTHONPATH=python python -m mqde.pipeline.llm_job \
@@ -27,35 +29,32 @@ CUDA_VISIBLE_DEVICES="" PYTHONPATH=python python -m mqde.pipeline.llm_job \
   --export awq --eval-windows 40 --job-dir runs/quickstart
 ```
 
-The same thing as a job file (`examples/jobs/qwen25_05b_wikitext.yaml` is the template; its `model.path` must point at your `<MODEL_DIR>`):
+A job specification file can be used instead (the template is `examples/jobs/qwen25_05b_wikitext.yaml`; set `model.path` to the local model directory):
 
 ```bash
 PYTHONPATH=python python -m mqde.pipeline.llm_job examples/jobs/qwen25_05b_wikitext.yaml
 ```
 
-The job loads the model, measures wikitext-2 perplexity (PPL) of the unquantized model, quantizes block by block with per-layer error tracing, measures PPL again with fake-quantized weights, and with `--export awq` writes a real AWQ checkpoint, reads it back and re-measures PPL with the real weights. Results are written to `<job-dir>/report.json`, and the live event stream to `<job-dir>/events.jsonl`.
+The job loads the model, measures the unquantized model's perplexity (PPL) on wikitext-2, quantizes block by block while recording per-layer error, and measures PPL again with fake-quantized weights. With `--export awq`, it also writes an AWQ checkpoint, reads it back and re-measures PPL with the real weights. Results are written to `<job-dir>/report.json`; the live event stream is written to `<job-dir>/events.jsonl`.
 
-For reference, a recorded job on Qwen2.5-0.5B-Instruct (CPU or GPU, wikitext-2, 40 windows of 512 tokens): unquantized PPL 18.10; W4A16 with GPTQ (int4, group size 128) 20.41 on a CPU run and 20.66 on a CUDA run (GPTQ is not bit-reproducible across devices); the AWQ checkpoint exported from the CUDA run measures 20.656 with the real weights, within 0.01% of the fake-quantized value.
+As a reference, on Qwen2.5-0.5B-Instruct over wikitext-2 with 40 windows of 512 tokens: unquantized PPL is 18.10; W4A16 + GPTQ (INT4, group size 128) gives 20.41 on CPU and 20.66 on CUDA. GPTQ results depend on the BLAS thread count; the job records `env.torch_threads`, and runs should only be compared when that value matches.
 
-```{warning}
-GPTQ results depend slightly on the number of BLAS threads (the job records `env.torch_threads`); compare runs only with the same thread count.
-```
+## 3. Inspect results in the web UI
 
-## 3. Look at the results in the UI
-
-Start the server (see [Installation](installation.md)), open the **Jobs** page and click your job. A job started from the command line with `--job-dir` under the server's `--runs` directory shows up in the list too.
+Start the server (see [Installation](installation.md)), open **Jobs & execution** and select the job. Command-line jobs started with `--job-dir` under the server's `--runs` directory also appear in the list.
 
 ```{figure} ../../_shared/img/jobs.png
-:alt: Job list of the web UI
+:alt: Job list in the web UI
 :width: 100%
 
-The job list (UI text is Chinese). Each row shows state, current stage, recipes, device and duration.
+Job list: each row shows state, current stage, recipes, device and duration.
 ```
 
-The job page shows the stage pipeline, the live log, perplexity at three evaluation positions, the recipe summary table, the export and consistency table and the worst layers. The [Web UI tour](../user_guides/web_ui.md) walks through each block with screenshots.
+The job detail page presents the stage pipeline, live log, perplexity at each evaluation position, recipe summary, export and consistency results, and the worst layers. See [Web UI guide](../user_guides/web_ui.md) for a complete walkthrough.
 
-## 4. Where to go next
+## 4. Further reading
 
-- Choose recipes and algorithms: [Quantization](../user_guides/quantization.md).
-- Every job field and flag: [Job spec reference](../user_guides/job_spec.md).
-- Serve the exported checkpoint and benchmark it: [Deployment and benchmarking](../user_guides/deploy_benchmark.md).
+- Recipe and algorithm selection: [Quantization](../user_guides/quantization.md)
+- Job fields and CLI options: [Job specification](../user_guides/job_spec.md)
+- Serving and load testing: [Deployment and benchmarking](../user_guides/deploy_benchmark.md)
+- Dataset evaluation: [Dataset evaluation](../user_guides/evaluation.md)

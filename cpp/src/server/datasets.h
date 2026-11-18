@@ -28,6 +28,8 @@ struct DatasetInfo {
 DatasetInfo inspect_text_dataset(const std::string& path, int64_t max_files = 20000);
 // A LeRobot v3 directory: meta/info.json and at least one data/chunk-*/file-*.parquet.
 DatasetInfo inspect_lerobot_dataset(const std::string& path);
+// A world-model clip (.npz with a `frames` array) or a directory of them.
+DatasetInfo inspect_world_dataset(const std::string& path, int64_t max_files = 20000);
 
 Json to_json(const DatasetInfo& i);
 

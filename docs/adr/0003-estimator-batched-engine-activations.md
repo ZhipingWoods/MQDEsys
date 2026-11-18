@@ -21,7 +21,7 @@
 | Qwen2.5-0.5B AWQ，利用率 0.3，RTX 4090 | 1024 | 76 | 547.03 | 0.139 | 0.978 |
 | 同上 | 32768 | 2 | 17.09 | 0.117 | 0.978 |
 
-权重估得准（0.978），并发偏低 7 到 8.5 倍。（预估值取自 `core.estimate(...)` 的 `max_concurrency`，实测值取自 vLLM 日志里的 `Maximum concurrency for N tokens per request`；两者的复现命令见 `docs/PROGRESS.md` 2026-10-08 日志。）
+权重估得准（0.978），并发偏低 7 到 8.5 倍。（预估值取自 `core.estimate(...)` 的 `max_concurrency`，实测值取自 vLLM 日志里的 `Maximum concurrency for N tokens per request`；两者的复现命令见 `internal/PROGRESS.md` 2026-10-08 日志。）
 
 ## 2. 原因
 

@@ -1,0 +1,10 @@
+# SGLang serving runtime. The KV pool is sized from mem_fraction_static; activation memory lives in the
+# remaining fraction, so the estimator keeps the per-sequence activation model (the batched vLLM model
+# would charge activations to the KV budget by mistake). Calibrated on RTX 4090, SGLang 0.5.22.
+id: sglang
+runtime_overhead_bytes: 536870912
+allocator_factor: 1.08
+eta_bw: 0.6
+mfu: 0.35
+activation_model: per_seq
+max_batched_tokens: 8192

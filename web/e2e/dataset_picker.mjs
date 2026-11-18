@@ -181,9 +181,9 @@ try {
   await until(() => /✗.*does not exist/.test(document.querySelector('[data-testid="eval-dataset-status"]')?.textContent ?? ''));
   check('an unreadable evaluation path blocks submitting, same as calibration', await submit.isDisabled(), await status('eval-dataset-status'));
   await page.getByTestId('eval-dataset-select').selectOption('wikitext-2-raw-v1:test');
-  await page.getByTestId('opt-quantize-only').check();
+  await page.getByTestId('job-mode-quantize').click();
   check('quantize-only hides the evaluation-data picker entirely (there is no eval stage to feed)', (await page.getByTestId('eval-dataset-select').count()) === 0 && await submit.isEnabled());
-  await page.getByTestId('opt-quantize-only').uncheck();
+  await page.getByTestId('job-mode-full').click();
   await page.getByTestId('eval-dataset-select').selectOption({ label: '本地文件或目录…' });
   await page.getByTestId('eval-dataset').fill(CORPUS);
   await until(() => /✓/.test(document.querySelector('[data-testid="eval-dataset-status"]')?.textContent ?? ''));

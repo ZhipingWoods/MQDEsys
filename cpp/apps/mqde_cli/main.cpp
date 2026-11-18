@@ -61,6 +61,10 @@ Json probe_json() {
               {"driver_version", d.driver_version}};
     if (d.kind == MQDE_DEV_GPU)
       if (auto hw = mqde::estimator::match_hardware(d.name)) j["profile"] = hw->id;
+    mqde_target t{};
+    char target[64];
+    if (mqde_target_for_device(&d, &t) == 0 && mqde_target_format(&t, target, sizeof target) == 0)
+      j["target"] = target;
     arr.push_back(j);
   }
   return arr;

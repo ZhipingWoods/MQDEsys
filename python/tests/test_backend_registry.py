@@ -92,11 +92,13 @@ def test_three_server_modules_register_on_import():
     vllm = BACKEND_REGISTRY["vllm"]
     assert vllm.needs_cuda is True
     assert "awq" in vllm.export_formats
+    assert "compressed-tensors" in vllm.export_formats
     assert vllm.spec_field == "vllm"
 
     sglang = BACKEND_REGISTRY["sglang"]
     assert sglang.needs_cuda is True
     assert "gptq" in sglang.export_formats
+    assert "compressed-tensors" in sglang.export_formats
 
     llamacpp = BACKEND_REGISTRY["llamacpp"]
     assert llamacpp.needs_cuda is False

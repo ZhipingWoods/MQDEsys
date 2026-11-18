@@ -2,52 +2,52 @@
 
 ## Installation and start-up
 
-**`mqde: command not found`.** The binary is `<build-dir>/bin/mqde`; put that directory on `PATH` or call it by path.
+**`mqde: command not found`.** The binary is located at `<build-dir>/bin/mqde`; add that directory to `PATH` or invoke it by full path.
 
-**CMake cannot find `nlohmann_json`, `yaml-cpp`, `fmt`, `CLI11` or `httplib`.** Install them (Homebrew, apt, conda-forge) and pass `-DCMAKE_PREFIX_PATH=<prefix>`. The `dev` preset looks under `$CONDA_PREFIX`, so activate your conda environment first or configure by hand as in [Installation](get_started/installation.md).
+**CMake cannot find `nlohmann_json`, `yaml-cpp`, `fmt`, `CLI11` or `httplib`.** Install the dependencies (Homebrew, apt or conda-forge) and pass `-DCMAKE_PREFIX_PATH=<prefix>`. The `dev` preset resolves dependencies from `$CONDA_PREFIX`; activate the conda environment first or configure manually as described in [Installation](get_started/installation.md).
 
-**The build fails on a warning.** The project builds with `-Wall -Wextra -Werror`; a new compiler can introduce a warning that is an error here. Report it rather than disabling the flag.
+**The build fails on a warning.** The project builds with `-Wall -Wextra -Werror`, and a newer compiler may introduce a new warning. Please report the issue rather than disabling the flag.
 
-**`ImportError` for `mqde._core`.** The extension is built into `python/mqde/` only when CMake was configured with `-DMQDE_WITH_PYTHON=ON` using the same Python minor version you run (the file name carries it, for example `cpython-312`). Rebuild if you change Python.
+**`ImportError` for `mqde._core`.** The extension is built into `python/mqde/` only when CMake is configured with `-DMQDE_WITH_PYTHON=ON` and the Python minor version matches the build (the file name carries the version, for example `cpython-312`). Rebuild after changing Python.
 
-**Server returns HTTP 403 `model path is outside allowed roots`.** Start the server with `--allow <parent-of-your-model>` (repeatable).
+**The server returns HTTP 403 `model path is outside allowed roots`.** Start the server with `--allow <parent-of-model>` (repeatable).
 
-**Server returns 503 `server started without a GPU pool`.** Start it with `--gpus <ids>`, or submit an LLM job with `deploy.device: cpu`. VLA jobs always need a GPU.
+**The server returns 503 `server started without a GPU pool`.** Start it with `--gpus <ids>`, or submit an LLM job with `deploy.device: cpu`. VLA, WM and EWM jobs require a GPU.
 
-**`deploy.device=cpu is only supported for model.type=llm`.** Set `model.type: llm` in the job (the default is `vla`).
+**`deploy.device=cpu is only supported for model.type=llm`.** Set `model.type: llm` in the job specification (the default is `vla`).
 
-**The job list is empty or a job is stuck "running" after a server restart.** The server rebuilds job state from each job's `events.jsonl`; a job whose process died with the server stays "running" (known limitation).
+**The job list is empty after a restart, or a job remains in "running" state.** The server reconstructs state from each job's `events.jsonl`; a job that terminated with the server process retains its running state and must be resubmitted.
 
 ## Quantization results
 
-**GPTQ results differ between runs or machines.** The Cholesky and matrix products depend on the BLAS thread count and the device, and GPTQ's sequential error feedback amplifies the difference (about 1% PPL for W4 on Qwen2.5-0.5B). The job records `env.torch_threads`; compare runs only with the same value. The recorded CPU run gave W4A16 PPL 20.41 and the CUDA run 20.66.
+**GPTQ results differ between runs or machines.** Cholesky factorization and matrix multiplication depend on BLAS thread count and device, and GPTQ's per-layer error feedback amplifies the difference (about 1% PPL at W4 on Qwen2.5-0.5B). The job records `env.torch_threads`; compare runs only when this value matches.
 
-**W2 or W4A8 gives a huge PPL.** W2 is experimental and collapses on small models (the comparison page uses a log axis for this reason). Use mixed precision for the layers the sensitivity analysis flags.
+**PPL is unexpectedly high for W2 or W4A8.** W2 is an experimental recipe for very low bit widths and can degrade markedly on small models; the comparison page therefore uses a logarithmic axis. Use sensitivity analysis and mixed precision for sensitive layers.
 
-**My numbers differ from the documentation.** Docs numbers are for Qwen2.5-0.5B-Instruct, wikitext-2 test, 40 windows of 512 tokens, unless stated. PPL from `llama-perplexity` uses a different protocol (it scores the second half of each chunk) and is only comparable within its own table.
+**Documented numbers differ from local results.** Unless stated otherwise, documented numbers use Qwen2.5-0.5B-Instruct, the wikitext-2 test set and 40 windows of 512 tokens. `llama-perplexity` uses a different scoring protocol (only the second half of each chunk is scored) and is comparable only with its own results.
 
-**`unsupported` in the export table.** The exporter's `check()` found a layer it cannot represent (for example 3-bit weights for AWQ, activation quantization with compressed-tensors integer weights, or an AWQ/SmoothQuant scale that cannot be folded). The reasons are listed in `report.json` under the recipe's `export`.
+**An export entry reports `unsupported`.** The exporter's `check()` found a layer it cannot represent (for example 3-bit AWQ weights, compressed-tensors integer weights with quantized activations, or AWQ/SmoothQuant scaling that cannot be folded). The reason is recorded under the recipe's `export` field in `report.json`.
 
 ## Deployment
 
-**A stage shows `skipped`.** The engine binary was not found or there is no CUDA device (for vLLM). Set `MQDE_VLLM_BIN`, `MQDE_LLAMA_SERVER_BIN`, `MQDE_LLAMACPP_BIN` or build into the `build/...` directories listed in [Installation](get_started/installation.md).
+**A stage reports `skipped`.** The engine binary was not found, or no CUDA device is available (vLLM / SGLang). Set `MQDE_VLLM_BIN`, `MQDE_SGLANG_PYTHON`, `MQDE_LLAMA_SERVER_BIN` or `MQDE_LLAMACPP_BIN`, or build into the directories listed in [Installation](get_started/installation.md).
 
-**vLLM rejects the GPTQ checkpoint.** vLLM 0.30.0 refuses asymmetric 4-bit GPTQ (`bits=4, sym=False`), which the `w4a16` recipe produces. Export AWQ or compressed-tensors instead.
+**vLLM rejects a GPTQ checkpoint.** vLLM 0.30.0 does not accept asymmetric 4-bit GPTQ (`bits=4, sym=False`), which is the format produced by the `w4a16` recipe. Use an AWQ or compressed-tensors export, or a symmetric recipe.
 
-**vLLM fails to start (out of memory, KV cache too small).** The report carries a diagnosis taken from the vLLM log. Raise `deploy.vllm.gpu_memory_utilization` (default 0.3) if the GPU is free, lower `max_model_len`, or free the GPU.
+**vLLM fails to start (out of memory or KV cache too small).** The report includes diagnostics extracted from the vLLM log. Increase `deploy.vllm.gpu_memory_utilization` (default 0.3) when the GPU is idle, reduce `max_model_len`, or free device memory.
 
-**GGUF conversion fails: "llama.cpp source with convert_hf_to_gguf.py not found".** Set `MQDE_LLAMACPP_SRC` to a llama.cpp source tree.
+**GGUF conversion fails with `llama.cpp source with convert_hf_to_gguf.py not found`.** Point `MQDE_LLAMACPP_SRC` at the llama.cpp source directory.
 
-**Q4_K shows "144 fallback layers".** Tensors whose row length is not a multiple of 256 fall back to Q5_0, as `llama-quantize` does; this is expected for Qwen2.5-0.5B.
+**Q4_K reports "144 layer fallback".** Tensors whose row length is not a multiple of 256 fall back to Q5_0 following llama.cpp's rule; this is expected for Qwen2.5-0.5B.
 
-**The estimator's maximum concurrency is much lower than vLLM's.** Use the `vllm` backend profile: it models vLLM's batched activations (ADR-0003) and lands within 0.83 to 0.95 of vLLM's own figure on the two models checked. The default `hf_transformers` profile charges per-sequence activations and is a conservative bound for batching engines.
+**Estimated maximum concurrency is much lower than vLLM's figure.** Select the `vllm` backend profile, which accounts for activations per batch; on the models checked it lands within 0.83 to 0.95 of vLLM's reported value. The default `hf_transformers` profile accounts for activations per sequence and therefore provides a conservative lower bound.
 
-**`mqde fit` speed for the VLA model is far too high.** The formula counts one weight read per step; a VLA step runs ten denoising passes and vision encoding. A local `mqde bench` measurement replaces the formula for the same hardware.
+**`mqde fit` overestimates VLA throughput.** The formula assumes one weight read per step, while a VLA step includes multiple denoising passes and visual encoding. Use the measured value from `mqde bench` on the same hardware.
 
 ## Web UI
 
-**The page shows old content after a rebuild.** Hard-refresh the browser, check that `web/dist` is newer than your change, and that the server started with the right `--web` directory.
+**The page is stale after a rebuild.** Force-refresh the browser, confirm that `web/dist` is newer than the change, and verify the `--web` directory passed to the server.
 
-**The UI is in Chinese.** English UI strings are not shipped yet; the [tour](user_guides/web_ui.md) translates each page.
+**Interface language.** The web workspace is currently presented in Chinese; see the [UI guide](user_guides/web_ui.md) for the page structure.
 
-**Can I expose the server to other machines?** Not safely: there is no authentication. Keep the default loopback bind and use an SSH tunnel.
+**Can the server be exposed to other machines?** This is not recommended. The server does not enable authentication; keep it bound to loopback and use an SSH tunnel.

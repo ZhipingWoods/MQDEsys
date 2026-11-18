@@ -140,6 +140,55 @@ DatasetInfo inspect_lerobot_dataset(const std::string& path) {
   return i;
 }
 
+DatasetInfo inspect_world_dataset(const std::string& path, int64_t max_files) {
+  DatasetInfo i;
+  std::error_code ec;
+  const fs::path p(path);
+  if (!fs::exists(p, ec)) {
+    i.reason = "path does not exist";
+    return i;
+  }
+  if (fs::is_regular_file(p, ec)) {
+    i.kind = "file";
+    if (lower_suffix(p) != ".npz") {
+      i.reason = "unsupported world clip type '" + lower_suffix(p) + "' (expected .npz)";
+      return i;
+    }
+    const auto size = static_cast<int64_t>(fs::file_size(p, ec));
+    if (ec || size == 0) {
+      i.reason = "file is empty";
+      return i;
+    }
+    i.files = 1;
+    i.bytes = size;
+    i.formats[".npz"] = 1;
+    i.usable = true;
+    return i;
+  }
+  if (!fs::is_directory(p, ec)) {
+    i.reason = "not a file or directory";
+    return i;
+  }
+  i.kind = "dir";
+  fs::recursive_directory_iterator it(p, fs::directory_options::skip_permission_denied, ec), end;
+  for (; !ec && it != end; it.increment(ec)) {
+    std::error_code e2;
+    if (!it->is_regular_file(e2) || lower_suffix(it->path()) != ".npz") continue;
+    if (i.files >= max_files) {
+      i.files_capped = true;
+      break;
+    }
+    const auto size = static_cast<int64_t>(it->file_size(e2));
+    if (e2 || size == 0) continue;
+    ++i.files;
+    i.bytes += size;
+    ++i.formats[".npz"];
+  }
+  i.usable = i.files > 0 && i.bytes > 0;
+  if (!i.usable) i.reason = "no readable world clips in the directory (expected .npz files)";
+  return i;
+}
+
 Json to_json(const DatasetInfo& i) {
   Json j = {{"kind", i.kind},
             {"files", i.files},
@@ -154,7 +203,8 @@ Json to_json(const DatasetInfo& i) {
 }
 
 bool is_builtin_dataset(const std::string& id) {
-  return id == "synthetic" || id == "wikitext-2-raw-v1:train" || id == "wikitext-2-raw-v1:test";
+  return id == "synthetic" || id == "synthetic-video" || id == "wikitext-2-raw-v1:train" ||
+         id == "wikitext-2-raw-v1:test";
 }
 
 Json builtin_datasets() {
@@ -178,7 +228,12 @@ Json builtin_datasets() {
                     {"kind", "vision"},
                     {"roles", Json::array({"calibration", "evaluation"})},
                     {"available", true}};
-  return Json::array({wikitext_train, wikitext_test, synthetic});
+  Json synthetic_video = {{"id", "synthetic-video"},
+                          {"label", "synthetic-video（程序生成的视频片段，自带真实未来帧）"},
+                          {"kind", "world"},
+                          {"roles", Json::array({"calibration", "evaluation"})},
+                          {"available", true}};
+  return Json::array({wikitext_train, wikitext_test, synthetic, synthetic_video});
 }
 
 }  // namespace mqde::server

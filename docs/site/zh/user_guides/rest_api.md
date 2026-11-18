@@ -1,8 +1,8 @@
 # REST API 参考
 
-**状态：已实现，但尚未冻结。** 服务（`mqde serve`，cpp-httplib）在 `/api/v1` 下提供 JSON over HTTP，作业进度通过 Server-Sent Events 推送。目前还没有 OpenAPI 文件和生成的客户端（T-0007）：类型是手写在 `web/src/api.ts` 里的，路由在 `cpp/src/server/server.cpp`，所以请把返回结构视为可能变化。接口列表读自这两个文件；示例已对运行中的服务验证过。
+服务（`mqde serve`，cpp-httplib）在 `/api/v1` 下提供 JSON over HTTP，作业进度通过 Server-Sent Events 推送。接口定义位于 `cpp/src/server/server.cpp`，Web 客户端类型位于 `web/src/api.ts`。以下示例均可对运行中的服务直接执行。
 
-约定：请求体是 JSON（空请求体视为 `{}`）；错误形如 `{"code": "...", "message": "..."}`，状态码为 400（`invalid_argument`、`parse`）、403（`forbidden`：路径超出 `--allow`）、404、409、500 或 503。模型和数据集路径必须位于允许的根目录下。自定义动作用冒号表示（`/jobs/<id>:cancel`）。服务只监听回环地址，没有认证（计划中，T-1204）。
+约定：请求体是 JSON（空请求体视为 `{}`）；错误形如 `{"code": "...", "message": "..."}`，状态码为 400（`invalid_argument`、`parse`）、403（`forbidden`：路径超出 `--allow`）、404、409、500 或 503。模型和数据集路径必须位于允许的根目录下。自定义动作用冒号表示（`/jobs/<id>:cancel`）。服务默认仅监听回环地址，不启用认证。
 
 ## 系统
 
@@ -12,6 +12,9 @@
 | `GET /config` | `{allowed_roots, gpus, runs_dir}` |
 | `GET /hardware` | 探测到的设备（`devices`，含匹配的 `profile`）和作业 GPU 池（`job_gpus`） |
 | `GET /hardware/profiles` | 硬件画像库 |
+| `GET /benchmarks` | 离线 benchmark 元数据、套件和 EvalScope 数据集目录（`evalscope`，仅元数据） |
+| `GET /datasets` | 向导可用的内置数据集与允许的根目录 |
+| `GET /datasets/inspect?path=&kind=` | 只读检查一个数据文件 / 目录是否可用 |
 | `GET /recipes` | 量化配方（含 `id`、规格、`summary`） |
 | `GET /algorithms` | 量化算法（来自 `data/algorithms.yaml`） |
 | `GET /installed` | 本机发现的推理运行时（缓存 30 s） |
@@ -49,7 +52,9 @@ curl -s -X POST localhost:18080/api/v1/estimate \
 |---|---|
 | `GET /catalog?search=&provider=&capability=&limit=&include_demoted=` | 本地模型目录 |
 | `GET /hf/search?q=&limit=` | 在线 Hugging Face 搜索（需要网络） |
+| `GET /modelscope/search?q=&limit=` | 在线 ModelScope 搜索（需要网络） |
 | `POST /download` | `{model: "<org>/<name>", quant?, budget?, output_dir?, list?}`：开始下载（`list: true` 则只列出文件分组）；返回下载 id |
+| `POST /modelscope/download` | 同上，从 ModelScope 下载；状态中的 `provider` 为 `modelscope` |
 | `GET /download/<id>/status` | 进度 |
 | `POST /download/<id>:cancel` | 取消 |
 

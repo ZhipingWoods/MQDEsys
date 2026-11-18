@@ -1,0 +1,23 @@
+# Fallback template for a Hugging Face diffusers checkpoint (`model_index.json`) whose transformer
+# exposes the usual `transformer_blocks.<n>` / `blocks.<n>` layout. One component: the denoiser.
+# Serving is not supported; this family exists so the same FakeQuantEngine and report work.
+family: dit_diffusers
+modality: world
+match:
+  model_type: [wan, hunyuan_video, cogvideox, dit_diffusers]
+
+components:
+  - name: denoiser
+    modality: world
+    prefix: ''
+    block_regex: '(?:transformer_)?blocks\.(\d+)\.'
+
+default_keep_fp:
+  - 'patch_embed'
+  - 'time_embed'
+  - 'time_proj'
+  - 'condition_embedder'
+  - 'text_embedder'
+  - 'adapter'
+  - 'norm.*\.linear'
+  - 'proj_out'

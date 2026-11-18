@@ -37,6 +37,8 @@ export interface Derived {
   nEval: number;
   windows: number;
   maxNewTokens: number;
+  frames: number; // world / EWM: frames per clip
+  quantizeAction: boolean; // EWM: also quantize the action encoder
   attribution: boolean;
   quantizeOnly: boolean;
   quantDevice: string;
@@ -108,6 +110,8 @@ export function deriveFromJob(job: any, step: DeriveStep, d: Derived): Derived {
     nEval: e.n_samples ?? d.nEval,
     windows: e.max_windows ?? d.windows,
     maxNewTokens: e.max_new_tokens ?? d.maxNewTokens,
+    frames: e.frames ?? c.frames ?? d.frames,
+    quantizeAction: (q.also_quantize ?? []).includes("action"),
     attribution: e.attribution ?? d.attribution,
     quantizeOnly: !!e.skip,
     quantDevice: job?.quant_device ?? device,

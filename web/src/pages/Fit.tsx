@@ -3,7 +3,7 @@
 // breakdown, notes) and a "plan" view that grades one model on every hardware profile.
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api, DownloadStatus, FitLevel, FitQuery, fmt, fmtBytes, HfHit, ModelFit, probeNote } from "../api";
+import { api, DownloadStatus, FitLevel, FitQuery, fmt, fmtBytes, ModelFit, probeNote } from "../api";
 import { barItem, baseOption, Chart, token } from "../charts";
 import { useAsync, useDebounced } from "../hooks";
 
@@ -138,7 +138,7 @@ export default function FitPage() {
       <div className="page-head">
         <div>
           <h1>部署预评估</h1>
-          <p className="subtitle">仿 llmfit：对本地模型库逐一判断「能不能跑、用哪种量化、以什么模式、多快」，并综合打分排序。只读 config 与 safetensors 头，不加载权重。</p>
+          <p className="subtitle">按目标硬件排序：能不能跑、用什么量化、多快。只读模型头，不加载权重。</p>
         </div>
       </div>
 
@@ -295,23 +295,36 @@ export default function FitPage() {
 
       {sel && <Detail m={sel} query={dq} />}
 
-      <HubPanel />
     </>
   );
 }
 
-// ---- HF live search + download (llmfit hf-search / download) ----
-export function HubPanel() {
+// ---- live hub search + download (HuggingFace or ModelScope) ----
+type HubProvider = "hf" | "modelscope";
+type HubHit = { name: string; display_name?: string; parameters_raw: number; downloads: number; pipeline_tag: string; license?: string };
+
+export function HubPanel({ provider = "hf" }: { provider?: HubProvider }) {
+  const label = provider === "hf" ? "HuggingFace" : "ModelScope";
   const [q, setQ] = useState("");
   const [dq, setDq] = useState("");
   const [nonce, setNonce] = useState(0);
   const runSearch = () => { setDq(q.trim()); setNonce((n) => n + 1); };
-  const hits = useAsync(() => (dq.length >= 2 ? api.hfSearch(dq, 20) : Promise.resolve({ models: [] as HfHit[] })), [dq, nonce]);
+  const search = async (): Promise<{ models: HubHit[] }> => {
+    if (dq.length < 2) return { models: [] };
+    if (provider === "hf") {
+      const r = await api.hfSearch(dq, 20);
+      return { models: r.models.map((m) => ({ name: m.name, parameters_raw: m.parameters_raw, downloads: m.hf_downloads, pipeline_tag: m.pipeline_tag })) };
+    }
+    const r = await api.modelscopeSearch(dq, 20);
+    return { models: r.models.map((m) => ({ name: m.name, display_name: m.display_name, parameters_raw: m.parameters_raw, downloads: m.downloads, pipeline_tag: m.pipeline_tag, license: m.license })) };
+  };
+  const hits = useAsync(search, [dq, nonce, provider]);
   const [budget, setBudget] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
+  const listDownload = (model: string) => provider === "hf" ? api.download(model, { list: true, budget: budget || undefined }) : api.modelscopeDownload(model, { list: true, budget: budget || undefined });
   const groups = useAsync(
-    () => (picked ? api.download(picked, { list: true, budget: budget || undefined }) : Promise.resolve(null)),
-    [picked, budget],
+    () => (picked ? listDownload(picked) : Promise.resolve(null)),
+    [picked, budget, provider],
   );
   const [jobs, setJobs] = useState<DownloadStatus[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -328,7 +341,9 @@ export function HubPanel() {
     if (!picked) return;
     setErr(null);
     try {
-      const d = await api.download(picked, { quant, budget: budget || undefined });
+      const d = provider === "hf"
+        ? await api.download(picked, { quant, budget: budget || undefined })
+        : await api.modelscopeDownload(picked, { quant, budget: budget || undefined });
       setJobs((js) => [d, ...js]);
     } catch (e) {
       setErr(String(e));
@@ -337,18 +352,18 @@ export function HubPanel() {
   return (
     <div className="card">
       <div className="card-head">
-        <h2>HF 搜索与下载</h2>
-        <span className="muted small">实时查询 huggingface.co；下载到服务器 --allow 的第一个目录，完成后出现在本地模型库</span>
+        <h2>{label} 搜索与下载</h2>
+        <span className="muted small">实时查询 {provider === "hf" ? "huggingface.co" : "modelscope.cn"}；下载到服务器 --allow 的第一个目录，完成后出现在本地模型库</span>
       </div>
       <div className="form-row">
         <div className="field grow">
-          <label>搜索 Hub</label>
-          <input placeholder="如 Qwen3 8B GGUF" value={q} onChange={(e) => setQ(e.target.value)}
+          <label>搜索 {label}</label>
+          <input data-testid="hub-search" placeholder="如 Qwen3 8B GGUF" value={q} onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && runSearch()} />
         </div>
         <div className="field">
           <label>&nbsp;</label>
-          <button onClick={runSearch} disabled={q.trim().length < 2 || hits.loading}>
+          <button data-testid="hub-search-run" onClick={runSearch} disabled={q.trim().length < 2 || hits.loading}>
             {hits.loading ? "查询中…" : "查询"}
           </button>
         </div>
@@ -368,9 +383,9 @@ export function HubPanel() {
             <tbody>
               {hits.data?.models.map((h) => (
                 <tr key={h.name} className={`clickable ${picked === h.name ? "selected" : ""}`} onClick={() => setPicked(h.name)}>
-                  <td><b>{h.name}</b></td>
+                  <td><b>{h.name}</b>{h.display_name && h.display_name !== h.name && <div className="small muted">{h.display_name}</div>}{h.license && <span className="badge" style={{ marginLeft: 6 }}>{h.license}</span>}</td>
                   <td className="num">{h.parameters_raw ? `${fmt(h.parameters_raw / 1e9, 2)} B` : "–"}</td>
-                  <td className="num">{h.hf_downloads.toLocaleString()}</td>
+                  <td className="num">{h.downloads.toLocaleString()}</td>
                   <td className="muted small">{h.pipeline_tag}</td>
                 </tr>
               ))}
@@ -429,6 +444,7 @@ function Detail({ m, query }: { m: ModelFit; query: FitQuery }) {
   const plan = useAsync(() => api.plan(m.model, { use_case: query.use_case, concurrency: query.concurrency, context: query.context }), [m.model, query.use_case, query.concurrency, query.context]);
   const d = m.detail;
   return (
+    <>
     <div className="split">
       <div>
         <div className="card">
@@ -574,37 +590,6 @@ function Detail({ m, query }: { m: ModelFit; query: FitQuery }) {
         )}
       </div>
       <div>
-        <div className="card">
-          <h2>跨硬件规划</h2>
-          <p className="small muted" style={{ marginTop: -4 }}>同一模型在每个硬件画像上的最佳方案</p>
-          <table>
-            <thead>
-              <tr>
-                <th>硬件</th>
-                <th>适配</th>
-                <th>量化</th>
-                <th className="num">速度</th>
-              </tr>
-            </thead>
-            <tbody>
-              {plan.data?.rows.map((r) => (
-                <tr key={r.hardware} className={r.hardware === query.hardware ? "selected" : ""}>
-                  <td className="small">{r.system?.name}</td>
-                  <td>
-                    <FitBadge level={r.fit_level} />
-                  </td>
-                  <td>
-                    <span className="badge">{r.best_quant}</span>
-                  </td>
-                  <td className="num small">
-                    {r.speed_is_upper_bound && <span className="muted">≤ </span>}
-                    {fmt(r.estimated_tps, 1)} {r.speed_unit}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
         <div className="card note">
           <h2>说明</h2>
           <ul style={{ paddingLeft: 18, margin: 0 }}>
@@ -617,7 +602,61 @@ function Detail({ m, query }: { m: ModelFit; query: FitQuery }) {
         </div>
       </div>
     </div>
+    <div className="card" data-testid="cross-hardware-plan">
+      <div className="card-head">
+        <div>
+          <h2>跨硬件规划</h2>
+          <p className="note" style={{ margin: 0 }}>同一模型在每个硬件画像上的最佳方案；高亮行为当前评估目标。</p>
+        </div>
+        {plan.loading && <span className="status running">计算中</span>}
+        {plan.error && <span className="status critical">{plan.error}</span>}
+      </div>
+      <div className="table-wrap">
+        <table className="plan-table">
+          <thead>
+            <tr>
+              <th>硬件</th>
+              <th>形态</th>
+              <th>适配</th>
+              <th>最佳量化</th>
+              <th className="num">显存需求 / 可用</th>
+              <th className="num">速度</th>
+              <th className="num">评分</th>
+            </tr>
+          </thead>
+          <tbody>
+            {plan.data?.rows.map((r) => (
+              <tr key={r.hardware} className={r.hardware === query.hardware ? "selected" : ""}>
+                <td>
+                  <b className="small">{r.system?.name ?? r.hardware}</b>
+                  <div className="muted small mono">{r.hardware}</div>
+                </td>
+                <td><span className="badge">{hwForm(r.hardware ?? r.system?.name ?? "")}</span></td>
+                <td><FitBadge level={r.fit_level} /></td>
+                <td><span className="badge accent">{r.best_quant}</span></td>
+                <td className="num small">{fmt(r.memory_required_gb, 1)} / {fmt(r.memory_available_gb, 1)} GiB <span className="muted">({fmt(r.utilization_pct, 0)}%)</span></td>
+                <td className="num small">
+                  {r.speed_is_upper_bound && <span className="muted">≤ </span>}
+                  {fmt(r.estimated_tps, 1)} {r.speed_unit}
+                </td>
+                <td className="num small">{fmt(r.score, 1)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {!plan.loading && !plan.error && plan.data?.rows.length === 0 && <p className="muted small">没有可评估的硬件画像。</p>}
+    </div>
+    </>
   );
+}
+
+/** Coarse form factor for the cross-hardware table; the full profile list uses hardwareCategory(). */
+function hwForm(id: string): string {
+  const s = id.toLowerCase();
+  if (/jetson|orin|thor|agx|nano|nx\b/.test(s)) return "边缘";
+  if (/dgx|spark|rtx|quadro|workstation/.test(s)) return "工作站";
+  return "数据中心";
 }
 
 export function Meter({ pct, plain }: { pct: number; plain?: boolean }) {

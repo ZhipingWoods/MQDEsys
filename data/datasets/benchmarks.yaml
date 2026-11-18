@@ -1,0 +1,38 @@
+# Benchmarks the offline evaluator (python/mqde/eval/offline.py) and the server catalog expose.
+# kind: ppl (token-window perplexity), mcq (answer log-probability) or qa (generation + custom metrics).
+benchmarks:
+  - name: wikitext2_ppl
+    label: WikiText-2 PPL
+    kind: ppl
+    description: Non-overlapping WikiText-2 test windows; the same protocol as the quantization report.
+    metrics: [ppl]
+    tags: [llm, perplexity]
+    group: 基础语言建模
+    language: [en]
+    runner: offline
+    offline: true
+    source: https://huggingface.co/datasets/Salesforce/wikitext
+  - name: smoke_qa
+    label: Smoke QA
+    kind: qa
+    description: Short unambiguous questions; catches a broken or badly quantized chat model.
+    path: smoke_qa.jsonl
+    metrics: [accuracy]
+    tags: [llm, smoke]
+    group: 冒烟检查
+    language: [zh, en]
+    runner: offline
+    offline: true
+    sample_count: 12
+  - name: smoke_mcq
+    label: Smoke MCQ
+    kind: mcq
+    description: Tiny multiple-choice set scored by answer log-probability (no free-form judge).
+    path: smoke_mcq.jsonl
+    metrics: [accuracy]
+    tags: [llm, smoke, mcq]
+    group: 冒烟检查
+    language: [zh, en]
+    runner: offline
+    offline: true
+    sample_count: 8

@@ -1,0 +1,71 @@
+# Native evaluation datasets. These are loaded in-process with `datasets` and scored by
+# python/mqde/eval/native.py; they do not require a serving backend or an external CLI.
+#
+# `template` is applied to each row; MCQ choices are scored by length-normalised answer
+# log-probability, QA answers are generated and compared after extraction.
+benchmarks:
+  - name: gsm8k
+    label: GSM8K
+    kind: qa
+    runner: native
+    offline: false
+    dataset: openai/gsm8k
+    subset: main
+    split: test
+    metrics: [accuracy]
+    group: 数学
+    language: [en]
+    max_new_tokens: 256
+    template: "Solve the problem. End with '#### <number>'.\n\n{question}\n\nAnswer:"
+    source: https://huggingface.co/datasets/openai/gsm8k
+  - name: mmlu
+    label: MMLU
+    kind: mcq
+    runner: native
+    offline: false
+    dataset: cais/mmlu
+    subset: all
+    split: test
+    metrics: [accuracy]
+    group: 知识与推理
+    language: [en]
+    template: "Question: {question}\nAnswer:"
+    source: https://huggingface.co/datasets/cais/mmlu
+  - name: arc_challenge
+    label: ARC-Challenge
+    kind: mcq
+    runner: native
+    offline: false
+    dataset: allenai/ai2_arc
+    subset: ARC-Challenge
+    split: test
+    metrics: [accuracy]
+    group: 知识与推理
+    language: [en]
+    template: "Question: {question}\nAnswer:"
+    source: https://huggingface.co/datasets/allenai/ai2_arc
+  - name: hellaswag
+    label: HellaSwag
+    kind: mcq
+    runner: native
+    offline: false
+    dataset: Rowan/hellaswag
+    split: validation
+    metrics: [accuracy]
+    group: 常识
+    language: [en]
+    template: "Context: {question}\nChoose the most plausible continuation.\nAnswer:"
+    source: https://huggingface.co/datasets/Rowan/hellaswag
+  - name: winogrande
+    label: Winogrande
+    kind: mcq
+    runner: native
+    offline: false
+    dataset: allenai/winogrande
+    subset: winogrande_xl
+    split: validation
+    metrics: [accuracy]
+    group: 常识
+    language: [en]
+    template: "Sentence: {question}\nWhich option fits the blank?\nAnswer:"
+    source: https://huggingface.co/datasets/allenai/winogrande

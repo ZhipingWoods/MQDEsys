@@ -1,0 +1,46 @@
+# Architecture template: a diffusion transformer (DiT) for video / world-model generation.
+#
+# The quantizable part is the denoising transformer: patch embedding, timestep/prompt/action
+# conditioners and the final projection stay in their original precision because they are tiny and
+# numerically sensitive (the same reason LM heads and adaLN modulation stay FP in other families).
+#
+# Seen on: the built-in `MQDE-TinyDiT` demo checkpoint (examples/worlds) and any checkpoint whose
+# config.json declares `model_type: mqde_dit` with the tensor layout below.
+family: dit_world
+modality: world
+match:
+  model_type: [mqde_dit, mqde_dit_ewm, dit, dit_world]
+
+config_paths:
+  vision: [vision_config]
+
+# DiT block runtime shape (read by the C++ estimator when present in config.json).
+tokens_per_image: 16
+
+components:
+  - name: patch_embed
+    modality: vision
+    prefix: patch_embed.
+  - name: conditioner
+    modality: world
+    prefix: conditioner.
+  - name: action_encoder
+    modality: action
+    prefix: action_encoder.
+  - name: transformer
+    modality: world
+    prefix: transformer_blocks.
+    block_regex: '^(\d+)\.'
+  - name: final
+    modality: world
+    prefix: final_layer.
+
+default_keep_fp:
+  - 'patch_embed'
+  - 'conditioner'
+  - 'action_encoder'
+  - 'norm1\.linear'
+  - 'norm2\.linear'
+  - 'final_layer'
+  - 'pos_embed'
+  - 'frame_embed'

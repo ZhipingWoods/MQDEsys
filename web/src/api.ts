@@ -116,6 +116,7 @@ export interface Device {
   mem_free_bytes: Bytes;
   compute_units: number;
   driver_version: string;
+  target?: string; // FlagTree-style backend:arch:warp, e.g. cuda:sm_89:32
   profile?: string;
 }
 
@@ -155,12 +156,17 @@ export interface JobListItem {
   recipes?: string[];
   model?: string;
   gpu?: number;
-  kind?: "vla" | "llm" | "vlm" | "llm_deploy";
+  kind?: "vla" | "llm" | "vlm" | "world" | "ewm" | "llm_deploy";
   device?: string;
   device_name?: string; // measured device from the report (GPU index is unknown after a server restart)
   parent_job?: string; // 作业派生: the job this one was derived from
+  stages?: string[]; // explicit pipeline stages, when the job declared them
   started_ts?: number;
   last_ts?: number;
+  progress?: number;
+  progress_msg?: string;
+  trace_index?: number;
+  trace_total?: number;
   n_events: number;
 }
 
@@ -217,11 +223,27 @@ export interface RecipeReport {
   attribution?: ({ modality: string; units: number } & Score)[];
   layers: LayerTrace[];
   eval: Score;
+  deploy?: { native?: NativeServeReport };
   summary: {
     worst_layers: { name: string; out_sqnr_db: number; act_kurtosis: number | null }[];
     component_mean_out_sqnr_db: Record<string, number>;
     worst_stage: string | null;
     action_rel_l2_over_noise_floor: number | null;
+  };
+}
+
+export interface NativeServeReport {
+  status: "succeeded" | "degraded" | "failed" | "skipped";
+  protocol?: string;
+  endpoint?: string;
+  startup_s?: number;
+  error?: string;
+  reason?: string;
+  smoke?: { ok: boolean; latency_ms?: number; shape?: number[] };
+  load?: {
+    ok: number; requests: number; failed: number; concurrency: number; wall_s: number; requests_per_s: number;
+    latency_ms: { p50: number | null; p95: number | null; mean: number | null };
+    errors?: string[];
   };
 }
 
@@ -296,12 +318,28 @@ export interface SweepPoint {
   itl_ms?: { p50?: number; p90?: number; p99?: number };
 }
 /** T-0304 datasets: what the wizard may offer for calibration / evaluation, and what a typed path holds (metadata only). */
-export interface BuiltinDataset { id: string; label: string; kind: "text" | "vision"; roles: ("calibration" | "evaluation")[]; available: boolean; reason?: string }
+export interface BuiltinDataset { id: string; label: string; kind: "text" | "vision" | "world"; roles: ("calibration" | "evaluation")[]; available: boolean; reason?: string }
 export interface DatasetList { builtin: BuiltinDataset[]; allowed_roots: string[] }
 export interface DatasetInfo {
   builtin?: boolean; id?: string;
   kind?: "missing" | "file" | "dir"; files?: number; files_capped?: boolean; bytes?: number; formats?: Record<string, number>;
   usable: boolean; reason?: string;
+}
+export interface BenchmarkMeta {
+  name: string; label: string; kind: "ppl" | "mcq" | "qa";
+  description?: string; path?: string | null;
+  metrics?: string[]; tags?: string[];
+  group?: string; language?: string[];
+  runner?: "offline" | "native" | "evalscope"; offline?: boolean;
+  source?: string; sample_count?: number | null;
+  docs?: string;
+}
+export interface BenchmarkCatalog {
+  benchmarks: BenchmarkMeta[];
+  suites: Record<string, string[]>;
+  native: BenchmarkMeta[];
+  evalscope: BenchmarkMeta[];
+  evalscope_source: string;
 }
 
 export interface ConcurrencySweep {
@@ -343,6 +381,7 @@ export interface VllmDeploy {
   served_windows?: number;
   served_vs_real_ppl_pct?: number;
   lm_eval?: LmEval;
+  evalscope?: EvalScope;
 }
 
 /** lm-evaluation-harness run through its official CLI against the served model (ADR-0002). */
@@ -359,6 +398,29 @@ export interface LmEval {
       alias?: string;
       samples?: { original?: number; effective?: number };
       metrics: Record<string, { metric: string; filter: string; value: number; stderr: number | null }>;
+    }
+  >;
+}
+
+/** Benchmark run through the official evalscope CLI against the served model (external, optional). */
+export interface EvalScope {
+  status: "succeeded" | "failed" | "skipped";
+  reason?: string;
+  error?: string;
+  seconds?: number;
+  limit?: number | null;
+  seed?: number;
+  datasets?: Record<
+    string,
+    {
+      dataset: string;
+      pretty_name?: string;
+      model?: string;
+      score?: number | null;
+      n_samples?: number | null;
+      latency_ms_mean?: number | null;
+      analysis?: string | null;
+      metrics: Record<string, { value: number | null; num?: number | null; macro?: number | null }>;
     }
   >;
 }
@@ -408,6 +470,86 @@ export interface VLMJobReport {
   recipes?: Record<string, VLMRecipeReport>;
 }
 
+/** One evaluated clip in a world / EWM job. */
+export interface WorldSampleScore {
+  psnr: number;
+  mse: number;
+  psnr_vs_gt: number;
+  mse_vs_gt: number;
+  seed_id?: number | null;
+}
+
+/** report.json of mqde.pipeline.world_job (kind === "world" | "ewm"). */
+export interface WorldRecipeReport {
+  recipe: string;
+  algorithm: string;
+  weight: QuantSpecJson;
+  act: QuantSpecJson;
+  maturity?: string;
+  layers: LayerTrace[];
+  skipped?: string[];
+  attribution?: { modality: string; units: number; psnr_vs_ref: number; mse_vs_ref: number; psnr_vs_gt: number }[];
+  eval: Partial<{
+    psnr_vs_ref: number;
+    mse_vs_ref: number;
+    psnr_vs_gt: number;
+    mse_vs_gt: number;
+    psnr_drop_db: number | null;
+    mse_ratio_vs_gt: number | null;
+    lpips_vs_ref: number | null;
+    latency_ms_per_video: number;
+    latency_ms_per_frame: number;
+    peak_mem_bytes: number;
+    peak_mem_note: string;
+    per_sample: WorldSampleScore[];
+  }>;
+  deploy?: { native?: NativeServeReport };
+  summary: {
+    psnr_vs_ref: number | null;
+    mse_vs_ref: number | null;
+    psnr_vs_gt: number | null;
+    psnr_drop_db: number | null;
+    mse_ratio_vs_gt: number | null;
+    lpips_vs_ref: number | null;
+    psnr_over_noise_floor: number | null;
+    below_noise_floor: boolean | null;
+    worst_stage: string | null;
+    worst_layers: { name: string; out_sqnr_db: number; act_kurtosis: number | null }[];
+    component_mean_out_sqnr_db: Record<string, number>;
+    suggestion?: { rules: { match: string; skip: boolean }[]; layers: { name: string; component: string; out_sqnr_db: number; median_db: number }[]; extra_weight_bytes: number; basis: string };
+  };
+}
+
+export interface WorldJobReport {
+  job_id: string;
+  kind: "world" | "ewm";
+  error?: string;
+  verdict?: string;
+  spec: {
+    name: string; model_path: string; recipes: string[]; algorithm: string; device: string;
+    frames: number; sample_steps: number; action_conditioned: boolean; action_dim: number; quantize_only?: boolean;
+  };
+  stages: { stage: string; status: string; seconds?: number; error?: string }[];
+  model?: {
+    family: string; weights_source: string; arch: string; frames: number; action_conditioned: boolean; action_dim: number;
+    n_linears: number; components: Record<string, { modality: string; linears: number; quantizable: number; blocks: number }>;
+  };
+  data?: {
+    calib: { source: string; n: number; frames: number };
+    eval: { source: string; n: number; frames: number; has_gt: boolean; action_conditioned: boolean; action_dim: number; prompts: string[] };
+  };
+  baseline?: {
+    psnr_vs_gt: number; mse_vs_gt: number;
+    noise_floor: { psnr: number; mse: number };
+    latency_ms_per_video: number; latency_ms_per_frame: number;
+    peak_mem_bytes: number; peak_mem_note: string;
+    frames: number; image_size: number; sample_steps: number;
+    action_conditioned: boolean; action_dim: number; lpips_vs_gt: number | null;
+  };
+  recipes?: Record<string, WorldRecipeReport>;
+  env?: { device_name?: string; device?: string; torch?: string; cuda?: string | null };
+}
+
 /** POST /models:gguf: a GGUF file's header (metadata + tensor table), read without its payload (T-R05). */
 export interface GgufSummary {
   path: string; version: number; alignment: number; file_bytes: number; data_offset: number; architecture: string; name: string;
@@ -449,6 +591,54 @@ export interface DeployJobReport {
     llamacpp?: { ppl: number; parent_ppl?: number | null; ppl_vs_parent_pct?: number | null; backend?: string; gpu_layers?: number | null; threads: number; serve?: LlamaServe; [k: string]: unknown };
   };
   env?: { device_name?: string };
+}
+
+/** report.json of mqde.pipeline.eval_job (kind === "llm_eval"): an existing quantized checkpoint evaluated
+ *  without quantizing it again. Serving backends are optional and only run when `stages` includes deploy. */
+export interface EvalJobReport {
+  job_id: string;
+  kind: "llm_eval";
+  verdict?: string;
+  error?: string;
+  plan?: string[];
+  spec: {
+    name: string; model_path: string; quantized_path?: string | null; quant_format?: string;
+    artifact?: { job: string; recipe?: string; format: string; type?: string } | null;
+    stages?: string[] | null; eval_seq_len: number; eval_windows: number; eval_dataset: string; device: string;
+  };
+  stages: { stage: string; status: string; seconds?: number; error?: string }[];
+  checkpoint?: {
+    path: string; format: string; source: "path" | "artifact"; job?: string; recipe?: string; type?: string;
+    bytes?: number | null; parent_real_ppl?: number | null; parent_baseline_ppl?: number | null;
+    parent_ppl?: number | null; parent_fake_ppl?: number | null;
+  };
+  data?: { eval: { dataset: string; windows: number; seq_len: number; benchmarks?: string[] } };
+  eval?: {
+    hf?: { status: string; reason?: string; ppl?: number; ppl_err?: number; windows?: number; seq_len?: number;
+           tokens?: number; seconds?: number; format?: string; dtype?: string; device?: string;
+           benchmarks?: OfflineBenchmarks };
+    llamacpp?: { status?: string; ppl?: number; ppl_err?: number; ctx?: number; chunks?: number; threads?: number;
+                 gpu_layers?: number | null; backend?: string | null; format?: string; [k: string]: unknown };
+  };
+  deploy?: { vllm?: VllmDeploy; sglang?: VllmDeploy; llamacpp?: LlamaServe & { reason?: string } };
+  env?: { device_name?: string; device?: string; hardware?: string; torch?: string };
+}
+
+export interface OfflineBenchResult {
+  status?: string;
+  reason?: string;
+  kind?: string;
+  metrics?: Record<string, number>;
+  n?: number;
+  limit?: number | null;
+  seconds?: number;
+  categories?: Record<string, { n: number; accuracy: number }>;
+  results?: { id?: string; category?: string; predicted?: number; answer?: number; passed?: boolean }[];
+}
+
+export interface OfflineBenchmarks {
+  framework: string;
+  benchmarks: Record<string, OfflineBenchResult>;
 }
 
 export interface LLMJobReport {
@@ -646,8 +836,13 @@ export interface CatalogModel {
   category: string; family_group: string;
 }
 export interface HfHit { name: string; provider: string; pipeline_tag: string; hf_downloads: number; hf_likes: number; parameters_raw: number }
+export interface MsHit {
+  name: string; provider: string; display_name: string; pipeline_tag: string;
+  downloads: number; likes: number; parameters_raw: number; license: string;
+  file_size: number; gated: boolean;
+}
 export interface DownloadStatus {
-  id: string; repo: string; group: string; dir: string; state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  id: string; repo: string; provider?: "hf" | "modelscope"; endpoint?: string; group: string; dir: string; state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   error: string; bytes_done: number; bytes_total: number; files_done: number; files_total: number;
 }
 export interface InstalledIndex { models: { name: string; canonical: string; source: string }[]; active_sources: string[]; elapsed_ms: number }
@@ -768,7 +963,8 @@ export const api = {
   claim: (model: string, hardware: string, min_tps: number) => req<ClaimBounds>("POST", "/fit:claim", { model, hardware, min_tps }),
   installed: () => req<InstalledIndex>("GET", "/installed"),
   datasets: () => req<DatasetList>("GET", "/datasets"),
-  inspectDataset: (path: string, kind: "text" | "lerobot") => req<DatasetInfo>("GET", `/datasets/inspect?path=${encodeURIComponent(path)}&kind=${kind}`),
+  inspectDataset: (path: string, kind: "text" | "lerobot" | "world") => req<DatasetInfo>("GET", `/datasets/inspect?path=${encodeURIComponent(path)}&kind=${kind}`),
+  benchmarks: () => req<BenchmarkCatalog>("GET", "/benchmarks"),
   catalog: (search = "", provider = "", capability = "", limit = 100, include_demoted = false) =>
     req<{
       updated_at: string; total: number; demoted: number; models: CatalogModel[];
@@ -777,6 +973,9 @@ export const api = {
     }>(
       "GET", `/catalog?search=${encodeURIComponent(search)}&provider=${encodeURIComponent(provider)}&capability=${encodeURIComponent(capability)}&limit=${limit}&include_demoted=${include_demoted ? 1 : 0}`),
   hfSearch: (q: string, limit = 20) => req<{ models: HfHit[] }>("GET", `/hf/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+  modelscopeSearch: (q: string, limit = 20) => req<{ models: MsHit[]; total: number }>("GET", `/modelscope/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+  modelscopeDownload: (model: string, opts: { quant?: string; budget?: string; list?: boolean } = {}) =>
+    req<DownloadStatus & { groups?: { group: string; bytes: number; files: number; quality: number }[]; chosen?: string }>("POST", "/modelscope/download", { model, ...opts }),
   download: (model: string, opts: { quant?: string; budget?: string; list?: boolean } = {}) =>
     req<DownloadStatus & { groups?: { group: string; bytes: number; files: number; quality: number }[]; chosen?: string }>("POST", "/download", { model, ...opts }),
   downloadStatus: (id: string) => req<DownloadStatus>("GET", `/download/${id}/status`),

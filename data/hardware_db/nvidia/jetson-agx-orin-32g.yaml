@@ -1,0 +1,11 @@
+id: nvidia/jetson-agx-orin-32g
+vendor: nvidia
+name: Jetson AGX Orin 32GB
+arch: sm_87
+match_names: ["Jetson AGX Orin 32GB", "AGX Orin 32GB"]
+mem_bytes: 34359738368          # unified memory shared with the CPU
+mem_bw_gbps: 204.8
+# Dense tensor-core estimates derived from the vendor's 200 TOPS INT8 (sparse) figure; not measured.
+peak_tflops: {fp32: 5.3, bf16: 42.5, fp16: 42.5, int8: 85, int4: 170}
+native_formats: [bf16, fp16, int8, int4]
+source: https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/

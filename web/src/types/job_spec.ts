@@ -29,9 +29,14 @@ export interface JobSpec {
   model: {
     source?: string;
     path: string;
-    type?: "llm" | "vlm" | "vla";
+    /** An already-quantized checkpoint to evaluate instead of quantizing model.path again (LLM only). */
+    quantized_path?: string;
+    quant_format?: string;
+    type?: "llm" | "vlm" | "vla" | "world" | "ewm";
     modality?: string;
   };
+  /** Explicit pipeline stages; absent keeps the historical all-in-one pipeline. */
+  stages?: ("quantize" | "evaluate" | "export" | "deploy")[];
   quant: {
     recipe: string[];
     algorithm?: string;
@@ -44,6 +49,7 @@ export interface JobSpec {
     dataset?: string;
     n_samples?: number;
     seq_len?: number;
+    frames?: number;
     // T-1304: free-form calibration text instead of a known dataset. Not yet read by any pipeline stage.
     custom_samples?: string[];
   };
@@ -53,6 +59,13 @@ export interface JobSpec {
     seq_len?: number;
     max_windows?: number;
     max_new_tokens?: number;
+    suite?: string;
+    benchmarks?: string | string[];
+    limit?: number;
+    frames?: number;
+    sample_steps?: number;
+    action_conditioned?: boolean;
+    action_dim?: number;
     concurrency?: number[];
     attribution?: boolean;
     // T-1304: independent of deploy.device/quant_device. Not yet read by any pipeline stage.
@@ -68,8 +81,17 @@ export interface JobSpec {
     llamacpp?: { types: string[] };
     vllm?: {
       gpu_memory_utilization?: number;
-      lm_eval?: { tasks: string[]; limit?: number; num_fewshot?: number };
+      lm_eval?: { tasks: string[]; limit?: number; num_fewshot?: number; baseline?: boolean };
+      evalscope?: EvalScopeSpec;
+      sweep?: Record<string, unknown>;
     };
+    sglang?: {
+      mem_fraction_static?: number;
+      lm_eval?: { tasks: string[]; limit?: number; num_fewshot?: number; baseline?: boolean };
+      evalscope?: EvalScopeSpec;
+      sweep?: Record<string, unknown>;
+    };
+    native?: { concurrency?: number; requests?: number; seed?: number };
   };
   export?: { formats: string[] };
   analysis?: {
@@ -78,4 +100,13 @@ export interface JobSpec {
     logits_probe?: { exact?: boolean };
   };
   output_dir?: string;
+}
+
+interface EvalScopeSpec {
+  datasets: string[];
+  limit?: number;
+  generation_config?: string | Record<string, unknown>;
+  eval_batch_size?: number;
+  seed?: number;
+  timeout?: number;
 }

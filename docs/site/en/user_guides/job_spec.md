@@ -1,6 +1,6 @@
 # Job spec reference
 
-**Status: implemented.** A job is described by a YAML file or JSON body (`POST /api/v1/jobs`); the LLM pipeline reads it into `LLMJobSpec` (`python/mqde/pipeline/llm_job.py`). Fields the server adds (`apiVersion: mqde/v1`, `kind: Job`) are ignored by the pipeline.
+A job is described by a YAML file or a JSON body (`POST /api/v1/jobs`); the LLM pipeline parses it into `LLMJobSpec` (`python/mqde/pipeline/llm_job.py`). Fields added by the server (`apiVersion: mqde/v1`, `kind: Job`) are ignored by the pipeline.
 
 ## Minimal example
 
@@ -74,4 +74,6 @@ The command prints a JSON summary (job id, baseline PPL, per-recipe PPL and algo
 
 ## Events and report
 
-`events.jsonl` has one JSON object per line: `job_state` (`RUNNING`, `SUCCEEDED`, `FAILED`), `stage_started`, `stage_finished` (with `seconds`, `status`), `log`, `metric` (`name`, `value`), `progress` (`value` 0..1) and `trace` (per-layer error). `report.json` keys include `baseline`, `recipes.<NAME>` (with `eval`, `summary`, `layers`, `export`, `sensitivity`), `llamacpp`, `env` and `stages`. Treat the report as an evolving format: it is not yet versioned or schema-validated (T-0007).
+`events.jsonl` has one JSON object per line, with fields `job_state` (`RUNNING`, `SUCCEEDED`, `FAILED`), `stage_started`, `stage_finished` (including `seconds` and `status`), `log`, `metric` (`name`, `value`), `progress` (0..1) and `trace` (per-layer error).
+
+The top-level keys of `report.json` are `baseline`, `recipes.<NAME>` (including `eval`, `summary`, `layers`, `export` and `sensitivity`), `llamacpp`, `env` and `stages`. The report structure evolves across releases; record the system version alongside results when comparing across versions.

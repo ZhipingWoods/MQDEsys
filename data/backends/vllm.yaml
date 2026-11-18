@@ -1,6 +1,6 @@
 # vLLM (V1 engine) serving runtime. The KV cache is one pre-allocated pool sized from gpu_memory_utilization,
 # so there is no caching-allocator headroom; the fixed overhead is the non-torch memory vLLM reports at startup
-# (CUDA context, cuBLAS / NCCL workspaces). Calibrated on RTX 4090, vLLM 0.30, Qwen2.5-0.5B (docs/PROGRESS.md).
+# (CUDA context, cuBLAS / NCCL workspaces). Calibrated on RTX 4090, vLLM 0.30, Qwen2.5-0.5B.
 #
 # Activations: vLLM packs all sequences into one batch of at most max_num_batched_tokens tokens, so the language
 # model's activation memory is charged once for min(context x concurrency, max_batched_tokens) tokens, not per

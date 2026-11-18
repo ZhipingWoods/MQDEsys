@@ -1,6 +1,6 @@
 # 作业配置参考
 
-**状态：已实现。** 作业由 YAML 文件或 JSON 请求体（`POST /api/v1/jobs`）描述；LLM 流水线把它读成 `LLMJobSpec`（`python/mqde/pipeline/llm_job.py`）。服务端补上的字段（`apiVersion: mqde/v1`、`kind: Job`）会被流水线忽略。
+作业由 YAML 文件或 JSON 请求体（`POST /api/v1/jobs`）描述；LLM 流水线将其解析为 `LLMJobSpec`（`python/mqde/pipeline/llm_job.py`）。服务端补充的字段（`apiVersion: mqde/v1`、`kind: Job`）由流水线忽略。
 
 ## 最小示例
 
@@ -74,4 +74,6 @@ output_dir: runs
 
 ## 事件与报告
 
-`events.jsonl` 每行一个 JSON 对象：`job_state`（`RUNNING`、`SUCCEEDED`、`FAILED`）、`stage_started`、`stage_finished`（含 `seconds`、`status`）、`log`、`metric`（`name`、`value`）、`progress`（`value` 取 0..1）和 `trace`（逐层误差）。`report.json` 的键包括 `baseline`、`recipes.<NAME>`（含 `eval`、`summary`、`layers`、`export`、`sensitivity`）、`llamacpp`、`env` 和 `stages`。请把报告视为仍在演进的格式：它还没有版本号，也没有 schema 校验（T-0007）。
+`events.jsonl` 每行一个 JSON 对象，字段包括 `job_state`（`RUNNING`、`SUCCEEDED`、`FAILED`）、`stage_started`、`stage_finished`（含 `seconds`、`status`）、`log`、`metric`（`name`、`value`）、`progress`（取值 0..1）与 `trace`（逐层误差）。
+
+`report.json` 的顶层键包括 `baseline`、`recipes.<NAME>`（含 `eval`、`summary`、`layers`、`export`、`sensitivity`）、`llamacpp`、`env` 与 `stages`。报告结构随系统版本演进，跨版本比对时建议同时记录系统版本。

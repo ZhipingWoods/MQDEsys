@@ -69,6 +69,6 @@ new-job wizard gains backend-aware export-format suggestion).
 ## 5. Test it
 
 Follow `tests/integration/deploy_llamacpp_cpu.sh` or the real vLLM verification documented in
-`docs/PROGRESS.md`'s T-0701/T-0703 entries: a tiny real checkpoint, real deploy, a smoke request, and (where
+`internal/PROGRESS.md`'s T-0701/T-0703 entries: a tiny real checkpoint, real deploy, a smoke request, and (where
 feasible) a served-PPL check against the unquantized baseline. A backend that was never run against a real
 server of its kind is not verified — do not mark the task DONE on mocked HTTP calls alone.

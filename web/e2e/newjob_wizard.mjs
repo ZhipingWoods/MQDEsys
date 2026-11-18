@@ -63,6 +63,11 @@ async function pickBackend(page, id) {
   } else for (const b of ids) { const o = page.getByTestId(`backend-toggle-${b}`); if (await o.isChecked()) await o.uncheck(); }
 }
 const enabledBackends = (page) => page.locator('[data-testid^="backend-card-"]:not(.off) .backend-name').allInnerTexts();
+const submitReady = (page) => page.waitForFunction(
+  () => [...document.querySelectorAll('button')].some((b) => b.textContent?.trim() === '提交作业' && !b.disabled),
+  null,
+  { timeout: 15000 },
+);
 const freePort = () => new Promise((res) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 const runs = fs.mkdtempSync(path.join(os.tmpdir(), 'mqde-e2e-runs-'));
 const port = await freePort();
@@ -96,9 +101,19 @@ try {
   check('the wizard opens on the first tab (LLM)', (await page.getByTestId('domain-tab-llm').getAttribute('class')).includes('on'));
 
   await page.getByTestId('domain-tab-world').click();
-  await page.getByTestId('domain-blocked').waitFor({ timeout: 10000 });
-  check('world (no real pipeline) shows the blocked notice', true);
-  check('submit is disabled for a blocked domain', await page.getByRole('button', { name: /该领域尚未支持提交/ }).isDisabled());
+  await page.getByTestId('world-note').waitFor({ timeout: 10000 });
+  check('world is a real pipeline: no blocked notice', (await page.getByTestId('domain-blocked').count()) === 0);
+  check('the world form explains what is quantized and how it is scored', (await page.getByTestId('world-note').innerText()).includes('PSNR'));
+  check('the world form has the clip frame count', await page.getByTestId('world-frames').isVisible());
+  const worldPreview = await preview();
+  check('the world JobSpec carries domain/model type and frames', worldPreview.domain === 'world' && worldPreview.model?.type === 'world' && worldPreview.evaluation?.frames === 4,
+    JSON.stringify({ domain: worldPreview.domain, type: worldPreview.model?.type, frames: worldPreview.evaluation?.frames }));
+  await submitReady(page);
+  check('submit is enabled for world', await page.getByRole('button', { name: '提交作业' }).isEnabled());
+
+  await page.getByTestId('domain-tab-ewm').click();
+  await page.getByTestId('ewm-quantize-action').waitFor({ timeout: 10000 });
+  check('EWM is selectable and offers the action-encoder opt-in', (await page.getByTestId('ewm-quantize-action').count()) === 1 && (await preview()).domain === 'ewm');
 
   await page.getByTestId('domain-tab-llm').click();
   check('switching back to llm (a real pipeline) removes the blocked notice', (await page.getByTestId('domain-blocked').count()) === 0);
@@ -165,27 +180,25 @@ try {
   const j3 = await preview();
   check('switching back to "不部署" clears all of them', j3.deploy.vllm === undefined && j3.deploy.llamacpp === undefined && j3.deploy.sglang === undefined, JSON.stringify([j3.deploy.vllm, j3.deploy.llamacpp, j3.deploy.sglang]));
 
-  // ---- 3b. "仅量化不评测" (evaluation.skip, T-1304/T-1306 follow-up) strips export/vllm/llamacpp/analysis
-  // outright -- even if they were set before the checkbox was ticked -- matching planner::validate_jobspec's
-  // own rejection list exactly, so the UI can never produce a job the server would 400.
+  // ---- 3b. the "仅量化" mode is a real stage list: quantize (+ the export format), no evaluate/deploy.
+  // It hides the serving section outright instead of leaving disabled cards around.
   await pickBackend(page, 'vllm');
   await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.vllm !== undefined; } catch { return false; } }, null, { timeout: 10000 });
   await page.getByTestId('backend-toggle-sglang').check(); // both backends on at once is allowed (compare them)
   await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.deploy?.sglang !== undefined; } catch { return false; } }, null, { timeout: 10000 });
-  await page.getByTestId('opt-quantize-only').check();
-  await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.evaluation?.skip === true; } catch { return false; } }, null, { timeout: 10000 });
+  await page.getByTestId('job-mode-quantize').click();
+  await page.waitForFunction(() => { try { return (JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.stages ?? []).includes('quantize'); } catch { return false; } }, null, { timeout: 10000 });
   const j4 = await preview();
-  check('quantize-only sets evaluation.skip', j4.evaluation.skip === true);
+  check('quantize-only sends an explicit stages list', JSON.stringify(j4.stages) === '["quantize","export"]', JSON.stringify(j4.stages));
+  check('and no evaluation section', j4.evaluation === undefined, JSON.stringify(j4.evaluation));
   check('and strips deploy.vllm even though it was set moments ago', j4.deploy.vllm === undefined, JSON.stringify(j4.deploy.vllm));
   check('and strips deploy.sglang too', j4.deploy.sglang === undefined, JSON.stringify(j4.deploy.sglang));
-  check('and strips export.formats', j4.export === undefined, JSON.stringify(j4.export));
+  check('but keeps an export format, so the quantized weights can be reused', (j4.export?.formats ?? []).length === 1, JSON.stringify(j4.export));
   check('and strips deploy.llamacpp', j4.deploy.llamacpp === undefined, JSON.stringify(j4.deploy.llamacpp));
-  check('the llama.cpp card is disabled while quantize-only is on', await page.getByTestId('backend-toggle-llamacpp').isDisabled());
-  check('the vLLM card is disabled too', await page.getByTestId('backend-toggle-vllm').isDisabled());
-  check('and the SGLang one', await page.getByTestId('backend-toggle-sglang').isDisabled());
-  await page.getByTestId('opt-quantize-only').uncheck();
-  await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.evaluation?.skip === undefined; } catch { return false; } }, null, { timeout: 10000 });
-  check('unchecking it brings deploy.vllm back', (await preview()).deploy.vllm !== undefined);
+  check('the serving section is hidden while quantize-only is on', (await page.getByTestId('backend-cards').count()) === 0);
+  await page.getByTestId('job-mode-full').click();
+  await page.waitForFunction(() => { try { return (JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.stages ?? []).includes('evaluate'); } catch { return false; } }, null, { timeout: 10000 });
+  check('switching back brings deploy.vllm back', (await preview()).deploy.vllm !== undefined);
   await pickBackend(page, 'none');
 
   // ---- 3c. quant_device/eval_device split (T-1304/T-1306 follow-up): omitted when equal (today's
@@ -242,7 +255,9 @@ try {
   // (a 403 server-side, correctly -- that is the same path-containment check every job submission gets);
   // "synthetic" is the server's own exempted special value (server.cpp's path_allowed), used here for
   // exactly the reason the real UI offers it: a job that does not need real data on disk.
-  await page.getByTestId('dataset-path').fill('synthetic');
+  await page.getByTestId('dataset-path-select').selectOption('synthetic');
+  await page.getByTestId('eval-dataset-path-select').selectOption('synthetic');
+  await submitReady(page);
   await page.getByRole('button', { name: '提交作业' }).click();
   await page.waitForURL(/\/jobs\/\d{8}-\d{6}-[0-9a-f]{6}$/, { timeout: 15000 });
   const vlaId = page.url().split('/').pop();
@@ -258,12 +273,14 @@ try {
   await page.goto(`${base}/new?mode=all`, { waitUntil: 'load' });
   await page.getByTestId('domain-tab-vla').click();
   await page.getByTestId('model-path').fill(MODEL);
-  await page.getByTestId('dataset-path').fill('synthetic');
+  await page.getByTestId('dataset-path-select').selectOption('synthetic');
+  await page.getByTestId('eval-dataset-path-select').selectOption('synthetic');
   await page.getByTestId('opt-quantize-only').check();
   await page.waitForFunction(() => { try { return JSON.parse(document.querySelector('pre.log')?.textContent ?? 'null')?.evaluation?.skip === true; } catch { return false; } }, null, { timeout: 10000 });
   const j5 = await preview();
   check('quantize-only forces VLA attribution off', j5.evaluation.attribution === false, JSON.stringify(j5.evaluation));
   check('and sets evaluation.skip', j5.evaluation.skip === true);
+  await submitReady(page);
   await page.getByRole('button', { name: '提交作业' }).click();
   await page.waitForURL(/\/jobs\/\d{8}-\d{6}-[0-9a-f]{6}$/, { timeout: 15000 });
   const qoId = page.url().split('/').pop();

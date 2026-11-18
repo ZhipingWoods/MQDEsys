@@ -118,7 +118,7 @@ avoids duplicates when the plugin's ordinals happen to equal NVML indices that a
 3. **Mark it as unverified in the plugin version string and in TASKS.md** (`0.1.0-untested`) until it has run on the hardware.
 
 What this does not prove: that the real library returns what the code expects, the capability tables, and anything numeric. Those
-are listed in `docs/TASKS.md` per plugin as "needs a machine with ...".
+are listed in `internal/TASKS.md` per plugin as "needs a machine with ...".
 
 ## 8. What is verified for each shipped plugin
 

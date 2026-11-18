@@ -1,0 +1,83 @@
+# Common decoder-only / MoE language-model architectures.
+# Kept in one template because the module layout is the HF standard (`model.layers.N` + `lm_head`);
+# the family list is what tells the estimator and the UI that a config was recognised instead of
+# falling through to generic_decoder. Add a model_type here when its config.json uses the standard
+# decoder layout; architectures with a different module tree belong in their own file.
+family: decoder_llm
+modality: llm
+match:
+  model_type:
+    - llama
+    - mistral
+    - mixtral
+    - qwen2
+    - qwen2_moe
+    - qwen3
+    - qwen3_moe
+    - gemma
+    - gemma2
+    - phi
+    - phi3
+    - phimoe
+    - deepseek_v2
+    - deepseek_v3
+    - gpt_oss
+    - glm4
+    - glm4_moe
+    - internlm2
+    - baichuan
+    - yi
+    - starcoder2
+    - olmo
+    - olmo2
+    - olmo3
+    - granite
+    - cohere
+    - cohere2
+    - falcon
+    - gpt_neox
+    - gpt2
+    - opt
+    - bloom
+    - mpt
+    - dbrx
+    - ernie4_5
+    - ernie4_5_moe
+    - hunyuan
+    - minimax
+    - minimax_m2
+    - exaone
+    - exaone4
+    - nemotron
+    - nemotron_h
+    - arctic
+    - solar
+    - stablelm
+    - xglm
+
+config_paths:
+  text: []
+  vision: []
+
+tokens_per_image: 0
+
+components:
+  - name: language
+    modality: language
+    prefix: model.
+    block_regex: 'layers\.(\d+)\.'
+  - name: language
+    modality: language
+    prefix: transformer.
+    block_regex: 'h\.(\d+)\.'
+  - name: lm_head
+    modality: language
+    prefix: lm_head.
+
+default_keep_fp:
+  - 'embed_tokens'
+  - 'wte'
+  - 'word_embeddings'
+  - 'lm_head'
+  - 'patch_embed'
+  - 'position_embedding'

@@ -1,0 +1,39 @@
+# Embodied world model (action-conditioned DiT). Same numerics as dit_world, with an action encoder
+# exposed as its own component so attribution can say whether quantizing the action path hurts the
+# predicted future. The encoder itself stays FP by default; `quant.also_quantize: [action]` opts in.
+family: dit_ewm
+modality: ewm
+match:
+  model_type: [mqde_dit_ewm, mqde_ewm, dit_ewm]
+
+config_paths:
+  vision: [vision_config]
+
+tokens_per_image: 16
+
+components:
+  - name: patch_embed
+    modality: vision
+    prefix: patch_embed.
+  - name: conditioner
+    modality: world
+    prefix: conditioner.
+  - name: action_encoder
+    modality: action
+    prefix: action_encoder.
+  - name: transformer
+    modality: world
+    prefix: transformer_blocks.
+    block_regex: '^(\d+)\.'
+  - name: final
+    modality: world
+    prefix: final_layer.
+
+default_keep_fp:
+  - 'patch_embed'
+  - 'conditioner'
+  - 'norm1\.linear'
+  - 'norm2\.linear'
+  - 'final_layer'
+  - 'pos_embed'
+  - 'frame_embed'

@@ -130,7 +130,7 @@ def _register() -> None:
         id="vllm",
         server_class="VllmServer",
         spec_field="vllm",
-        export_formats=["awq", "gptq", "compressed_tensors"],
+        export_formats=["awq", "gptq", "compressed-tensors"],
         needs_cuda=True,
         bin_check=lambda: vllm_bin() and None,
         module="mqde.backend.vllm_server",

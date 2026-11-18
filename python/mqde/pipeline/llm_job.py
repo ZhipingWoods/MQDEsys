@@ -46,6 +46,23 @@ def _opt_dict(v: Any) -> dict[str, Any] | None:
     return dict(v) if isinstance(v, dict) else ({} if v else None)
 
 
+STAGE_NAMES = ("quantize", "evaluate", "export", "deploy")
+
+
+def _stages(v: Any) -> list[str] | None:
+    """`stages:` from the job YAML: None when absent, else a validated list of known stage names."""
+    if v is None:
+        return None
+    if not isinstance(v, list) or not all(isinstance(s, str) for s in v):
+        raise ValueError("stages must be a list of strings")
+    bad = [s for s in v if s not in STAGE_NAMES]
+    if bad:
+        raise ValueError(f"unknown stage(s) {bad}; known: {list(STAGE_NAMES)}")
+    if len(set(v)) != len(v):
+        raise ValueError("stages must not repeat a name")
+    return list(v)
+
+
 @dataclass
 class LLMJobSpec:
     name: str
@@ -104,6 +121,13 @@ class LLMJobSpec:
     # ignored (logged, not silently dropped) when this is set -- validate_jobspec rejects the combination
     # before a server-submitted job gets this far; a direct CLI invocation is trusted to not combine them.
     quantize_only: bool = False
+    # Explicit stage selection (job YAML `stages: [quantize, evaluate, export, deploy]`). Absent keeps the
+    # legacy behaviour (everything the spec asked for: evaluate unless quantize_only, export when
+    # export.formats is set, deploy when vLLM / SGLang / llama.cpp is set). When present it is authoritative:
+    # `[quantize]` is a real "quantize only" job (the quantized weights are discarded unless `export` is also
+    # requested), `[quantize, export]` writes a reusable checkpoint without evaluating it, and
+    # `[quantize, evaluate]` evaluates without exporting or serving.
+    stages: list[str] | None = None
     # T-1304: advanced per-job override of the recipe's own per-group size (quant.group_size in the YAML,
     # the wizard's "高级参数" panel). None = use whatever each recipe's own data/recipes/*.yaml says.
     # Applies only to recipes whose weight granularity is already per_group -- a recipe quantizing
@@ -152,9 +176,36 @@ class LLMJobSpec:
             sensitivity=(d.get("analysis") or {}).get("sensitivity"),
             sensitivity_windows=int((d.get("analysis") or {}).get("sensitivity_windows", 8)),
             quantize_only=bool(e.get("skip", False)),
+            stages=_stages(d.get("stages")),
             group_size_override=int(q["group_size"]) if q.get("group_size") is not None else None,
             output_dir=d.get("output_dir", "runs"),
         )
+
+    @property
+    def plan(self) -> list[str]:
+        """The stages this job will run, in execution order."""
+        if self.stages is not None:
+            return [s for s in ("quantize", "evaluate", "export", "deploy") if s in self.stages]
+        if self.quantize_only:
+            return ["quantize"]
+        out = ["quantize", "evaluate"]
+        if self.export:
+            out.append("export")
+        if self.llamacpp or self.vllm is not None or self.sglang is not None:
+            out.append("deploy")
+        return out
+
+    @property
+    def evaluates(self) -> bool:
+        return "evaluate" in self.plan
+
+    @property
+    def exports(self) -> bool:
+        return "export" in self.plan
+
+    @property
+    def deploys(self) -> bool:
+        return "deploy" in self.plan
 
 
 def served_max_len(cfg: dict[str, Any], eval_seq_len: int, prompt_len: int, n_predict: int) -> int:
@@ -165,9 +216,9 @@ def served_max_len(cfg: dict[str, Any], eval_seq_len: int, prompt_len: int, n_pr
     return n
 
 
-def wants_lm_eval_baseline(vllm: dict[str, Any] | None) -> bool:
+def wants_lm_eval_baseline(vllm: dict[str, Any] | None, sglang: dict[str, Any] | None = None) -> bool:
     """Task accuracy of a quantized model means nothing without the unquantized model's on the same tasks: on by default."""
-    cfg = (vllm or {}).get("lm_eval")
+    cfg = (vllm or {}).get("lm_eval") or (sglang or {}).get("lm_eval")
     if not cfg:
         return False
     return bool(cfg.get("baseline", True))
@@ -350,7 +401,10 @@ class LLMJob:
             except Exception as e:  # report rendering is a convenience, not a result
                 self.ev.log(f"report.{lang}.html not written: {type(e).__name__}: {e}", level="warning")
 
-    def _export(self, ad: HFCausalLM, ids: torch.Tensor, recipe: str, fake_ppl: float) -> dict[str, Any]:
+    def _export(self, ad: HFCausalLM, ids: torch.Tensor | None, recipe: str, fake_ppl: float | None) -> dict[str, Any]:
+        """Write real checkpoints. `ids`/`fake_ppl` are None when the job has no evaluate stage: the export is
+        still validated with real_check (exported weights must reproduce the fake-quantized codes), but there is
+        no fake/real PPL delta to report."""
         from mqde.export import get_exporter
         from mqde.export.real_check import real_check, use_real_weights
 
@@ -368,17 +422,22 @@ class LLMJob:
             chk = self._stage("real_check", lambda: real_check(ad.model, d), f"{recipe}/{fmt}")
             chk.pop("per_layer")
 
-            def real_ppl() -> dict[str, Any]:
-                with use_real_weights(ad.model, d):
-                    return self._ppl(ad, ids, f"{recipe}.real_{fmt}")
+            rp: dict[str, Any] | None = None
+            if ids is not None and fake_ppl is not None:
+                def real_ppl() -> dict[str, Any]:
+                    with use_real_weights(ad.model, d):
+                        return self._ppl(ad, ids, f"{recipe}.real_{fmt}")
 
-            rp = self._stage("eval_real", real_ppl, f"{recipe}/{fmt}")
-            out[fmt] = {"status": "exported", **res.to_dict(), "real_check": chk, "real_ppl": rp["ppl"],
-                        "real_vs_fake_ppl_pct": 100.0 * (rp["ppl"] / fake_ppl - 1.0)}
-            if self.spec.vllm is not None:
-                out[fmt]["vllm"] = self._stage("deploy_vllm", lambda: self._vllm_serve(d, ids, rp["ppl"]), f"{recipe}/{fmt}")
-            if self.spec.sglang is not None:
-                out[fmt]["sglang"] = self._stage("deploy_sglang", lambda: self._sglang_serve(d, ids, rp["ppl"]), f"{recipe}/{fmt}")
+                rp = self._stage("eval_real", real_ppl, f"{recipe}/{fmt}")
+            out[fmt] = {"status": "exported", **res.to_dict(), "real_check": chk,
+                        "real_ppl": rp["ppl"] if rp else None,
+                        "real_vs_fake_ppl_pct": (100.0 * (rp["ppl"] / fake_ppl - 1.0)
+                                                 if rp and fake_ppl else None)}
+            real_ppl_value = rp["ppl"] if rp else None
+            if self.spec.deploys and self.spec.vllm is not None and ids is not None:
+                out[fmt]["vllm"] = self._stage("deploy_vllm", lambda: self._vllm_serve(d, ids, real_ppl_value), f"{recipe}/{fmt}")
+            if self.spec.deploys and self.spec.sglang is not None and ids is not None:
+                out[fmt]["sglang"] = self._stage("deploy_sglang", lambda: self._sglang_serve(d, ids, real_ppl_value), f"{recipe}/{fmt}")
         return out
 
     def _vllm_serve(self, ckpt: Path, ids: torch.Tensor, real_ppl: float | None) -> dict[str, Any]:
@@ -412,8 +471,15 @@ class LLMJob:
                 sp = served_perplexity(srv.port, ids.tolist(), s.eval_seq_len, int(cfg.get("ppl_windows", s.eval_windows)),
                                        concurrency=conc)
                 sw = self._sweep(srv.port, cfg, prompt_len, n_predict)
+                served_name = openai_models(srv.port)[0]["id"]
                 lm = (self._lm_eval(srv.port, ckpt, self._serve_dir(ckpt) / f"lm-eval-{ckpt.name}", cfg["lm_eval"],
-                                    openai_models(srv.port)[0]["id"])
+                                    served_name)
+                      if cfg.get("lm_eval") else None)
+                es = (self._evalscope(srv.port, ckpt, self._serve_dir(ckpt) / f"evalscope-{ckpt.name}",
+                                      cfg["evalscope"], served_name)
+                      if cfg.get("evalscope") else None)
+                lm = (self._lm_eval(srv.port, ckpt, self._serve_dir(ckpt) / f"lm-eval-{ckpt.name}", cfg["lm_eval"],
+                                    served_name)
                       if cfg.get("lm_eval") else None)
                 props, engine = srv.props(), srv.engine_info()
         except Exception as e:
@@ -427,11 +493,12 @@ class LLMJob:
                 "engine": engine, "smoke": sm, "load": load, "served_ppl": sp["ppl"], "served_windows": sp["windows"],
                 "served_vs_real_ppl_pct": (100.0 * (sp["ppl"] / real_ppl - 1.0)) if real_ppl else None,
                 **({"lm_eval": lm} if lm is not None else {}),
+                **({"evalscope": es} if es is not None else {}),
                 **({"sweep": sw} if sw is not None else {})}
 
     def _sglang_serve(self, ckpt: Path, ids: torch.Tensor, real_ppl: float | None) -> dict[str, Any]:
         """S11 + S12 on SGLang: serve the exported checkpoint, smoke it, load it, score it with its own logprobs."""
-        from mqde.backend.base import openai_smoke
+        from mqde.backend.base import openai_models, openai_smoke
         from mqde.backend.sglang_server import SglangServer, sglang_python
         from mqde.eval.loadtest import LoadSpec, run_load
         from mqde.eval.served_ppl import served_perplexity
@@ -460,6 +527,13 @@ class LLMJob:
                 sp = served_perplexity(srv.port, ids.tolist(), s.eval_seq_len, int(cfg.get("ppl_windows", s.eval_windows)),
                                        concurrency=conc, api="sglang")
                 sw = self._sweep(srv.port, cfg, prompt_len, n_predict)
+                served_name = openai_models(srv.port)[0]["id"]
+                es = (self._evalscope(srv.port, ckpt, self._serve_dir(ckpt) / f"evalscope-{ckpt.name}",
+                                      cfg["evalscope"], served_name)
+                      if cfg.get("evalscope") else None)
+                lm = (self._lm_eval(srv.port, ckpt, self._serve_dir(ckpt) / f"lm-eval-{ckpt.name}", cfg["lm_eval"],
+                                    served_name)
+                      if cfg.get("lm_eval") else None)
                 props, engine = srv.props(), srv.engine_info()
         except Exception as e:
             self.ev.log(f"SGLang {ckpt.name}: failed: {e}", level="warning")
@@ -471,6 +545,8 @@ class LLMJob:
         return {"status": "succeeded" if good else "degraded", "startup_s": srv.startup_s, "args": srv.args, "props": props,
                 "engine": engine, "smoke": sm, "load": load, "served_ppl": sp["ppl"], "served_windows": sp["windows"],
                 "served_vs_real_ppl_pct": (100.0 * (sp["ppl"] / real_ppl - 1.0)) if real_ppl else None,
+                **({"lm_eval": lm} if lm is not None else {}),
+                **({"evalscope": es} if es is not None else {}),
                 **({"sweep": sw} if sw is not None else {})}
 
     @staticmethod
@@ -508,28 +584,47 @@ class LLMJob:
         return out
 
     def _lm_eval_baseline(self) -> dict[str, Any]:
-        """The same lm-eval run against the unquantized model, served by vLLM with the same dtype as the exported checkpoints."""
+        """The same lm-eval run against the unquantized model, served by whichever selected backend runs lm-eval."""
         from mqde.backend.base import openai_models
-        from mqde.backend.vllm_server import VllmServer, vllm_bin
-
-        s, cfg = self.spec, dict(self.spec.vllm or {})
+        s = self.spec
+        vcfg, scfg = dict(s.vllm or {}), dict(s.sglang or {})
+        if vcfg.get("lm_eval"):
+            cfg, backend = vcfg, "vLLM"
+        elif scfg.get("lm_eval"):
+            cfg, backend = scfg, "SGLang"
+        else:
+            return {"status": "skipped", "reason": "lm_eval is not enabled on any selected backend"}
         try:
-            vllm_bin()
+            if backend == "vLLM":
+                from mqde.backend.vllm_server import vllm_bin
+                vllm_bin()
+            else:
+                from mqde.backend.sglang_server import sglang_python
+                sglang_python()
         except FileNotFoundError as e:
             return {"status": "skipped", "reason": str(e)}
         if not torch.cuda.is_available():
             return {"status": "skipped", "reason": "no CUDA device"}
         ckpt = Path(s.model_path)
         max_len = served_max_len(cfg, s.eval_seq_len, int(cfg.get("prompt_len", 256)), int(cfg.get("n_predict", 64)))
-        srv = VllmServer(ckpt, self.out / "vllm-baseline.log", max_model_len=max_len, dtype="float16",
-                         gpu_memory_utilization=float(cfg.get("gpu_memory_utilization", 0.3)),
-                         enforce_eager=bool(cfg.get("enforce_eager", True)), max_num_seqs=max(int(cfg.get("concurrency", 4)), 8))
-        self.ev.log(f"vLLM baseline {ckpt.name}: starting on {srv.port} (max_model_len {max_len})")
+        if backend == "vLLM":
+            from mqde.backend.vllm_server import VllmServer
+            srv = VllmServer(ckpt, self.out / "vllm-baseline.log", max_model_len=max_len, dtype="float16",
+                             gpu_memory_utilization=float(cfg.get("gpu_memory_utilization", 0.3)),
+                             enforce_eager=bool(cfg.get("enforce_eager", True)),
+                             max_num_seqs=max(int(cfg.get("concurrency", 4)), 8))
+        else:
+            from mqde.backend.sglang_server import SglangServer
+            srv = SglangServer(ckpt, self.out / "sglang-baseline.log", max_model_len=max_len, dtype="auto",
+                               mem_fraction_static=float(cfg.get("mem_fraction_static", 0.3)),
+                               disable_cuda_graph=bool(cfg.get("disable_cuda_graph", True)),
+                               max_running_requests=max(int(cfg.get("concurrency", 4)), 8))
+        self.ev.log(f"{backend} baseline {ckpt.name}: starting on {srv.port} (max_model_len {max_len})")
         try:
             with srv:
                 res = self._lm_eval(srv.port, ckpt, self.out / "lm-eval-baseline", cfg["lm_eval"], openai_models(srv.port)[0]["id"])
         except Exception as e:
-            self.ev.log(f"vLLM baseline: failed: {e}", level="warning")
+            self.ev.log(f"{backend} baseline: failed: {e}", level="warning")
             return {"status": "failed", "error": str(e)[:1500], "diagnosis": srv.diagnose()}
         return res
 
@@ -554,6 +649,35 @@ class LLMJob:
                 self.ev.emit("metric", name=f"lm_eval.{model_dir.name}.{task}.{key}", value=m["value"], msg=f"lm-eval {task}")
         return {"status": "succeeded", **res}
 
+    def _evalscope(self, port: int, model_dir: Path, out_dir: Path, cfg: dict[str, Any], served_name: str) -> dict[str, Any]:
+        """Benchmark datasets through the official evalscope CLI against the already-running server.
+
+        ``deploy.<backend>.evalscope``: {datasets: [gsm8k, ...], limit, generation_config, eval_batch_size,
+        seed, timeout}. Skipped (not fatal) when the executable is missing, exactly like lm-eval.
+        """
+        from mqde.eval.evalscope_adapter import run_evalscope
+
+        datasets = [str(d) for d in cfg.get("datasets", ["gsm8k"])]
+        gen = cfg.get("generation_config")
+        if isinstance(gen, dict):
+            gen = ",".join(f"{k}={v}" for k, v in gen.items())
+        try:
+            res = run_evalscope(port, served_name, datasets, out_dir, limit=cfg.get("limit", 50),
+                                generation_config=gen, eval_batch_size=cfg.get("eval_batch_size"),
+                                seed=int(cfg.get("seed", 42)), timeout=float(cfg.get("timeout", 7200)))
+        except FileNotFoundError as e:
+            self.ev.log(f"evalscope {model_dir.name}: skipped ({e})")
+            return {"status": "skipped", "reason": str(e)}
+        except Exception as e:
+            self.ev.log(f"evalscope {model_dir.name}: failed: {e}", level="warning")
+            return {"status": "failed", "error": str(e)[:1500]}
+        for dataset, item in res["datasets"].items():
+            for key, m in item["metrics"].items():
+                if m.get("value") is not None:
+                    self.ev.emit("metric", name=f"evalscope.{model_dir.name}.{dataset}.{key}", value=m["value"],
+                                 msg=f"evalscope {dataset}")
+        return {"status": "succeeded", **res}
+
     def _run(self) -> None:
         s = self.spec
         torch.manual_seed(s.seed)
@@ -567,6 +691,8 @@ class LLMJob:
             "quant_device_name": device_name(s.quant_device), "eval_device_name": device_name(s.eval_device),
             "hardware": s.hardware,
         }
+        self.report["plan"] = s.plan
+        self.ev.log(f"stages: {' -> '.join(s.plan)}")
         recipes = self._stage("validate", lambda: [RecipeSpec.load(r) for r in s.recipes], ",".join(s.recipes))
         if s.group_size_override is not None:
             for r in recipes:
@@ -581,7 +707,7 @@ class LLMJob:
         eval_info: dict[str, Any] = {}
         prep = lambda: (calib_batches(ad.tokenizer, s.calib_samples, s.calib_seq_len, s.seed, source=s.calib_dataset, info=calib_info,  # noqa: E731
                                       texts=s.calib_texts),
-                        eval_ids(ad.tokenizer, source=s.eval_dataset, info=eval_info))
+                        eval_ids(ad.tokenizer, source=s.eval_dataset, info=eval_info) if s.evaluates else None)
         cal, ids = self._stage("calib_prepare", prep, "custom_samples" if s.calib_texts else s.calib_dataset)
         # the default keeps its familiar label; a named source is reported as given, with what was actually read from it
         calib_report = {"dataset": "wikitext-2 train"} if s.calib_dataset == BUILTIN_CALIB and not s.calib_texts else calib_info
@@ -589,9 +715,10 @@ class LLMJob:
         # kept this default); a different choice carries its own files/chars/truncated so Compare.tsx knows not
         # to lump it in with the default-dataset group (see matrix.ts grouping key)
         eval_report = {"dataset": "wikitext-2 test"} if s.eval_dataset == BUILTIN_EVAL else eval_info
-        self.report["data"] = {"calib": {**calib_report, "n": len(cal), "seq_len": s.calib_seq_len},
-                               "eval": {**eval_report, "windows": s.eval_windows, "seq_len": s.eval_seq_len}}
-        if previews := self._window_previews(ad, ids):
+        self.report["data"] = {"calib": {**calib_report, "n": len(cal), "seq_len": s.calib_seq_len}}
+        if ids is not None:
+            self.report["data"]["eval"] = {**eval_report, "windows": s.eval_windows, "seq_len": s.eval_seq_len}
+        if ids is not None and (previews := self._window_previews(ad, ids)):
             self.report["data"]["eval"]["previews"] = previews
         probe_windows, probe_ref = None, None
         base: dict[str, Any] | None = None
@@ -600,13 +727,14 @@ class LLMJob:
         # single-device behavior as before this existed, bit-for-bit (see the BLAS-thread-count comment
         # above: GPTQ's result depends on exactly this kind of incidental state staying unchanged).
         moves_devices = s.quant_device != s.eval_device
-        if s.quantize_only:
-            self.ev.log("quantize_only: skipping eval_baseline, logits probe, sensitivity, export and deploy")
+        if not s.evaluates:
+            self.ev.log("no evaluate stage: skipping eval_baseline, logits probe and sensitivity")
         else:
+            assert ids is not None
             if moves_devices:
                 ad.to(s.eval_device)
             base = self._stage("eval_baseline", lambda: self._ppl(ad, ids, "pretrain"))
-            if wants_lm_eval_baseline(s.vllm):
+            if wants_lm_eval_baseline(s.vllm, s.sglang):
                 self.report["baseline_lm_eval"] = self._stage("lm_eval_baseline", self._lm_eval_baseline)
             if s.logits_probe is not None:
                 pc = s.logits_probe
@@ -632,10 +760,11 @@ class LLMJob:
             rep["layers"] = [t.to_dict() for t in res.traces]
             rep["skipped"] = res.skipped
             rep["quantize_seconds"] = res.seconds
-            if s.quantize_only:
+            if not s.evaluates:
                 # No evaluation ran, so there is no PPL to report -- worst_layers still comes from the
                 # quantize-time trace (weight SQNR, or output SQNR when the algorithm captured activations),
-                # not from an eval stage, so it is still meaningful here.
+                # not from an eval stage, so it is still meaningful here. An export requested by the stages
+                # still happens while the fake-quantized weights are live (they are restored below).
                 rep["eval"] = {}
                 rep["summary"] = {
                     "ppl": None,
@@ -644,11 +773,14 @@ class LLMJob:
                     "worst_layers": sorted(({"name": t.name, "out_sqnr_db": t.out_sqnr_db, "w_sqnr_db": t.w_sqnr_db} for t in res.traces),
                                            key=lambda d: d["out_sqnr_db"] if d["out_sqnr_db"] is not None else d["w_sqnr_db"])[:10],
                 }
+                if s.exports:
+                    rep["export"] = self._export(ad, ids, recipe.name, None)
                 q.restore()
                 self.report["recipes"][recipe.name] = rep
                 self._save()
                 continue
             assert base is not None
+            assert ids is not None
             if moves_devices:
                 ad.to(s.eval_device)
             wo = self._stage("eval_fake_wo_kv", lambda: self._ppl(ad, ids, f"{recipe.name}.fake_quant_wo_kv"), recipe.name)
@@ -669,7 +801,7 @@ class LLMJob:
                         return self._ppl(ad, ids, f"{recipe.name}.fake_quant")
                 rep["eval"]["fake_quant"] = self._stage("eval_fake", with_kv, recipe.name)
                 rep["kv"] = {**kv_spec.to_dict(), "method": s.kv_method, "granularity": s.kv_granularity}
-            if s.export:
+            if s.exports:
                 rep["export"] = self._export(ad, ids, recipe.name, wo["ppl"])
             fq = rep["eval"].get("fake_quant", wo)
             rep["summary"] = {
@@ -687,8 +819,8 @@ class LLMJob:
             q.restore()
             self.report["recipes"][recipe.name] = rep
             self._save()
-        if s.llamacpp and s.quantize_only:
-            self.ev.log("quantize_only: skipping llama.cpp deploy")
+        if s.llamacpp and not s.deploys:
+            self.ev.log("no deploy stage: skipping llama.cpp deploy")
         elif s.llamacpp:
             self.report["llamacpp"] = self._stage("deploy_llamacpp", self._llamacpp, ",".join(s.llamacpp))
             self._save()
@@ -743,6 +875,7 @@ def main() -> None:
     ap.add_argument("--llamacpp-serve", help="llama-server load test as JSON, e.g. '{\"concurrency\": 8}'; 'off' disables")
     ap.add_argument("--sensitivity-windows", type=int)
     ap.add_argument("--quantize-only", action="store_true", help="skip every evaluation/export/deploy stage")
+    ap.add_argument("--stages", help="comma separated stages to run: quantize,evaluate,export,deploy (default: legacy full pipeline)")
     ap.add_argument("--group-size", type=int, help="override per_group recipes' group_size (no-op for a recipe that isn't per_group)")
     ap.add_argument("--job-dir")
     ap.add_argument("--job-id", help="server-assigned id; output goes to <output_dir>/<job-id>")
@@ -782,6 +915,8 @@ def main() -> None:
         spec.sensitivity_windows = a.sensitivity_windows
     if a.quantize_only:
         spec.quantize_only = True
+    if a.stages:
+        spec.stages = _stages(a.stages.split(","))
     if a.group_size is not None:
         spec.group_size_override = a.group_size
     if a.mixed_precision:
@@ -790,7 +925,8 @@ def main() -> None:
     job = LLMJob(spec, a.job_dir, a.job_id)
     rep = job.run()
     summary = {k: v["summary"] | {"algorithm": v["algorithm"]} for k, v in rep["recipes"].items()}
-    print(json.dumps({"job_id": job.job_id, "baseline_ppl": rep["baseline"]["ppl"], "recipes": summary}, indent=1, default=str))
+    print(json.dumps({"job_id": job.job_id, "stages": rep.get("plan"),
+                      "baseline_ppl": (rep.get("baseline") or {}).get("ppl"), "recipes": summary}, indent=1, default=str))
 
 
 if __name__ == "__main__":

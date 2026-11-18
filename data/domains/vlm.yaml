@@ -1,7 +1,7 @@
 id: vlm
 order: 20  # wizard tab position: LLM, VLM, VLA, WM, EWM
 display_name: VLM（视觉-语言）
-model_families: [minicpmv, qwen3_5]
+model_families: [minicpmv, minicpmo, qwen3_5, qwen_vl, llava, internvl, glm4v, llama4, idefics3]
 applicable_recipes: []
 classic_algorithms:
   - name: rtn

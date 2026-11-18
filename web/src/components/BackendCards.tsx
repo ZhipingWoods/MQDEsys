@@ -20,13 +20,13 @@ const INFO: Record<BackendId, Info> = {
     name: "vLLM",
     serves: "AWQ · GPTQ · compressed-tensors（W4A16 / FP8）",
     where: "GPU",
-    measures: "服务端 PPL、TTFT / TPOT / 吞吐、并发扫描、lm-eval 任务精度",
+    measures: "服务端 PPL、TTFT / TPOT / 吞吐、并发扫描、lm-eval、EvalScope",
   },
   sglang: {
     name: "SGLang",
     serves: "AWQ · GPTQ · compressed-tensors（W4A16 / FP8）",
     where: "GPU（独立的 SGLang 环境）",
-    measures: "服务端 PPL、TTFT / TPOT / 吞吐、并发扫描",
+    measures: "服务端 PPL、TTFT / TPOT / 吞吐、并发扫描、lm-eval、EvalScope",
   },
 };
 export const BACKEND_ORDER: BackendId[] = ["llamacpp", "vllm", "sglang"];

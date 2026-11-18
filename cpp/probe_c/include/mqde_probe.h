@@ -4,6 +4,7 @@
 #ifndef MQDE_PROBE_H_
 #define MQDE_PROBE_H_
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -30,6 +31,21 @@ const char* mqde_probe_last_error(void);
 /* "cpu" | "gpu" | "npu" | "other": the one spelling every consumer (CLI, server, Python, web UI) uses for a
  * device kind. */
 const char* mqde_dev_kind_name(mqde_dev_kind kind);
+
+/* FlagTree-style target descriptor, e.g. "cuda:sm_89:32", "rocm:gfx1100:64", "ascend:910b:32".
+ * A 2-part form ("ascend:910b") is accepted and gets the backend's conventional warp size. */
+typedef struct mqde_target {
+  char backend[16]; /* cuda | rocm | metal | ascend | maca | musa | sycl | cpu | other */
+  char arch[32];
+  int32_t warp_size;
+} mqde_target;
+
+/* Parses a target string. Returns 0 on success, non-zero on a malformed target (last_error has the reason). */
+int mqde_target_parse(const char* text, mqde_target* out);
+/* Derives the target for a probed device (vendor + arch -> backend, conventional warp size). */
+int mqde_target_for_device(const mqde_device_info* dev, mqde_target* out);
+/* Writes "backend:arch:warp" into buf (always NUL-terminated). Returns 0, or -1 when the buffer is too small. */
+int mqde_target_format(const mqde_target* t, char* buf, size_t cap);
 
 #ifdef __cplusplus
 }

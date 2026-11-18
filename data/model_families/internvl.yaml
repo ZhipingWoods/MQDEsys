@@ -1,0 +1,42 @@
+# InternVL 2 / 3 checkpoints in the HF `internvl_chat` layout:
+#   vision_model.encoder.layers.N   mlp1   language_model.model.layers.N   language_model.lm_head
+# The language config is nested under `llm_config` (InternVL3) rather than `text_config`.
+family: internvl
+modality: vlm
+match:
+  model_type: [internvl_chat, internvl, internvl2, internvl3]
+
+config_paths:
+  text: [llm_config]
+  vision: [vision_config]
+
+tokens_per_image: 256
+
+components:
+  - name: vision
+    modality: vision
+    prefix: vision_model.encoder.layers.
+    block_regex: '^(\d+)\.'
+  - name: vision
+    modality: vision
+    prefix: vision_model.
+  - name: merger
+    modality: vision
+    prefix: mlp1.
+  - name: language
+    modality: language
+    prefix: language_model.model.
+    block_regex: 'layers\.(\d+)\.'
+  - name: lm_head
+    modality: language
+    prefix: language_model.lm_head.
+  - name: language
+    modality: language
+    prefix: language_model.
+
+default_keep_fp:
+  - 'embed_tokens'
+  - 'lm_head'
+  - 'patch_embedding'
+  - 'position_embedding'
+  - 'class_embedding'

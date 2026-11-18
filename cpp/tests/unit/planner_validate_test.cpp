@@ -45,7 +45,7 @@ TEST(planner_algorithms, lists_the_real_catalog_with_the_right_metadata) {
   ASSERT_TRUE(all) << all.error().message;
   std::set<std::string> names;
   for (const auto& a : *all) names.insert(a.name);
-  for (const char* n : {"rtn", "gptq", "awq", "smoothquant", "awq+gptq", "smoothquant+gptq"})
+  for (const char* n : {"rtn", "gptq", "hqq", "awq", "smoothquant", "awq+gptq", "smoothquant+gptq", "awq+hqq"})
     EXPECT_TRUE(names.count(n)) << n;
   auto gptq = load_algorithm("gptq");
   ASSERT_TRUE(gptq);
@@ -54,6 +54,9 @@ TEST(planner_algorithms, lists_the_real_catalog_with_the_right_metadata) {
   auto rtn = load_algorithm("rtn");
   ASSERT_TRUE(rtn);
   EXPECT_FALSE(rtn->needs_calibration);
+  auto hqq = load_algorithm("hqq");
+  ASSERT_TRUE(hqq);
+  EXPECT_FALSE(hqq->needs_calibration) << "HQQ is data-free";
   auto bad = load_algorithm("nonsense");
   ASSERT_FALSE(bad);
   EXPECT_EQ(bad.error().code, Errc::kNotFound);
@@ -71,6 +74,8 @@ TEST(planner_resolve, matches_the_python_resolve_exactly_same_parts_same_order_s
   EXPECT_EQ(*resolve_algorithm("AWQ"), (std::vector<std::string>{"awq", "rtn"}))
       << "case-insensitive, and a lone transform gets the implicit rtn quantizer";
   EXPECT_EQ(*resolve_algorithm(" gptq "), (std::vector<std::string>{"gptq"}));
+  EXPECT_EQ(*resolve_algorithm("hqq"), (std::vector<std::string>{"hqq"}));
+  EXPECT_EQ(*resolve_algorithm("awq+hqq"), (std::vector<std::string>{"awq", "hqq"}));
   auto bad_name = resolve_algorithm("made_up");
   ASSERT_FALSE(bad_name);
   EXPECT_NE(bad_name.error().message.find("unknown quantization algorithm 'made_up'"), std::string::npos);
@@ -306,6 +311,15 @@ TEST(planner_validate_jobspec, a_valid_llm_job_has_no_problems) {
   EXPECT_TRUE(validate_jobspec(job).empty());
 }
 
+TEST(planner_validate_jobspec, a_world_job_with_an_implemented_domain_is_accepted) {
+  Json job = {{"domain", "world"},
+              {"model", {{"type", "world"}}},
+              {"quant", {{"recipe", Json::array({"w4a16"})}, {"algorithm", "rtn"}}},
+              {"calibration", {{"n_samples", 8}}},
+              {"deploy", {{"device", "gpu"}}}};
+  EXPECT_TRUE(validate_jobspec(job).empty());
+}
+
 TEST(planner_validate_jobspec, an_empty_recipe_list_is_one_problem_with_a_suggestion) {
   Json job = {{"quant", {{"recipe", Json::array()}}}};
   auto p = validate_jobspec(job);
@@ -434,14 +448,14 @@ TEST(planner_validate_jobspec, an_unknown_domain_id_is_a_problem) {
   EXPECT_EQ(p[0].field, "/domain");
 }
 
-TEST(planner_validate_jobspec, a_domain_with_no_real_pipeline_is_rejected_with_a_clear_reason) {
+TEST(planner_validate_jobspec, world_and_ewm_domains_are_implemented_and_add_no_problem) {
   for (const char* id : {"world", "ewm"}) {
-    Json job = {
-        {"domain", id}, {"model", {{"type", "llm"}}}, {"quant", {{"recipe", Json::array({"w4a16"})}}}};
-    auto p = validate_jobspec(job);
-    ASSERT_EQ(p.size(), 1u) << id;
-    EXPECT_EQ(p[0].field, "/domain") << id;
-    EXPECT_NE(p[0].message.find("no"), std::string::npos) << id << ": " << p[0].message;
+    Json job = {{"domain", id},
+                {"model", {{"type", id}}},
+                {"quant", {{"recipe", Json::array({"w4a16"})}, {"algorithm", "rtn"}}},
+                {"calibration", {{"n_samples", 8}}},
+                {"deploy", {{"device", "gpu"}}}};
+    EXPECT_TRUE(validate_jobspec(job).empty()) << id;
   }
 }
 
@@ -492,13 +506,14 @@ TEST(planner_validate_jobspec, quantize_only_alone_is_fine_for_llm_and_vla) {
   EXPECT_TRUE(validate_jobspec(vla_job).empty());
 }
 
-TEST(planner_validate_jobspec, quantize_only_conflicts_with_export_vllm_llamacpp_and_analysis_for_llm) {
+TEST(planner_validate_jobspec, quantize_only_can_now_export_but_still_conflicts_with_deploy_and_analysis_for_llm) {
   Json base = {{"model", {{"type", "llm"}}},
                {"quant", {{"recipe", Json::array({"w4a16"})}}},
                {"evaluation", {{"skip", true}}}};
   Json with_export = base;
   with_export["export"] = {{"formats", Json::array({"awq"})}};
-  EXPECT_EQ(validate_jobspec(with_export).size(), 1u);
+  EXPECT_TRUE(validate_jobspec(with_export).empty())
+      << "quantize-only + export is a reusable checkpoint (llm_job writes it without a fake PPL)";
 
   Json with_vllm = base;
   with_vllm["deploy"] = {{"vllm", Json::object()}};
@@ -520,12 +535,85 @@ TEST(planner_validate_jobspec, quantize_only_conflicts_with_export_vllm_llamacpp
   with_logits_probe["analysis"] = {{"logits_probe", Json::object()}};
   EXPECT_EQ(validate_jobspec(with_logits_probe).size(), 1u);
 
-  for (const auto& j :
-       {with_export, with_vllm, with_sglang, with_llamacpp, with_sensitivity, with_logits_probe}) {
+  for (const auto& j : {with_vllm, with_sglang, with_llamacpp, with_sensitivity, with_logits_probe}) {
     auto p = validate_jobspec(j);
     ASSERT_EQ(p.size(), 1u);
     EXPECT_EQ(p[0].field, "/evaluation/skip");
   }
+}
+
+// ---- stages: decoupled pipeline (quantize / evaluate / export / deploy) ----
+
+TEST(planner_validate_jobspec, quantize_and_export_without_evaluate_is_a_valid_job) {
+  Json job = {{"model", {{"type", "llm"}}},
+              {"stages", Json::array({"quantize", "export"})},
+              {"quant", {{"recipe", Json::array({"w4a16"})}, {"algorithm", "rtn"}}},
+              {"export", {{"formats", Json::array({"awq"})}}}};
+  EXPECT_TRUE(validate_jobspec(job).empty());
+}
+
+TEST(planner_validate_jobspec, evaluate_only_accepts_a_quantized_path_without_quant) {
+  Json job = {{"model", {{"type", "llm"}, {"path", "/models/base"}, {"quantized_path", "/models/q4"}}},
+              {"stages", Json::array({"evaluate"})},
+              {"evaluation", {{"dataset", "wikitext-2-raw-v1:test"}}}};
+  EXPECT_TRUE(validate_jobspec(job).empty());
+}
+
+TEST(planner_validate_jobspec, evaluate_only_rejects_quantizing_the_checkpoint_again) {
+  Json job = {{"model", {{"type", "llm"}, {"path", "/models/base"}, {"quantized_path", "/models/q4"}}},
+              {"stages", Json::array({"quantize", "evaluate"})},
+              {"quant", {{"recipe", Json::array({"w4a16"})}}}};
+  auto p = validate_jobspec(job);
+  ASSERT_FALSE(p.empty());
+  bool found = false;
+  for (const auto& x : p) found |= x.field == "/model/quantized_path";
+  EXPECT_TRUE(found);
+}
+
+TEST(planner_validate_jobspec, deploy_needs_an_export_evaluate_and_backend) {
+  Json job = {{"model", {{"type", "llm"}}},
+              {"stages", Json::array({"quantize", "evaluate", "deploy"})},
+              {"quant", {{"recipe", Json::array({"w4a16"})}, {"algorithm", "rtn"}}},
+              {"deploy", {{"vllm", Json::object()}}}};
+  auto p = validate_jobspec(job);
+  bool missing_export = false;
+  for (const auto& x : p) missing_export |= x.field == "/stages" && x.message.find("export") != std::string::npos;
+  EXPECT_TRUE(missing_export);
+
+  job["stages"] = Json::array({"quantize", "export", "deploy"});
+  job["export"] = {{"formats", Json::array({"awq"})}};
+  p = validate_jobspec(job);
+  bool missing_eval = false;
+  for (const auto& x : p) missing_eval |= x.field == "/stages" && x.message.find("evaluate") != std::string::npos;
+  EXPECT_TRUE(missing_eval);
+
+  job["stages"] = Json::array({"quantize", "evaluate", "export", "deploy"});
+  EXPECT_TRUE(validate_jobspec(job).empty());
+  job["deploy"] = {{"device", "gpu"}};
+  p = validate_jobspec(job);
+  bool no_backend = false;
+  for (const auto& x : p) no_backend |= x.field == "/deploy";
+  EXPECT_TRUE(no_backend);
+}
+
+TEST(planner_validate_jobspec, unknown_or_duplicate_stages_are_reported) {
+  Json job = {{"model", {{"type", "llm"}}},
+              {"stages", Json::array({"quantize", "evaluate", "quantize", "teleport"})},
+              {"quant", {{"recipe", Json::array({"w4a16"})}}}};
+  auto p = validate_jobspec(job);
+  int stage_problems = 0;
+  for (const auto& x : p) stage_problems += x.field == "/stages";
+  EXPECT_EQ(stage_problems, 2);
+}
+
+TEST(planner_validate_jobspec, evaluate_without_quantize_names_no_checkpoint) {
+  Json job = {{"model", {{"type", "llm"}, {"path", "/models/base"}}},
+              {"stages", Json::array({"evaluate"})},
+              {"evaluation", {{"dataset", "wikitext-2-raw-v1:test"}}}};
+  auto p = validate_jobspec(job);
+  ASSERT_EQ(p.size(), 1u);
+  EXPECT_EQ(p[0].field, "/stages");
+  EXPECT_NE(p[0].message.find("quantized_path"), std::string::npos) << p[0].message;
 }
 
 TEST(planner_validate_jobspec, quantize_only_conflicts_with_vlm_attribution_too_including_the_default) {

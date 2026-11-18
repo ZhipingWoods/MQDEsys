@@ -1,0 +1,8 @@
+{"id":"mcq-capital-fr","subject":"geography","question":"What is the capital of France?","choices":["Lyon","Paris","Marseille","Nice"],"answer":"Paris"}
+{"id":"mcq-capital-jp","subject":"geography","question":"What is the capital of Japan?","choices":["Osaka","Kyoto","Tokyo","Nagoya"],"answer":"Tokyo"}
+{"id":"mcq-chem-water","subject":"science","question":"What is the chemical formula of water?","choices":["CO2","H2O","O2","NaCl"],"answer":"H2O"}
+{"id":"mcq-math-7x8","subject":"math","question":"What is 7 multiplied by 8?","choices":["54","56","64","48"],"answer":"56"}
+{"id":"mcq-planet-red","subject":"science","question":"Which planet is known as the Red Planet?","choices":["Venus","Mars","Jupiter","Mercury"],"answer":"Mars"}
+{"id":"mcq-lang-python","subject":"coding","question":"Which language uses the keyword 'def' to define a function?","choices":["C","Python","Java","Rust"],"answer":"Python"}
+{"id":"mcq-unit-byte","subject":"coding","question":"How many bits are in one byte?","choices":["4","8","16","32"],"answer":"8"}
+{"id":"mcq-author-hamlet","subject":"literature","question":"Who wrote the play Hamlet?","choices":["Charles Dickens","William Shakespeare","Jane Austen","Mark Twain"],"answer":"William Shakespeare"}

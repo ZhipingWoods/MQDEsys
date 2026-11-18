@@ -559,6 +559,158 @@ TEST_F(hal_rocm, alloc_and_free_go_through_the_runtime) {
     EXPECT_NE(api->alloc(0, 16, nullptr), 0);
   });
 }
+
+// ---- Ascend / CANN plugin against a stand-in ACL runtime
+// --------------------------------------------------------
+class hal_ascend : public ::testing::Test {
+ protected:
+  Env dir{"MQDE_PLUGIN_DIR", MQDE_TEMPLATE_PLUGIN_DIR};
+  Env only{"MQDE_HAL_PLUGINS", "ascend"};
+  Env off{"MQDE_HAL_DISABLE", nullptr};
+  Env lib{"MQDE_ASCEND_LIB_DIR", MQDE_FAKE_RUNTIME_DIR};
+  Env dev{"FAKE_ASCEND_DEVICES", nullptr};
+  Env soc{"FAKE_ASCEND_SOC", nullptr};
+  Env mem{"FAKE_ASCEND_MEM_MB", nullptr};
+  Env fail{"FAKE_ASCEND_FAIL", nullptr};
+};
+
+TEST_F(hal_ascend, lists_the_fake_devices_with_the_attributes_the_plugin_reads) {
+  IN_CHILD({
+    Env n("FAKE_ASCEND_DEVICES", "2");
+    Env m("FAKE_ASCEND_MEM_MB", "65536");
+    ASSERT_GE(mqde_hal_load_all(), 1);
+    mqde_hal_plugin_info p = plugin_info("ascend");
+    EXPECT_EQ(p.status, MQDE_HAL_LOADED) << p.reason;
+    EXPECT_EQ(p.devices, 2);
+    mqde_device_info devs[16];
+    int cnt = 0;
+    ASSERT_EQ(mqde_probe_all(devs, 16, &cnt), 0);
+    int found = 0;
+    for (int i = 0; i < cnt; ++i)
+      if (std::string(devs[i].vendor) == "huawei") {
+        EXPECT_EQ(devs[i].kind, MQDE_DEV_NPU);
+        EXPECT_EQ(devs[i].index, found);
+        EXPECT_STREQ(devs[i].arch, "ascend910b");
+        EXPECT_EQ(std::string(devs[i].name), "Ascend Ascend910B");
+        EXPECT_EQ(devs[i].mem_total_bytes, 65536ull << 20);
+        EXPECT_EQ(devs[i].mem_free_bytes, (65536ull << 20) * 3 / 4);
+        ++found;
+      }
+    EXPECT_EQ(found, 2);
+  });
+}
+
+TEST_F(hal_ascend, without_the_runtime_it_is_inactive_not_an_error) {
+  IN_CHILD({
+    Env nowhere("MQDE_ASCEND_LIB_DIR", "/nonexistent");
+    ASSERT_GE(mqde_hal_load_all(), 1);
+    mqde_hal_plugin_info p = plugin_info("ascend");
+    EXPECT_EQ(p.status, MQDE_HAL_INACTIVE) << p.reason;
+    EXPECT_EQ(p.devices, 0);
+  });
+}
+
+TEST_F(hal_ascend, a_failing_init_or_zero_devices_is_inactive) {
+  IN_CHILD({
+    Env f("FAKE_ASCEND_FAIL", "aclInit");
+    ASSERT_GE(mqde_hal_load_all(), 1);
+    EXPECT_EQ(plugin_info("ascend").status, MQDE_HAL_INACTIVE);
+  });
+  IN_CHILD({
+    Env z("FAKE_ASCEND_DEVICES", "0");
+    ASSERT_GE(mqde_hal_load_all(), 1);
+    EXPECT_EQ(plugin_info("ascend").status, MQDE_HAL_INACTIVE);
+  });
+}
+
+TEST_F(hal_ascend, capabilities_are_native_for_the_dtypes_cann_kernels_cover) {
+  IN_CHILD({
+    ASSERT_GE(mqde_hal_load_all(), 1);
+    const auto* api = mqde_hal_plugin_by_name("ascend");
+    ASSERT_NE(api, nullptr);
+    struct Case {
+      const char* dtype;
+      int supported;
+      int native;
+    };
+    for (const Case& c : {Case{"fp32", 1, 1}, Case{"fp16", 1, 1}, Case{"bf16", 1, 1}, Case{"int8", 1, 1},
+                          Case{"int4", 1, 0}, Case{"fp8_e4m3", 1, 0}, Case{"float128", 0, 0}}) {
+      mqde_hal_capability_query q{};
+      std::strcpy(q.dtype, c.dtype);
+      mqde_hal_capability_result r{};
+      ASSERT_EQ(api->supports(&q, &r), 0);
+      EXPECT_EQ(r.supported, c.supported) << c.dtype;
+      EXPECT_EQ(r.native, c.native) << c.dtype;
+    }
+    mqde_hal_capability_query q{};
+    std::strcpy(q.dtype, "fp16");
+    std::strcpy(q.op, "attention");
+    mqde_hal_capability_result r{};
+    EXPECT_NE(api->supports(&q, &r), 0);
+    q.device = -1;
+    std::strcpy(q.op, "");
+    EXPECT_NE(api->supports(&q, &r), 0);
+  });
+}
+
+TEST_F(hal_ascend, bandwidth_runs_the_real_copy_loop_and_reports_what_it_measured) {
+  IN_CHILD({
+    ASSERT_GE(mqde_hal_load_all(), 1);
+    const auto* api = mqde_hal_plugin_by_name("ascend");
+    ASSERT_NE(api, nullptr);
+    mqde_hal_profile_request req{};
+    std::strcpy(req.kind, "bandwidth");
+    req.bytes = 8u << 20;
+    req.iterations = 3;
+    mqde_hal_profile_result res{};
+    ASSERT_EQ(api->profile(0, &req, &res), 0) << api->last_error();
+    EXPECT_STREQ(res.unit, "GB/s");
+    EXPECT_GT(res.seconds, 0.0);
+    EXPECT_NEAR(res.value, 2.0 * (8u << 20) * 3 / res.seconds / 1e9, res.value * 1e-6);
+    std::strcpy(req.kind, "gemm");
+    EXPECT_NE(api->profile(0, &req, &res), 0);
+    EXPECT_NE(std::string(api->last_error()).find("not implemented"), std::string::npos);
+    std::strcpy(req.kind, "teleport");
+    EXPECT_NE(api->profile(0, &req, &res), 0);
+  });
+}
+
+TEST_F(hal_ascend, alloc_free_and_runtime_errors_surface_with_messages) {
+  IN_CHILD({
+    ASSERT_GE(mqde_hal_load_all(), 1);
+    const auto* api = mqde_hal_plugin_by_name("ascend");
+    ASSERT_NE(api, nullptr);
+    void* p = nullptr;
+    ASSERT_EQ(api->alloc(0, 4096, &p), 0) << api->last_error();
+    ASSERT_NE(p, nullptr);
+    std::memset(p, 7, 4096);
+    EXPECT_EQ(api->free(0, p), 0);
+    EXPECT_NE(api->alloc(-1, 16, &p), 0);
+    EXPECT_NE(api->alloc(0, 16, nullptr), 0);
+  });
+  IN_CHILD({
+    Env f("FAKE_ASCEND_FAIL", "aclrtMalloc");
+    ASSERT_GE(mqde_hal_load_all(), 1);
+    const auto* api = mqde_hal_plugin_by_name("ascend");
+    ASSERT_NE(api, nullptr);
+    void* p = nullptr;
+    EXPECT_NE(api->alloc(0, 4096, &p), 0);
+    EXPECT_NE(std::string(api->last_error()).find("aclrtMalloc"), std::string::npos);
+  });
+  IN_CHILD({
+    Env f("FAKE_ASCEND_FAIL", "aclrtMemcpy");
+    ASSERT_GE(mqde_hal_load_all(), 1);
+    const auto* api = mqde_hal_plugin_by_name("ascend");
+    ASSERT_NE(api, nullptr);
+    mqde_hal_profile_request req{};
+    std::strcpy(req.kind, "bandwidth");
+    req.bytes = 1u << 20;
+    req.iterations = 1;
+    mqde_hal_profile_result res{};
+    EXPECT_NE(api->profile(0, &req, &res), 0);
+    EXPECT_NE(std::string(api->last_error()).find("copy failed"), std::string::npos);
+  });
+}
 #endif
 
 // ---- Metal plugin on a real Apple GPU (skipped where there is none)
@@ -701,4 +853,68 @@ TEST(hal_dirs, the_same_directory_named_twice_or_through_a_symlink_loads_each_pl
   std::filesystem::remove(link);
   EXPECT_EQ(good, 1) << "one entry for the file, however many routes lead to it";
   EXPECT_EQ(dup, 0) << "and no 'duplicate' failure for it";
+}
+
+TEST(hal_target, parses_and_formats_flagtree_style_targets) {
+  mqde_target t{};
+  ASSERT_EQ(mqde_target_parse("cuda:sm_89:32", &t), 0);
+  EXPECT_STREQ(t.backend, "cuda");
+  EXPECT_STREQ(t.arch, "sm_89");
+  EXPECT_EQ(t.warp_size, 32);
+  char buf[64];
+  ASSERT_EQ(mqde_target_format(&t, buf, sizeof buf), 0);
+  EXPECT_STREQ(buf, "cuda:sm_89:32");
+
+  ASSERT_EQ(mqde_target_parse("rocm:gfx1100", &t), 0) << "the 2-part form gets the backend default";
+  EXPECT_EQ(t.warp_size, 64);
+  ASSERT_EQ(mqde_target_parse("ascend:910b", &t), 0);
+  EXPECT_EQ(t.warp_size, 32);
+  ASSERT_EQ(mqde_target_parse("cpu:x86_64", &t), 0);
+  EXPECT_EQ(t.warp_size, 1);
+  ASSERT_EQ(mqde_target_parse("musa:mp_21", &t), 0);
+  EXPECT_EQ(t.warp_size, 32);
+}
+
+TEST(hal_target, rejects_malformed_targets_instead_of_guessing) {
+  mqde_target t{};
+  for (const char* s : {"", "cuda", "cuda:", ":sm_89", "cuda::32", "cuda:sm_89:0", "CUDA:sm_89:32",
+                        "cuda:sm_89:32:1", "cuda:sm_89:abc", "cuda:sm_89:99999"})
+    EXPECT_NE(mqde_target_parse(s, &t), 0) << s;
+  EXPECT_NE(std::string(mqde_probe_last_error()).find("target"), std::string::npos)
+      << "a malformed target must explain itself through the same last_error() surface as probe";
+  EXPECT_NE(mqde_target_parse(nullptr, &t), 0);
+  EXPECT_NE(mqde_target_parse("cuda:sm", nullptr), 0);
+  char tiny[4];
+  ASSERT_EQ(mqde_target_parse("cuda:sm_89:32", &t), 0);
+  EXPECT_NE(mqde_target_format(&t, tiny, sizeof tiny), 0);
+  EXPECT_STREQ(tiny, "");
+}
+
+TEST(hal_target, derives_the_backend_and_warp_size_from_a_probed_device) {
+  struct Case {
+    mqde_dev_kind kind;
+    const char* vendor;
+    const char* arch;
+    const char* backend;
+    int warp;
+  };
+  for (const Case& c : {Case{MQDE_DEV_CPU, "intel", "x86_64", "cpu", 1},
+                        Case{MQDE_DEV_GPU, "nvidia", "sm_89", "cuda", 32},
+                        Case{MQDE_DEV_GPU, "amd", "gfx1100", "rocm", 64},
+                        Case{MQDE_DEV_GPU, "apple", "m5", "metal", 32},
+                        Case{MQDE_DEV_NPU, "huawei", "ascend910b", "ascend", 32},
+                        Case{MQDE_DEV_GPU, "metax", "c500", "maca", 64},
+                        Case{MQDE_DEV_GPU, "mthreads", "mp_21", "musa", 32},
+                        Case{MQDE_DEV_GPU, "intel", "pvc", "sycl", 32},
+                        Case{MQDE_DEV_OTHER, "acme", "", "other", 32}}) {
+    mqde_device_info d{};
+    d.kind = c.kind;
+    std::strcpy(d.vendor, c.vendor);
+    std::strcpy(d.arch, c.arch);
+    mqde_target t{};
+    ASSERT_EQ(mqde_target_for_device(&d, &t), 0);
+    EXPECT_STREQ(t.backend, c.backend) << c.vendor;
+    EXPECT_EQ(t.warp_size, c.warp) << c.vendor;
+    EXPECT_STREQ(t.arch, *c.arch ? c.arch : "unknown");
+  }
 }

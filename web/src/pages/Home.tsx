@@ -2,11 +2,19 @@
 import { Link } from "react-router-dom";
 import { api, fmtBytes, JobListItem } from "../api";
 import { useAsync } from "../hooks";
+import { Icon, IconName } from "../components/Icon";
 import { StateBadge } from "./Jobs";
 import { Tile } from "./Estimate";
 
-const KIND: Record<string, string> = { llm: "LLM", vlm: "VLM", vla: "VLA", llm_deploy: "部署评测" };
+const KIND: Record<string, string> = { llm: "LLM", vlm: "VLM", vla: "VLA", world: "WM", ewm: "EWM", llm_deploy: "部署评测" };
 const short = (n: string) => n.replace(/^NVIDIA\s+/, "").replace(/^GeForce\s+/, "");
+const FLOW: { icon: IconName; title: string; sub: string }[] = [
+  { icon: "gauge", title: "资源预估", sub: "显存与并发" },
+  { icon: "library", title: "选择模型", sub: "本地或 HF 目录" },
+  { icon: "sparkles", title: "量化评估", sub: "配方与逐层误差" },
+  { icon: "server", title: "真实部署", sub: "vLLM / SGLang / llama.cpp" },
+  { icon: "activity", title: "压测反馈", sub: "吞吐与精度闭环" },
+];
 
 export default function HomePage() {
   const hw = useAsync(api.hardware, []);
@@ -24,20 +32,38 @@ export default function HomePage() {
   return (
     <>
       <div className="page-head">
-        <div>
+        <div className="home-heading">
+          <div className="eyebrow">
+            <span className="eyebrow-dot" /> Operations overview
+          </div>
           <h1>总览</h1>
-          <p className="subtitle">模型量化 → 评测 → 部署，全部作业与资源一页看完。</p>
+          <p className="subtitle">先判断放不放得下，再决定量化与部署。</p>
         </div>
         <div className="form-row" style={{ margin: 0 }}>
-          <Link to="/new"><button data-testid="home-new-job">＋ 新建评估作业</button></Link>
+          <Link to="/estimate"><button data-testid="home-estimate">资源预估</button></Link>
+          <Link to="/new"><button className="secondary" data-testid="home-new-job">＋ 新建作业</button></Link>
           <Link to="/fit"><button className="secondary">部署预评估</button></Link>
         </div>
       </div>
+      <div className="home-flow" aria-label="量化部署流程">
+        {FLOW.map(({ icon, title, sub }, i) => (
+          <div className="flow-step" key={title}>
+            <span className="flow-icon">
+              <Icon name={icon} size={16} />
+            </span>
+            <span>
+              <b>{title}</b>
+              <small>{sub}</small>
+            </span>
+            {i < FLOW.length - 1 && <Icon name="chevron" size={13} className="flow-arrow" />}
+          </div>
+        ))}
+      </div>
       <div className="tiles" data-testid="home-tiles">
-        <Tile label="GPU 池" value={pool.length ? `${free} / ${pool.length} 空闲` : "–"} hint={gpus[0] ? short(gpus[0].name) : "未探测到 GPU"} />
-        <Tile label="运行中 / 排队" value={`${running.length}`} hint={running[0] ? `${running[0].name ?? running[0].job_id} · ${running[0].stage ?? ""}` : "空闲"} />
-        <Tile label="24 小时内" value={`${recent.filter((j) => j.state === "SUCCEEDED").length} 成功 / ${recent.filter((j) => j.state === "FAILED").length} 失败`} hint={`共 ${list.length} 个作业`} />
-        <Tile label="推理后端" value={envs.data ? `${installed.length} / ${envs.data.backends.length} 可用` : "–"} hint={installed.map((b) => b.id).join(" · ") || "未安装"} />
+        <Tile icon="hardware" label="GPU 池" value={pool.length ? `${free} / ${pool.length} 空闲` : "–"} hint={gpus[0] ? short(gpus[0].name) : "未探测到 GPU"} />
+        <Tile icon="activity" label="运行中 / 排队" value={`${running.length}`} hint={running[0] ? `${running[0].name ?? running[0].job_id} · ${running[0].stage ?? ""}` : "空闲"} />
+        <Tile icon="play" label="24 小时内" value={`${recent.filter((j) => j.state === "SUCCEEDED").length} 成功 / ${recent.filter((j) => j.state === "FAILED").length} 失败`} hint={`共 ${list.length} 个作业`} />
+        <Tile icon="server" label="推理后端" value={envs.data ? `${installed.length} / ${envs.data.backends.length} 可用` : "–"} hint={installed.map((b) => b.id).join(" · ") || "未安装"} />
       </div>
       <div className="split">
         <div>
@@ -78,6 +104,24 @@ export default function HomePage() {
           </div>
         </div>
         <div>
+          <div className="card quick-card">
+            <h2>资源与适配</h2>
+            <Link className="quick-action" to="/estimate">
+              <span className="quick-action-icon"><Icon name="gauge" /></span>
+              <span><b>资源预估</b><small>显存构成、KV Cache、最大并发</small></span>
+              <Icon name="chevron" size={14} className="quick-chevron" />
+            </Link>
+            <Link className="quick-action" to="/fit">
+              <span className="quick-action-icon"><Icon name="target" /></span>
+              <span><b>部署预评估</b><small>哪些模型能跑、用什么量化</small></span>
+              <Icon name="chevron" size={14} className="quick-chevron" />
+            </Link>
+            <Link className="quick-action" to="/hardware">
+              <span className="quick-action-icon"><Icon name="hardware" /></span>
+              <span><b>硬件与后端</b><small>算力矩阵、HAL 插件、后端环境</small></span>
+              <Icon name="chevron" size={14} className="quick-chevron" />
+            </Link>
+          </div>
           <div className="card">
             <h2>GPU 池</h2>
             {hw.error && <div className="error-box">{hw.error}</div>}
@@ -105,6 +149,34 @@ export default function HomePage() {
             ))}
             {envs.error && <div className="error-box">{envs.error}</div>}
             <p className="small"><Link to="/hardware">安装 / 更新 →</Link></p>
+          </div>
+          <div className="card quick-card">
+            <h2>快速开始</h2>
+            <Link className="quick-action" to="/new" data-testid="home-new-full">
+              <span className="quick-action-icon"><Icon name="plus" /></span>
+              <span><b>新建全流程作业</b><small>量化 → 评估 → 导出 / 部署</small></span>
+              <Icon name="chevron" size={14} className="quick-chevron" />
+            </Link>
+            <Link className="quick-action" to="/new/quantize" data-testid="home-new-quantize">
+              <span className="quick-action-icon"><Icon name="layers" /></span>
+              <span><b>新建量化作业</b><small>只量化并导出可复用权重</small></span>
+              <Icon name="chevron" size={14} className="quick-chevron" />
+            </Link>
+            <Link className="quick-action" to="/new/eval" data-testid="home-new-eval">
+              <span className="quick-action-icon"><Icon name="target" /></span>
+              <span><b>新建评测作业</b><small>直接加载已量化模型跑数据集</small></span>
+              <Icon name="chevron" size={14} className="quick-chevron" />
+            </Link>
+            <Link className="quick-action" to="/catalog">
+              <span className="quick-action-icon"><Icon name="library" /></span>
+              <span><b>浏览模型库</b><small>本地检查点与 HF 模型目录</small></span>
+              <Icon name="chevron" size={14} className="quick-chevron" />
+            </Link>
+            <Link className="quick-action" to="/compare">
+              <span className="quick-action-icon"><Icon name="compare" /></span>
+              <span><b>对比历史结果</b><small>精度、显存与吞吐权衡</small></span>
+              <Icon name="chevron" size={14} className="quick-chevron" />
+            </Link>
           </div>
         </div>
       </div>

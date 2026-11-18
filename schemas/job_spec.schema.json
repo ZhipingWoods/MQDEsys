@@ -20,11 +20,27 @@
       "properties": {
         "source": { "type": "string" },
         "path": { "type": "string", "minLength": 1 },
-        "type": { "enum": ["llm", "vlm", "vla"] },
+        "quantized_path": {
+          "description": "T-xxxx: an already-quantized checkpoint to evaluate instead of quantizing model.path again. LLM only. When present, omit the quantize stage (and `quant`).",
+          "type": "string",
+          "minLength": 1
+        },
+        "quant_format": {
+          "description": "T-xxxx: how model.quantized_path stores its weights: auto (detect from config.json) or awq | gptq | compressed-tensors | gguf | fp8 | bitsandbytes.",
+          "type": "string"
+        },
+        "type": { "enum": ["llm", "vlm", "vla", "world", "ewm"] },
         "modality": { "type": "string" }
       },
-      "required": ["path"],
+      "description": "`path` is the base model to quantize; an evaluate-only job may leave it empty and name model.quantized_path / artifact instead (the tokenizer is read from the checkpoint when it carries one).",
       "additionalProperties": true
+    },
+    "stages": {
+      "description": "T-xxxx: pipeline stages to run. Absent keeps the historical all-in-one pipeline. When present it is authoritative: [quantize] writes no reusable checkpoint unless export is also listed; [quantize, export] quantizes and writes a checkpoint without evaluating it; [evaluate] evaluates model.quantized_path or artifact without quantizing; deploy needs an export or an existing checkpoint plus a serving backend.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["quantize", "evaluate", "export", "deploy"] }
     },
     "quant": {
       "type": "object",
@@ -80,6 +96,7 @@
         "dataset": { "type": "string" },
         "n_samples": { "type": "integer" },
         "seq_len": { "type": "integer" },
+        "frames": { "type": "integer", "minimum": 2, "description": "World/EWM: frames per calibration clip (world_job.py)." },
         "custom_samples": {
           "description": "Calibration text pasted into the form instead of naming a dataset (LLM jobs only; the executor reads it in mqde.data.text.calib_batches and it wins over calibration.dataset). A list of strings, each a sample; blank ones are dropped and at least one must have text. planner::validate_jobspec checks this.",
           "type": "array",
@@ -96,6 +113,16 @@
         "seq_len": { "type": "integer" },
         "max_windows": { "type": "integer" },
         "max_new_tokens": { "type": "integer", "minimum": 1, "description": "VLM: longest answer generated per question (vlm_job.py)." },
+        "suite": { "type": "string", "description": "Offline benchmark suite from data/datasets/eval_suites.yaml (quick|standard) or a path to a suite YAML." },
+        "benchmarks": {
+          "description": "Offline benchmarks to run with the checkpoint (names, JSONL paths, or comma-separated names). No serving backend is required for ppl/mcq/qa benchmarks.",
+          "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }]
+        },
+        "limit": { "type": "integer", "minimum": 1, "description": "Maximum samples per offline benchmark." },
+        "frames": { "type": "integer", "minimum": 2, "description": "World/EWM: frames per evaluation clip (world_job.py)." },
+        "sample_steps": { "type": "integer", "minimum": 1, "description": "World/EWM: diffusion sampling steps for the FP reference and every recipe." },
+        "action_conditioned": { "type": "boolean", "description": "World/EWM: evaluation clips carry per-frame actions (EWM sets this automatically)." },
+        "action_dim": { "type": "integer", "minimum": 1, "description": "World/EWM: action vector width for action-conditioned samples." },
         "concurrency": { "type": "array", "items": { "type": "integer" } },
         "attribution": { "type": "boolean" },
         "device": {
@@ -131,7 +158,29 @@
               "properties": {
                 "tasks": { "type": "array", "items": { "type": "string" } },
                 "limit": { "type": "integer" },
-                "num_fewshot": { "type": "integer" }
+                "num_fewshot": { "type": "integer" },
+                "baseline": { "type": "boolean" }
+              }
+            },
+            "evalscope": {
+              "description": "Benchmark accuracy through the official evalscope CLI (external, optional; skipped when not installed). Same OpenAI-compatible server as lm_eval.",
+              "type": "object",
+              "properties": {
+                "datasets": { "type": "array", "items": { "type": "string" } },
+                "limit": { "type": "number" },
+                "generation_config": { "type": ["string", "object"] },
+                "eval_batch_size": { "type": "integer" },
+                "seed": { "type": "integer" },
+                "timeout": { "type": "number" }
+              }
+            },
+            "sweep": {
+              "description": "Concurrency sweep on the running vLLM server.",
+              "type": "object",
+              "properties": {
+                "levels": { "type": "array", "items": { "type": "integer" } },
+                "requests_per_level": { "type": "integer" },
+                "max_ttft_p99_ms": { "type": "number" }
               }
             }
           }
@@ -147,7 +196,47 @@
             "requests": { "type": "integer" },
             "prompt_len": { "type": "integer" },
             "n_predict": { "type": "integer" },
-            "ppl_windows": { "type": "integer" }
+            "ppl_windows": { "type": "integer" },
+            "lm_eval": {
+              "description": "Task accuracy through the official lm-eval CLI against the SGLang OpenAI-compatible server.",
+              "type": "object",
+              "properties": {
+                "tasks": { "type": "array", "items": { "type": "string" } },
+                "limit": { "type": "integer" },
+                "num_fewshot": { "type": "integer" },
+                "baseline": { "type": "boolean" }
+              }
+            },
+            "evalscope": {
+              "description": "Benchmark accuracy through the official evalscope CLI against the SGLang server.",
+              "type": "object",
+              "properties": {
+                "datasets": { "type": "array", "items": { "type": "string" } },
+                "limit": { "type": "number" },
+                "generation_config": { "type": ["string", "object"] },
+                "eval_batch_size": { "type": "integer" },
+                "seed": { "type": "integer" },
+                "timeout": { "type": "number" }
+              }
+            },
+            "sweep": {
+              "description": "Concurrency sweep on the running SGLang server.",
+              "type": "object",
+              "properties": {
+                "levels": { "type": "array", "items": { "type": "integer" } },
+                "requests_per_level": { "type": "integer" },
+                "max_ttft_p99_ms": { "type": "number" }
+              }
+            }
+          }
+        },
+        "native": {
+          "description": "VLA / WM / EWM native continuous-output serving: loopback /v1/actions or /v1/video, smoke + load test on the in-memory quantized model.",
+          "type": "object",
+          "properties": {
+            "concurrency": { "type": "integer", "minimum": 1 },
+            "requests": { "type": "integer", "minimum": 1 },
+            "seed": { "type": "integer" }
           }
         }
       },
@@ -171,6 +260,6 @@
     },
     "output_dir": { "type": "string" }
   },
-  "required": ["model", "quant"],
+  "required": ["model"],
   "additionalProperties": true
 }

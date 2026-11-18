@@ -29,9 +29,14 @@ namespace hub {
 
 // HF_ENDPOINT if set (mirrors such as https://hf-mirror.com), else https://huggingface.co.
 std::string default_endpoint();
+// Optional mirror retried by the server when huggingface.co is unreachable (default hf-mirror.com,
+// override with MQDE_HF_FALLBACK_ENDPOINT; set MQDE_HF_NO_FALLBACK=1 to disable).
+std::string fallback_endpoint();
 
 struct HfOptions {
   std::string endpoint = default_endpoint();
+  // ModelScope serves files under /models/<repo>/resolve/...; Hugging Face uses /<repo>/resolve/...
+  std::string repo_path_prefix;
   std::string token;  // empty -> read HF_TOKEN from the environment
   int timeout_s = 30;
 };

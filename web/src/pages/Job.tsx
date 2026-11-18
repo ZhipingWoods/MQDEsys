@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { api, fmt, fmtBytes, followJob, JobDetail, JobEvent, JobReport, LLMJobReport, RecipeReport, VLMJobReport, DeployJobReport } from "../api";
+import { api, fmt, fmtBytes, followJob, JobDetail, JobEvent, JobReport, LLMJobReport, RecipeReport, VLMJobReport, WorldJobReport, DeployJobReport, EvalJobReport } from "../api";
 import { barItem, baseOption, Chart, series, token } from "../charts";
 import { Tile } from "./Estimate";
 import { LLM_STAGES, LLMReportView } from "./JobLLM";
 import { VLM_STAGES, VLMReportView } from "./JobVLM";
+import { WORLD_STAGES, WorldReportView } from "./JobWorld";
 import { DEPLOY_STAGES, DeployReportView } from "./JobDeploy";
+import { EVAL_STAGES, EvalReportView } from "./JobEval";
 import { DERIVE_STEPS } from "../derive";
 import { StateBadge } from "./Jobs";
 import { LayerAnalysis } from "./LayerAnalysis";
+import { NativeServeCard } from "../components/NativeServeCard";
 
 const STAGES: [string, string][] = [
   ["validate", "校验"],
@@ -19,6 +22,7 @@ const STAGES: [string, string][] = [
   ["attribution", "分阶段归因"],
   ["quantize", "量化+逐层追踪"],
   ["eval_fake", "量化评估"],
+  ["deploy_native", "原生连续输出服务"],
   ["report", "报告"],
 ];
 
@@ -27,6 +31,26 @@ interface StageState {
   seconds?: number;
   count: number;
   msg?: string;
+}
+
+function Ring({ pct, state }: { pct: number; state: string }) {
+  const size = 68, stroke = 7, r = (size - stroke) / 2, circ = 2 * Math.PI * r;
+  const color = state === "FAILED" ? "var(--critical)" : state === "CANCELLED" ? "var(--warning)" : state === "RUNNING" || state === "QUEUED" ? "var(--accent)" : "var(--good)";
+  const offset = circ * (1 - Math.max(0, Math.min(1, pct / 100)));
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="job-ring" aria-label={`进度 ${Math.round(pct)}%`}>
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--surface-3)" strokeWidth={stroke} />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round" />
+      <text x="50%" y="50%" textAnchor="middle" dominantBaseline="central" fill="var(--text-primary)" fontSize="13" fontWeight="700">{Math.round(pct)}%</text>
+    </svg>
+  );
+}
+
+function shortDuration(s: number | null): string {
+  if (s == null) return "–";
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${(s / 3600).toFixed(1)}h`;
 }
 
 export default function JobPage() {
@@ -61,13 +85,18 @@ export default function JobPage() {
   }, [id]);
 
   const rep = detail?.report ?? null;
-  const job = detail?.job as { model?: { type?: string }; deploy?: { device?: string }; metadata?: { parent_job?: string }; artifact?: unknown } | undefined;
+  const job = detail?.job as { model?: { type?: string; path?: string }; deploy?: { device?: string }; metadata?: { parent_job?: string }; artifact?: unknown } | undefined;
   // a deploy job (B2) has model.type llm too, but serves an existing export: its own report and stages
-  const isDeploy = rep?.kind === ("llm_deploy" as string) || job?.artifact != null;
-  const isLLM = !isDeploy && (rep?.kind === "llm" || job?.model?.type === "llm");
+  const isEval = rep?.kind === ("llm_eval" as string);
+  const isDeploy = !isEval && (rep?.kind === ("llm_deploy" as string) || (job?.artifact != null && rep?.kind !== ("llm_eval" as string)));
+  const isLLM = !isDeploy && !isEval && (rep?.kind === "llm" || job?.model?.type === "llm");
   const isVLM = rep?.kind === ("vlm" as string) || job?.model?.type === "vlm";
+  const isWorld = rep?.kind === ("world" as string) || rep?.kind === ("ewm" as string) || job?.model?.type === "world" || job?.model?.type === "ewm";
   const deployKeys = Object.keys((detail?.job as { deploy?: Record<string, unknown> } | undefined)?.deploy ?? {});
-  const stageList = isDeploy ? DEPLOY_STAGES.filter(([k]) => !k.startsWith("deploy_") || deployKeys.includes(k.slice(7))) : isLLM ? LLM_STAGES : isVLM ? VLM_STAGES : STAGES;
+  const reportedStages = new Set((rep?.stages ?? []).map((s) => s.stage));
+  const stageList = isEval
+    ? EVAL_STAGES.filter(([k]) => reportedStages.size === 0 || reportedStages.has(k))
+    : isDeploy ? DEPLOY_STAGES.filter(([k]) => !k.startsWith("deploy_") || deployKeys.includes(k.slice(7))) : isLLM ? LLM_STAGES : isVLM ? VLM_STAGES : isWorld ? WORLD_STAGES : STAGES;
   const stages = useMemo(() => {
     const m: Record<string, StageState> = {};
     for (const [k] of stageList) m[k] = { status: "pending", count: 0 };
@@ -85,32 +114,68 @@ export default function JobPage() {
   }, [events]);
 
   const state = events.find((e) => e.type === "job_state" && e.state !== "RUNNING")?.state ?? detail?.state ?? "UNKNOWN";
+  const lastProgress = [...events].reverse().find((e) => e.type === "progress");
+  const lastTrace = [...events].reverse().find((e) => e.type === "trace");
+  const pct = state === "SUCCEEDED" ? 100
+    : lastProgress?.value != null ? Math.max(0, Math.min(100, lastProgress.value * 100))
+    : lastTrace?.total ? Math.max(0, Math.min(100, (((lastTrace.index ?? 0) + 1) * 100) / lastTrace.total))
+    : state === "FAILED" ? 100 : 0;
+  const firstTs = events[0]?.ts;
+  const lastTs = events.length ? events[events.length - 1].ts : firstTs;
+  const elapsed = firstTs && lastTs ? Math.max(0, Math.round(lastTs - firstTs)) : null;
+  const currentStage = [...events].reverse().find((e) => e.type === "stage_started")?.stage ?? detail?.stage ?? null;
+  const metrics = events.filter((e) => e.type === "metric").slice(-6).reverse();
+  const stageDone = Object.values(stages).filter((s) => s.status === "succeeded").length;
+  const stageFailed = Object.values(stages).filter((s) => s.status === "failed").length;
+  const kindLabel = isEval ? "评测作业" : isDeploy ? "部署评测" : isLLM ? "LLM 全流程" : isVLM ? "VLM 作业" : isWorld ? "WM 作业" : "VLA 作业";
+
+  if (!detail) {
+    return (
+      <>
+        <h1>作业 <span className="mono">{id}</span></h1>
+        {err ? <div className="error-box">{err}</div> : <div className="card job-loading"><span className="status running">读取作业</span><p className="muted small">正在读取 job.yaml、报告和事件流…</p></div>}
+      </>
+    );
+  }
 
   return (
     <>
-      <h1>
-        作业 <span className="mono">{id}</span> <StateBadge state={state} />
-      </h1>
-      <p className="subtitle">
-        {rep?.spec?.name ?? ""} · {rep?.spec?.model_path ?? ""} · {job?.deploy?.device === "cpu" ? "CPU" : detail?.gpu != null && detail.gpu >= 0 ? `GPU ${detail.gpu}` : deviceName(rep) ?? "GPU"} {live && <span className="status running">实时</span>}
-        {state === "RUNNING" && (
-          <button className="secondary" style={{ marginLeft: 12 }} onClick={() => api.cancel(id)}>
-            取消
-          </button>
-        )}
-        {isLLM && state === "SUCCEEDED" && (
-          <span style={{ marginLeft: 12 }}>
-            独立报告页（可离线打开）：{" "}
-            <a href={`/api/v1/jobs/${id}/report.zh.html`} target="_blank" rel="noreferrer">
-              中文
-            </a>{" "}
-            ·{" "}
-            <a href={`/api/v1/jobs/${id}/report.en.html`} target="_blank" rel="noreferrer">
-              English
-            </a>
-          </span>
-        )}
-      </p>
+      <section className="job-hero card" data-testid="job-hero">
+        <div className="job-hero-main">
+          <div className="eyebrow">{kindLabel} <span className="eyebrow-dot" /></div>
+          <h1>作业 <span className="mono">{id}</span></h1>
+          <p className="job-hero-name">{rep?.spec?.name ?? id}</p>
+          <p className="job-hero-model mono small">{rep?.spec?.model_path ?? String(job?.model?.path ?? "—")}</p>
+          <p className="subtitle job-hero-device">
+            {job?.deploy?.device === "cpu" ? "CPU" : detail?.gpu != null && detail.gpu >= 0 ? `GPU ${detail.gpu}` : deviceName(rep) ?? "GPU"}
+          </p>
+          <div className="job-hero-meta">
+            <StateBadge state={state} />
+            {live && <span className="status running">实时</span>}
+            <span className="badge">{job?.deploy?.device === "cpu" ? "CPU" : detail?.gpu != null && detail.gpu >= 0 ? `GPU ${detail.gpu}` : deviceName(rep) ?? "GPU"}</span>
+            <span className="badge">阶段 {stageDone}/{stageList.length}{stageFailed ? ` · 失败 ${stageFailed}` : ""}</span>
+            <span className="badge">已运行 {shortDuration(elapsed)}</span>
+          </div>
+        </div>
+        <div className="job-hero-side">
+          <Ring pct={pct} state={state} />
+          <div className="job-hero-actions">
+            {state === "RUNNING" && <button className="secondary" onClick={() => api.cancel(id)}>取消作业</button>}
+            {(isLLM || isEval) && state === "SUCCEEDED" && (
+              <>
+                <a className="btn-link" href={`/api/v1/jobs/${id}/report.zh.html`} target="_blank" rel="noreferrer">中文报告</a>
+                <a className="btn-link" href={`/api/v1/jobs/${id}/report.en.html`} target="_blank" rel="noreferrer">English</a>
+              </>
+            )}
+            {detail?.job && (
+              <button className="secondary" onClick={() => navigator.clipboard?.writeText(JSON.stringify(detail.job, null, 2))}>
+                复制 JobSpec
+              </button>
+            )}
+            <a className="btn-link" href={`/api/v1/jobs/${id}/log`} download={`${id}.log`}>下载日志</a>
+          </div>
+        </div>
+      </section>
       {job?.metadata?.parent_job && (
         <p className="small" data-testid="derived-from">
           派生自作业 <Link to={`/jobs/${job.metadata.parent_job}`}>{job.metadata.parent_job}</Link>
@@ -136,7 +201,19 @@ export default function JobPage() {
       {rep?.error && <div className="error-box">{rep.error}</div>}
 
       <div className="card">
-        <h2>执行过程</h2>
+        <div className="card-head">
+          <div>
+            <h2>执行过程</h2>
+            <p className="note" style={{ margin: 0 }}>阶段进度来自事件流；指标和日志实时追加。</p>
+          </div>
+          <span className="badge">{events.length} 个事件</span>
+        </div>
+        <div className="job-live-grid" data-testid="job-live-grid">
+          <div><small>当前阶段</small><b>{currentStage ?? (state === "SUCCEEDED" ? "已完成" : "—")}</b></div>
+          <div><small>进度</small><b>{Math.round(pct)}%</b></div>
+          <div><small>最近指标</small><b className="mono">{metrics[0]?.name ? `${metrics[0].name} = ${typeof metrics[0].value === "number" ? metrics[0].value.toFixed(4) : metrics[0].value}` : "—"}</b></div>
+          <div><small>耗时</small><b>{shortDuration(elapsed)}</b></div>
+        </div>
         <div className="pipeline">
           {stageList.map(([k, label]) => {
             const s = stages[k];
@@ -155,37 +232,57 @@ export default function JobPage() {
             {progress.stage}: 第 {progress.i}/{progress.n} 层 <span className="mono">{progress.name}</span>
           </p>
         )}
-        <EventLog events={events} />
+        <EventLog events={events} state={state} jobId={id} />
       </div>
 
-      {rep && (isDeploy ? <DeployReportView rep={rep as unknown as DeployJobReport} /> : isLLM ? <LLMReportView rep={rep as unknown as LLMJobReport} job={detail?.job} jobId={id} /> : isVLM ? <VLMReportView rep={rep as unknown as VLMJobReport} job={detail?.job} jobId={id} /> : <ReportView rep={rep} jobId={id} />)}
+      {rep && (isEval ? <EvalReportView rep={rep as unknown as EvalJobReport} /> : isDeploy ? <DeployReportView rep={rep as unknown as DeployJobReport} /> : isLLM ? <LLMReportView rep={rep as unknown as LLMJobReport} job={detail?.job} jobId={id} /> : isVLM ? <VLMReportView rep={rep as unknown as VLMJobReport} job={detail?.job} jobId={id} /> : isWorld ? <WorldReportView rep={rep as unknown as WorldJobReport} job={detail?.job} jobId={id} /> : <ReportView rep={rep} jobId={id} />)}
     </>
   );
 }
 
-function EventLog({ events }: { events: JobEvent[] }) {
+function EventLog({ events, state, jobId }: { events: JobEvent[]; state: string; jobId: string }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [filter, setFilter] = useState<"all" | "errors" | "metrics">("all");
+  const [follow, setFollow] = useState(true);
+  const [copied, setCopied] = useState(false);
+  const lines = events.filter((e) => e.type !== "trace" && e.type !== "progress" && (e.type as string) !== "layer"
+    && (filter === "all" || (filter === "metrics" ? e.type === "metric" : e.status === "failed" || e.state === "FAILED" || e.level === "error")));
+  const textOf = (e: JobEvent) => {
+    const t = new Date(e.ts * 1000).toLocaleTimeString();
+    const text = e.type === "metric"
+      ? `${e.name} = ${typeof e.value === "number" ? e.value.toFixed(4) : e.value}`
+      : e.type === "stage_finished"
+        ? `${e.status} (${fmt(e.seconds, 2)} s)${e.error ? " " + e.error : ""}`
+        : (e.msg ?? e.state ?? "");
+    return `${t} ${e.type.padEnd(15)} ${(e.stage ?? "-").padEnd(14)} ${text}`;
+  };
   useEffect(() => {
-    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
-  }, [events.length]);
-  const lines = events.filter((e) => e.type !== "trace" && e.type !== "progress" && (e.type as string) !== "layer");
+    if (follow && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+  }, [lines.length, follow]);
   return (
-    <div className="log" ref={ref} style={{ marginTop: 12 }}>
-      {lines.map((e) => {
-        const t = new Date(e.ts * 1000).toLocaleTimeString();
-        const cls = e.type === "metric" ? "lv-metric" : e.status === "failed" || e.state === "FAILED" ? "lv-error" : "";
-        const text =
-          e.type === "metric"
-            ? `${e.name} = ${typeof e.value === "number" ? e.value.toFixed(4) : e.value}`
-            : e.type === "stage_finished"
-              ? `${e.status} (${fmt(e.seconds, 2)} s)${e.error ? " " + e.error : ""}`
-              : (e.msg ?? e.state ?? "");
-        return (
-          <div key={e.seq} className={cls}>
-            {t} {e.type.padEnd(15)} {(e.stage ?? "-").padEnd(14)} {text}
-          </div>
-        );
-      })}
+    <div className="job-log-wrap" data-testid="event-log">
+      <div className="job-log-toolbar">
+        <div className="seg small-seg">
+          {(["all", "metrics", "errors"] as const).map((f) => (
+            <button key={f} className={filter === f ? "on" : ""} onClick={() => setFilter(f)} data-testid={`log-filter-${f}`}>
+              {{ all: "全部", metrics: "指标", errors: "错误" }[f]}
+            </button>
+          ))}
+        </div>
+        <label className="small"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> 跟随最新</label>
+        <span className="small muted">{lines.length} 行</span>
+        <button className="secondary small" onClick={async () => {
+          try { await navigator.clipboard.writeText(lines.map(textOf).join("\n")); setCopied(true); setTimeout(() => setCopied(false), 1200); } catch { /* clipboard may be unavailable */ }
+        }}>{copied ? "已复制" : "复制日志"}</button>
+        {state !== "RUNNING" && state !== "QUEUED" && <a className="btn-link small" href={`/api/v1/jobs/${jobId}/log`} download={`${jobId}.log`}>下载</a>}
+      </div>
+      <div className="log job-log" ref={ref}>
+        {lines.map((e) => {
+          const cls = e.type === "metric" ? "lv-metric" : e.status === "failed" || e.state === "FAILED" ? "lv-error" : "";
+          return <div key={e.seq} className={cls}>{textOf(e)}</div>;
+        })}
+        {lines.length === 0 && <div className="muted">没有符合筛选条件的事件。</div>}
+      </div>
     </div>
   );
 }
@@ -366,6 +463,7 @@ function Overview({ rep }: { rep: JobReport }) {
           {rep.data?.eval.has_gt && " 与数据集真值动作的对比未启用：模型 80 维动作空间与 LIBERO 7 维动作的映射和归一化统计未知。"}
         </p>
       </div>
+      {rs.map((r) => r.deploy?.native ? <NativeServeCard key={r.recipe} recipe={r.recipe} d={r.deploy.native} /> : null)}
     </>
   );
 }

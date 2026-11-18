@@ -1,0 +1,10 @@
+id: ascend/910b
+vendor: huawei
+name: Ascend 910B
+arch: ascend910b
+match_names: ["910B", "Ascend910B", "Ascend 910B"]
+mem_bytes: 68719476736        # 64 GiB HBM
+mem_bw_gbps: 1600
+peak_tflops: {fp32: 47.0, bf16: 376.0, fp16: 376.0, int8: 752.0}
+native_formats: [bf16, fp16, int8]
+source: https://www.hiascend.com/hardware/products/ascend910b

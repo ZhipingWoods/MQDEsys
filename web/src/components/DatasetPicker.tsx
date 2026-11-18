@@ -1,12 +1,13 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, BuiltinDataset, DatasetInfo, fmtBytes } from "../api";
 import { useDebounced } from "../hooks";
 
-/** What kind of data the job reads: free text (LLM calibration) or a LeRobot v3 directory (VLA / VLM images). */
-export type DatasetKind = "text" | "lerobot";
+/** What kind of data the job reads: free text (LLM), LeRobot (VLA / VLM) or .npz clips (world / EWM). */
+export type DatasetKind = "text" | "lerobot" | "world";
 
 interface Props {
-  /** "text": wikitext-2 or a local text file / directory. "lerobot": synthetic or a LeRobot v3 directory. */
+  /** "text": wikitext-2 or a local text file / directory. "lerobot": synthetic or a LeRobot v3 directory.
+   *  "world": synthetic-video or a directory of .npz clips. */
   kind: DatasetKind;
   role: "calibration" | "evaluation";
   value: string;
@@ -30,6 +31,7 @@ const STATIC_BUILTINS: BuiltinDataset[] = [
   { id: "wikitext-2-raw-v1:train", label: "wikitext-2（train 切分）", kind: "text", roles: ["calibration"], available: true },
   { id: "wikitext-2-raw-v1:test", label: "wikitext-2（test 切分，默认评估数据）", kind: "text", roles: ["evaluation"], available: true },
   { id: "synthetic", label: "synthetic（程序生成的图文样本）", kind: "vision", roles: ["calibration", "evaluation"], available: true },
+  { id: "synthetic-video", label: "synthetic-video（程序生成的视频片段）", kind: "world", roles: ["calibration", "evaluation"], available: true },
 ];
 
 const describe = (i: DatasetInfo): string => {
@@ -57,17 +59,21 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
     };
   }, []);
   // the two built-ins are known before the server answers (and are all there is on an older one): show them at once, refine on arrival
-  const options = (list?.builtin ?? STATIC_BUILTINS).filter((b) => b.roles.includes(role) && (kind === "text" ? b.kind === "text" : b.kind === "vision"));
+  const options = (list?.builtin ?? STATIC_BUILTINS).filter((b) => b.roles.includes(role) && b.kind === (kind === "text" ? "text" : kind === "lerobot" ? "vision" : "world"));
   // "path" mode is what the value says it is: anything that is not a built-in. The one thing the value cannot say is that the user
   // has just chosen "path" and has not typed yet (the value is still empty): that is `wantsPath`.
   const [wantsPath, setWantsPath] = useState(false);
   const [touched, setTouched] = useState(false); // the user chose something: the default is no longer ours to replace
-  const [fellBack, setFellBack] = useState<string | null>(null); // the default we replaced, for the note
+  // The default we replaced, for the note. A ref, not state: the parent's onChange already re-renders this
+  // component, and keeping it local to a ref means the note cannot be lost in that same batched update.
+  const fellBackRef = useRef<string | null>(null);
+  const fellBack = fellBackRef.current;
   const custom = value === "" ? wantsPath : !options.some((b) => b.id === value);
   const selected = custom ? CUSTOM : value;
 
   const typed = useDebounced(custom ? value.trim() : "", 350);
   const [info, setInfo] = useState<{ path: string; res?: DatasetInfo; err?: string } | null>(null);
+  const legacy = !!list?.legacy;
   useEffect(() => {
     // not before the server has said what it can do: an older one has no such endpoint, and asking it would only produce errors
     if (!typed || !list || list.legacy) {
@@ -89,12 +95,11 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
     // only a definite answer counts: the server said it is unusable, or its sandbox refused the path. "Could not ask" is not one.
     const definite = info.res ? !info.res.usable : /outside allowed roots|403/i.test(info.err ?? "");
     if (definite) {
-      setFellBack(defaultValue.path);
+      fellBackRef.current = defaultValue.path;
       onChange(defaultValue.fallback);
     }
-  }, [info]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [info, value, touched, legacy, defaultValue?.path, defaultValue?.fallback, onChange]);
 
-  const legacy = !!list?.legacy;
   const pending = custom && !legacy && (value.trim() === "" || info?.path !== value.trim());
   // an older server cannot say whether a path is readable: the path is accepted (it still has to be non-empty) and the
   // submit-time check, if the server has one, decides
@@ -106,15 +111,25 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
 
   const chosen = options.find((b) => b.id === value);
   const roots = list?.roots ?? [];
+  const hint =
+    kind === "text"
+      ? "目录会递归读取，按路径排序，最多读前 5000 万字符；窗口随机取自拼接后的全文。.jsonl / .json / .parquet 取 text 字段。"
+      : kind === "lerobot"
+        ? "LeRobot v3 目录：需要 meta/info.json 和数据分片。"
+        : "目录中的 .npz 视频片段会按文件名排序读取。";
   return (
-    <div className="field grow" data-testid={`${testid}-picker`}>
+    <div
+      className="field grow"
+      data-testid={`${testid}-picker`}
+      title={roots.length ? `${hint}\n服务器允许的目录：${roots.join("、")}` : hint}
+    >
       <label>{label}</label>
       <select
         value={selected}
         data-testid={`${testid}-select`}
         onChange={(e) => {
           setTouched(true);
-          setFellBack(null);
+          fellBackRef.current = null;
           if (e.target.value === CUSTOM) {
             setWantsPath(true);
             onChange("");
@@ -130,7 +145,7 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
             {b.available ? "" : "（本机没有）"}
           </option>
         ))}
-        <option value={CUSTOM}>{kind === "text" ? "本地文件或目录…" : "LeRobot v3 目录…"}</option>
+        <option value={CUSTOM}>{kind === "text" ? "本地文件或目录…" : kind === "lerobot" ? "LeRobot v3 目录…" : "本地 .npz 文件或目录…"}</option>
       </select>
       {fellBack && !custom && (
         <p className="note" data-testid={`${testid}-fellback`}>
@@ -146,7 +161,7 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
         <>
           <input
             value={value}
-            placeholder={kind === "text" ? "服务器上的路径：.txt .md .jsonl .json .parquet 文件，或装有它们的目录" : "服务器上的 LeRobot v3 目录"}
+            placeholder={kind === "text" ? "服务器上的路径：.txt .md .jsonl .json .parquet 文件，或装有它们的目录" : kind === "lerobot" ? "服务器上的 LeRobot v3 目录" : "服务器上的 .npz 视频片段，或装有它们的目录"}
             onChange={(e) => {
               setTouched(true);
               onChange(e.target.value);
@@ -168,10 +183,9 @@ export function DatasetPicker({ kind, role, value, onChange, onValid, testid, la
                     ? `✓ ${describe(info.res)}`
                     : `✗ ${info?.res?.reason ?? "不可用"}`}
           </p>
-          {kind === "text" && role === "calibration" && (
-            <p className="note muted">目录会递归读取，按路径排序，最多读前 5000 万字符；窗口随机取自拼接后的全文。.jsonl / .json / .parquet 取 text 字段。</p>
+          {roots.length > 0 && value.trim() === "" && (
+            <p className="note muted">服务器允许的目录：{roots.join("、")}</p>
           )}
-          {roots.length > 0 && <p className="note muted">服务器允许的目录：{roots.join("、")}</p>}
         </>
       )}
     </div>

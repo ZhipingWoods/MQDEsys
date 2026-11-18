@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { api, fmt, fmtBytes, LlamaCppDeploy, LlamaServe, llamaSpeed, LLMJobReport, LLMRecipeReport, Sensitivity, LmEval } from "../api";
+import { api, fmt, fmtBytes, LlamaCppDeploy, LlamaServe, llamaSpeed, LLMJobReport, LLMRecipeReport, Sensitivity, LmEval, EvalScope } from "../api";
 import { baseOption, Chart, series, token } from "../charts";
 import { Tile } from "./Estimate";
 import { LayerSunburst } from "../components/LayerSunburst";
@@ -57,7 +57,7 @@ export function LLMReportView({ rep, job, jobId }: { rep: LLMJobReport; job?: Re
     <>
       {b && (
         <div className="tiles">
-          <Tile label="原模型 PPL（pretrain）" value={fmt(b.ppl, 3)} hint={`${rep.data?.eval.dataset ?? "wikitext-2 test"}`} />
+          <Tile label="原模型 PPL（pretrain）" value={fmt(b.ppl, 3)} hint={`${rep.data?.eval?.dataset ?? "wikitext-2 test"}`} />
           <Tile label="评估 token" value={`${b.tokens}`} hint={`${b.windows} 窗口 × ${b.seq_len}`} />
           <Tile label="校准" value={`${rep.data?.calib.n ?? "–"} × ${rep.data?.calib.seq_len ?? "–"}`} hint={calibHint(rep)} />
           <Tile label="模型" value={`${rep.model?.blocks ?? "–"} 块`} hint={`${rep.model?.linears ?? "–"} 个线性层 · ${rep.spec.device}`} />
@@ -188,7 +188,7 @@ function Overview({ rep, rs }: { rep: LLMJobReport; rs: LLMRecipeReport[] }) {
         <WindowReview
           base={rep.baseline.window_nll}
           recipes={rs.flatMap((r) => (r.eval.fake_quant_wo_kv.window_nll ? [{ name: r.recipe, nll: r.eval.fake_quant_wo_kv.window_nll }] : []))}
-          previews={rep.data?.eval.previews}
+          previews={rep.data?.eval?.previews}
           seqLen={rep.baseline.seq_len}
         />
       ) : (
@@ -200,6 +200,7 @@ function Overview({ rep, rs }: { rep: LLMJobReport; rs: LLMRecipeReport[] }) {
       {rs.some((r) => Object.values(r.export ?? {}).some((e) => e.sglang)) && <ServeCard rs={rs} which="sglang" />}
       {rs.flatMap((r) => Object.entries(r.export ?? {}).flatMap(([f, e]) => (["vllm", "sglang"] as const).flatMap((k) => (e[k]?.sweep ? [<SweepCard key={`${r.recipe}-${f}-${k}`} title={`${r.recipe} · ${f} · ${k === "vllm" ? "vLLM" : "SGLang"}`} sweep={e[k]!.sweep!} />] : []))))}
       {(rep.baseline_lm_eval || rs.some((r) => Object.values(r.export ?? {}).some((e) => e.vllm?.lm_eval))) && <LmEvalCard rep={rep} rs={rs} />}
+      {rs.some((r) => Object.values(r.export ?? {}).some((e) => e.vllm?.evalscope || e.sglang?.evalscope)) && <EvalScopeCard rs={rs} />}
       {rep.llamacpp && <LlamaCppCard d={rep.llamacpp} />}
     </>
   );
@@ -317,7 +318,7 @@ function ExportCard({ rs }: { rs: LLMRecipeReport[] }) {
   const rows = rs.flatMap((r) => Object.entries(r.export ?? {}).map(([f, e]) => ({ r, f, e })));
   return (
     <div className="card table-wrap">
-      <h2>真实低比特导出（S09）与伪量化/真实一致性（S10）</h2>
+      <h2>真实低比特导出与一致性校验</h2>
       <table>
         <thead>
           <tr>
@@ -460,6 +461,67 @@ function LmEvalCard({ rep, rs }: { rep: LLMJobReport; rs: LLMRecipeReport[] }) {
   );
 }
 
+/** EvalScope benchmark rows: every exported checkpoint that was served by vLLM or SGLang. */
+function EvalScopeCard({ rs }: { rs: LLMRecipeReport[] }) {
+  const sources: { who: string; fmt: string; backend: string; es: EvalScope }[] = [];
+  for (const r of rs)
+    for (const [f, e] of Object.entries(r.export ?? {})) {
+      if (e.vllm?.evalscope) sources.push({ who: r.recipe, fmt: f, backend: "vLLM", es: e.vllm.evalscope });
+      if (e.sglang?.evalscope) sources.push({ who: r.recipe, fmt: f, backend: "SGLang", es: e.sglang.evalscope });
+    }
+  return (
+    <div className="card table-wrap" data-testid="evalscope-card">
+      <h2>数据集评分（EvalScope）</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>配方</th>
+            <th>后端</th>
+            <th>数据集</th>
+            <th>指标</th>
+            <th className="num">分数</th>
+            <th className="num">样本</th>
+            <th className="num">延迟均值</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sources.flatMap(({ who, fmt: f, backend, es }) =>
+            es.status !== "succeeded" || !es.datasets
+              ? [
+                  <tr key={who + f + backend}>
+                    <td>{who}</td>
+                    <td>{backend} · {f}</td>
+                    <td>–</td>
+                    <td className="bad">{es.status === "skipped" ? "已跳过" : "失败"}</td>
+                    <td className="num">–</td>
+                    <td className="num">–</td>
+                    <td className="num">–</td>
+                    <td className="small">{es.reason ?? (es.error ?? "").split("\n")[0]}</td>
+                  </tr>,
+                ]
+              : Object.values(es.datasets).flatMap((d) =>
+                  Object.entries(d.metrics).map(([key, m]) => (
+                    <tr key={who + f + backend + d.dataset + key} data-testid={`evalscope-${who}-${d.dataset}-${key}`}>
+                      <td>{who}</td>
+                      <td>{backend} · {f}</td>
+                      <td>{d.pretty_name ?? d.dataset}</td>
+                      <td>{key}</td>
+                      <td className="num">{m.value == null ? "–" : m.value.toFixed(4)}</td>
+                      <td className="num">{m.num ?? d.n_samples ?? "–"}</td>
+                      <td className="num">{d.latency_ms_mean == null ? "–" : `${d.latency_ms_mean.toFixed(0)} ms`}</td>
+                      <td className="small">EvalScope · limit {es.limit ?? "–"} · seed {es.seed ?? "–"}</td>
+                    </tr>
+                  )),
+                ),
+          )}
+        </tbody>
+      </table>
+      <p className="note">EvalScope 通过 OpenAI 兼容接口评测已部署的检查点；未安装 evalscope 时该阶段标记为跳过，不影响其他结果。</p>
+    </div>
+  );
+}
+
 const SERVE_INFO = {
   vllm: { title: "vLLM", cmd: "vllm serve", logprobs: "vLLM 返回的 prompt 对数概率" },
   sglang: { title: "SGLang", cmd: "python -m sglang.launch_server", logprobs: "SGLang /generate 返回的 input_token_logprobs" },
@@ -471,7 +533,7 @@ function ServeCard({ rs, which }: { rs: LLMRecipeReport[]; which: "vllm" | "sgla
   const conc = rows.find((x) => x.v.load)?.v.load?.spec.concurrency;
   return (
     <div className="card table-wrap">
-      <h2>{info.title} 部署（S11）与部署后精度（S12）</h2>
+      <h2>{info.title} 部署与部署后精度</h2>
       <table>
         <thead>
           <tr>

@@ -120,52 +120,9 @@ class DeployJob(LLMJob):
         return self.report
 
     def _resolve(self) -> dict[str, Any]:
-        s, a = self.spec, self.spec.artifact
-        job, recipe, fmt, ty = str(a.get("job", "")), str(a.get("recipe") or ""), str(a.get("format", "")), a.get("type")
-        if not JOB_ID.fullmatch(job):
-            raise ValueError(f"artifact.job: bad job id '{job}'")
-        if fmt not in HF_FORMATS | {"gguf"}:
-            raise ValueError(f"artifact.format '{fmt}': one of {sorted(HF_FORMATS)} or gguf")
-        parent = Path(s.output_dir) / job
-        rep_path = parent / "report.json"
-        if not rep_path.is_file():
-            raise ValueError(f"artifact.job: job {job} not found (no {rep_path})")
-        rep = json.loads(rep_path.read_text())
-        pe = ((rep.get("data") or {}).get("eval")) or {}
-        parent_eval = {"windows": pe["windows"], "seq_len": pe["seq_len"]} if "windows" in pe and "seq_len" in pe else None
-        out: dict[str, Any] = {"job": job, "format": fmt, "parent_baseline_ppl": (rep.get("baseline") or {}).get("ppl"),
-                               "parent_model_path": (rep.get("spec") or {}).get("model_path"), "parent_eval": parent_eval}
-        if fmt == "gguf":
-            if not (isinstance(ty, str) and GGUF_TYPE.fullmatch(ty)):
-                raise ValueError(f"artifact.type: bad GGUF type '{ty}'")
-            res = ((rep.get("llamacpp") or {}).get("results") or {}).get(ty)
-            path = parent / "export" / "gguf" / f"model-{ty}.gguf"
-            if res is None or not path.is_file():
-                raise ValueError(f"artifact: job {job} has no GGUF {ty} (llama.cpp types it produced: "
-                                 f"{sorted((rep.get('llamacpp') or {}).get('results') or {})})")
-            out.update(type=ty, path=str(path), bytes=path.stat().st_size, parent_ppl=res.get("ppl"))
-        else:
-            if not RECIPE.fullmatch(recipe):
-                raise ValueError(f"artifact.recipe: bad recipe name '{recipe}'")
-            r = (rep.get("recipes") or {}).get(recipe)
-            if r is None:
-                raise ValueError(f"artifact: job {job} did not quantize {recipe} (it has {sorted(rep.get('recipes') or {})})")
-            ex = (r.get("export") or {}).get(fmt)
-            if not ex or ex.get("status") != "exported":
-                raise ValueError(f"artifact: {recipe} of job {job} has no {fmt} export (status: {(ex or {}).get('status', 'not requested')}"
-                                 f"{' -- unsupported' if (ex or {}).get('status') == 'unsupported' else ''})")
-            path = parent / "export" / f"{recipe.lower()}-{fmt}"
-            if not (path / "config.json").is_file():
-                raise ValueError(f"artifact: {path} is gone (was it cleaned up?)")
-            out.update(recipe=recipe, algorithm=r.get("algorithm"), path=str(path), bytes=ex.get("bytes"),
-                       parent_real_ppl=ex.get("real_ppl"), parent_fake_ppl=(r.get("summary") or {}).get("ppl"))
-        if fmt == "gguf" and (s.vllm is not None or s.sglang is not None):
-            raise ValueError("a GGUF artifact is served by llama.cpp, not vLLM / SGLang")
-        if fmt != "gguf" and s.llamacpp is not None:
-            raise ValueError(f"llama.cpp serves GGUF files; a {fmt} checkpoint goes to vLLM or SGLang")
-        if s.vllm is None and s.sglang is None and s.llamacpp is None:
-            raise ValueError("no serving backend: set deploy.vllm, deploy.sglang or deploy.llamacpp")
-        return out
+        s = self.spec
+        return resolve_artifact(s.artifact, s.output_dir, vllm=s.vllm, sglang=s.sglang, llamacpp=s.llamacpp,
+                                check_backend=True)
 
     def _run(self) -> None:
         s = self.spec
@@ -213,6 +170,61 @@ class DeployJob(LLMJob):
         if s.llamacpp_serve:
             out["serve"] = self._llamacpp_serve(path, art["type"], threads)
         return out
+
+
+def resolve_artifact(a: dict[str, Any], output_dir: str | Path, *, vllm: Any = None, sglang: Any = None,
+                     llamacpp: Any = None, check_backend: bool = False) -> dict[str, Any]:
+    """Resolve `{job, recipe, format}` / `{job, format: gguf, type}` to an exported path and its parent numbers.
+
+    `vllm`/`sglang`/`llamacpp` are only inspected when `check_backend` (DeployJob's case: it must serve the
+    artifact); an evaluate-only job just needs the path, so it leaves the defaults alone.
+    """
+    job, recipe, fmt, ty = str(a.get("job", "")), str(a.get("recipe") or ""), str(a.get("format", "")), a.get("type")
+    if not JOB_ID.fullmatch(job):
+        raise ValueError(f"artifact.job: bad job id '{job}'")
+    if fmt not in HF_FORMATS | {"gguf"}:
+        raise ValueError(f"artifact.format '{fmt}': one of {sorted(HF_FORMATS)} or gguf")
+    parent = Path(output_dir) / job
+    rep_path = parent / "report.json"
+    if not rep_path.is_file():
+        raise ValueError(f"artifact.job: job {job} not found (no {rep_path})")
+    rep = json.loads(rep_path.read_text())
+    pe = ((rep.get("data") or {}).get("eval")) or {}
+    parent_eval = {"windows": pe["windows"], "seq_len": pe["seq_len"]} if "windows" in pe and "seq_len" in pe else None
+    out: dict[str, Any] = {"job": job, "format": fmt, "parent_baseline_ppl": (rep.get("baseline") or {}).get("ppl"),
+                           "parent_model_path": (rep.get("spec") or {}).get("model_path"), "parent_eval": parent_eval}
+    if fmt == "gguf":
+        if not (isinstance(ty, str) and GGUF_TYPE.fullmatch(ty)):
+            raise ValueError(f"artifact.type: bad GGUF type '{ty}'")
+        res = ((rep.get("llamacpp") or {}).get("results") or {}).get(ty)
+        path = parent / "export" / "gguf" / f"model-{ty}.gguf"
+        if res is None or not path.is_file():
+            raise ValueError(f"artifact: job {job} has no GGUF {ty} (llama.cpp types it produced: "
+                             f"{sorted((rep.get('llamacpp') or {}).get('results') or {})})")
+        out.update(type=ty, path=str(path), bytes=path.stat().st_size, parent_ppl=res.get("ppl"))
+    else:
+        if not RECIPE.fullmatch(recipe):
+            raise ValueError(f"artifact.recipe: bad recipe name '{recipe}'")
+        r = (rep.get("recipes") or {}).get(recipe)
+        if r is None:
+            raise ValueError(f"artifact: job {job} did not quantize {recipe} (it has {sorted(rep.get('recipes') or {})})")
+        ex = (r.get("export") or {}).get(fmt)
+        if not ex or ex.get("status") != "exported":
+            raise ValueError(f"artifact: {recipe} of job {job} has no {fmt} export (status: {(ex or {}).get('status', 'not requested')}"
+                             f"{' -- unsupported' if (ex or {}).get('status') == 'unsupported' else ''})")
+        path = parent / "export" / f"{recipe.lower()}-{fmt}"
+        if not (path / "config.json").is_file():
+            raise ValueError(f"artifact: {path} is gone (was it cleaned up?)")
+        out.update(recipe=recipe, algorithm=r.get("algorithm"), path=str(path), bytes=ex.get("bytes"),
+                   parent_real_ppl=ex.get("real_ppl"), parent_fake_ppl=(r.get("summary") or {}).get("ppl"))
+    if check_backend:
+        if fmt == "gguf" and (vllm is not None or sglang is not None):
+            raise ValueError("a GGUF artifact is served by llama.cpp, not vLLM / SGLang")
+        if fmt != "gguf" and llamacpp is not None:
+            raise ValueError(f"llama.cpp serves GGUF files; a {fmt} checkpoint goes to vLLM or SGLang")
+        if vllm is None and sglang is None and llamacpp is None:
+            raise ValueError("no serving backend: set deploy.vllm, deploy.sglang or deploy.llamacpp")
+    return out
 
 
 def main() -> None:

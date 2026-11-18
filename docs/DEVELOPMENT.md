@@ -225,13 +225,13 @@ Refs: T-Rxx, T-Ryy
 - [ ] 触及 L2/L3 路径（见 STRUCTURE.md §1）已获批
 - [ ] 没有凭证、权重、大文件入库
 - [ ] `TASKS.md` 状态已更新
-- [ ] `docs/PROGRESS.md` 已追加本次会话记录
+- [ ] `internal/PROGRESS.md` 已追加本次会话记录
 
 ---
 
 ## 8. 会话结束前必做
 
-在 `docs/PROGRESS.md` 顶部追加一条，包含：
+在 `internal/PROGRESS.md` 顶部追加一条，包含：
 
 - **完成**：哪些任务 ID、落在哪些文件
 - **校验**：跑了什么命令、结果是什么（测试数、关键输出）
