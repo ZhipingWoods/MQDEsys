@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus" alt="C++20">
   <img src="https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB?logo=python" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react" alt="React 18">
-  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT">
+  <img src="https://img.shields.io/badge/License-MQDEsys%20Covenant-6C5CE7" alt="MQDEsys License">
   <a href="docs/site/zh/index.md"><img src="https://img.shields.io/badge/Docs-中文-1D5EFF" alt="中文文档"></a>
 </p>
 
@@ -189,4 +189,6 @@ make html
 
 ## 许可证
 
-MIT，见 [LICENSE](LICENSE)。
+MQDEsys 采用 MIT 条款，并附加商业贡献约定。商业使用者需要将可归属于本项目的
+毛收入 20% 充值至项目；其中 40% 按贡献记录分配给所有认可的贡献者，60% 用于项目维护、
+基础设施、文档、安全和功能迭代。完整条款见 [LICENSE](LICENSE)。

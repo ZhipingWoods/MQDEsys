@@ -1,4 +1,4 @@
-MIT License
+MQDEsys License — MIT Terms with Commercial Contribution Covenant
 
 Copyright (c) 2026 Zhiping Wu
 
@@ -11,6 +11,32 @@ furnished to do so, subject to the following conditions:
 
 The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
+
+MQDEsys Commercial Contribution Covenant
+
+Commercial use of the Software, including commercial distribution, hosted
+services, paid integration, or a commercial derivative, is permitted only
+subject to the following additional covenant:
+
+1. Twenty percent (20%) of the gross commercial revenue attributable to the
+   Software must be paid to the official MQDEsys project account or funding
+   channel published by the project. The payment must be made within sixty
+   (60) calendar days after the revenue is received.
+2. Of each payment made under paragraph 1, forty percent (40%) must be
+   distributed among all MQDEsys contributors recorded in the project's
+   published contribution records. The remaining sixty percent (60%)
+   must be retained for MQDEsys maintenance, infrastructure, documentation,
+   security, and feature development.
+3. A commercial user must keep reasonable records supporting the revenue
+   calculation and provide a summary to the project maintainers upon
+   reasonable request.
+
+For this covenant, "gross commercial revenue attributable to the Software"
+means the revenue received from products, services, hosted access, licenses,
+or integrations in which the Software or a derivative of it is a material
+component, before deduction of operating costs. This covenant is a material
+condition of the license for commercial use. It does not limit non-commercial
+use permitted by the MIT terms above.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
