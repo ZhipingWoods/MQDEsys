@@ -1,15 +1,16 @@
 // 模型库 (framework: 模型量化 → 模型选择): models already on this server, the HF catalog (data/models/catalog.json,
-// refreshed daily, two-level grouping), HF search & download, and ModelScope (not integrated yet -- said so, not hidden).
+// refreshed daily, two-level grouping), and live search/download from HuggingFace or ModelScope.
 import { Fragment, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, CatalogModel, fmt, fmtBytes, fmtParams, LibraryModel } from "../api";
-import { DOMAIN_SHORT, modelInDomain, useDomain } from "../domain";
+import { DOMAIN_SHORT, familyCoverage, familyLabel, modelInDomain, useDomain } from "../domain";
 import { useAsync, useDebounced } from "../hooks";
 import { HubPanel } from "./Fit";
 
 const CAP_LABEL: Record<string, string> = { text: "文本", vision: "视觉", moe: "MoE", audio: "音频" };
 
 function HfCatalog() {
+  const { current } = useDomain();
   const [search, setSearch] = useState("");
   const [provider, setProvider] = useState("");
   const [capability, setCapability] = useState("");
@@ -58,6 +59,16 @@ function HfCatalog() {
               : "本服务未开启自动刷新，"}
             也可在服务器上运行 <code>mqde catalog update --limit N</code>。点击一行进入部署预评估。
           </p>
+          {current && current.model_families.length > 0 && (
+            <div className="small muted" style={{ marginTop: -4 }}>
+              当前领域已适配架构：
+              <span className="chips" style={{ display: "inline-flex", marginLeft: 6 }}>
+                {current.model_families.map((f) => (
+                  <span key={f} className="chip" style={{ cursor: "default" }} title={`${f} · ${familyCoverage(f)}`}>{familyLabel(f)}</span>
+                ))}
+              </span>
+            </div>
+          )}
         </div>
       </div>
       <div className="card">
@@ -188,29 +199,16 @@ export default function ModelLibraryPage() {
   return (
     <>
       <h1>模型库</h1>
-      <p className="subtitle">本地模型加载、HuggingFace 模型库（每日增量同步）、在线搜索下载。本地模型按导航栏的领域筛选。</p>
+      <p className="subtitle">本地模型、HuggingFace 模型库（每日增量同步），以及 HuggingFace / ModelScope 在线搜索下载。本地模型按导航栏的领域筛选。</p>
       <div className="tabs" data-testid="library-tabs">
         {TABS.map(([t, label]) => (
           <div key={t} className={`tab ${tab === t ? "on" : ""}`} onClick={() => setParams({ tab: t }, { replace: true })} data-testid={`library-tab-${t}`}>
             {label}
-            {t === "modelscope" && <span className="badge" style={{ marginLeft: 6 }}>未接入</span>}
           </div>
         ))}
       </div>
-      {tab === "local" ? <LocalModels /> : tab === "catalog" ? <HfCatalog /> : tab === "hf" ? <HubPanel /> : <ModelScopeNote />}
+      {tab === "local" ? <LocalModels /> : tab === "catalog" ? <HfCatalog /> : tab === "hf" ? <HubPanel provider="hf" /> : <HubPanel provider="modelscope" />}
     </>
-  );
-}
-
-function ModelScopeNote() {
-  return (
-    <div className="card" data-testid="modelscope-note">
-      <h2>ModelScope 下载</h2>
-      <p className="note">
-        还没有接入：服务端的下载器（hub::download_file）目前只认 HuggingFace 的 resolve 接口（含 HF_ENDPOINT 镜像）。ModelScope 的
-        文件列表与下载接口不同，需要单独的适配（任务 T-0204）。国内网络下载 HF 模型可以先设置 HF_ENDPOINT 指向镜像，在「HF 搜索与下载」里使用。
-      </p>
-    </div>
   );
 }
 
@@ -237,7 +235,7 @@ function LocalModels() {
         {rows.map((m) => <LocalModelCard key={m.path} m={m} />)}
         {lib.data && rows.length === 0 && (
           <div className="card empty">
-            当前领域还没有本地模型。去「HF 搜索与下载」下载一个，或把检查点放到服务器的允许目录下。
+            当前领域还没有本地模型。去「HF 搜索与下载」或「ModelScope」下载一个，或把检查点放到服务器的允许目录下。
           </div>
         )}
       </div>

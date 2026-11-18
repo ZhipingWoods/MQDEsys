@@ -96,11 +96,11 @@ Result<std::vector<std::string>> resolve_algorithm(const std::string& name) {
   for (const auto& p : parts)
     if (p == "awq" || p == "smoothquant")
       transforms.push_back(p);
-    else if (p == "rtn" || p == "gptq")
+    else if (p == "rtn" || p == "gptq" || p == "hqq")
       quantizers.push_back(p);
   if (transforms.size() > 1 || quantizers.size() > 1)
     return make_error(Errc::kInvalidArgument,
-                      "algorithm '{}': at most one transform (awq|smoothquant) and one quantizer (rtn|gptq)",
+                      "algorithm '{}': at most one transform (awq|smoothquant) and one quantizer (rtn|gptq|hqq)",
                       name);
   std::vector<std::string> out = transforms;
   if (quantizers.empty())
@@ -249,14 +249,64 @@ void add(std::vector<Problem>& out, std::string field, std::string message, std:
 std::vector<Problem> validate_jobspec(const Json& job) {
   std::vector<Problem> out;
 
-  // A job that serves an existing export (B2, `artifact`) quantizes nothing: no recipe, algorithm or
-  // calibration.
+  // Pipeline stages (T-xxxx): an explicit `stages: [quantize, evaluate, export, deploy]` list decouples the
+  // job from the historical all-in-one pipeline. Absent keeps every existing job's behaviour exactly.
+  static const std::set<std::string> kKnownStages = {"quantize", "evaluate", "export", "deploy"};
+  const bool stages_given = job.contains("stages");
+  std::string qpath;
+  if (job.contains("model") && job["model"].is_object() && job["model"].contains("quantized_path") &&
+      job["model"]["quantized_path"].is_string())
+    qpath = job["model"]["quantized_path"].get<std::string>();
   const bool serving_export = job.contains("artifact");
+  std::set<std::string> st;
+  if (stages_given) {
+    const auto& v = job["stages"];
+    if (!v.is_array() || v.empty()) {
+      add(out, "/stages", "must be a non-empty list of stage names",
+          "use a subset of quantize, evaluate, export, deploy");
+    } else {
+      for (const auto& s : v) {
+        const auto name = s.is_string() ? s.get<std::string>() : std::string();
+        if (!kKnownStages.count(name)) {
+          add(out, "/stages", fmt::format("'{}' is not a stage", s.is_string() ? name : s.dump()),
+              "use a subset of quantize, evaluate, export, deploy");
+          continue;
+        }
+        if (!st.insert(name).second)
+          add(out, "/stages", fmt::format("stage '{}' is listed more than once", name), "");
+      }
+    }
+  } else if (serving_export) {
+    st = {"evaluate", "deploy"};
+  } else if (!qpath.empty()) {
+    // naming an already-quantized checkpoint means "do not quantize it again" unless stages say otherwise
+    st = {"evaluate"};
+  } else {
+    st = {"quantize", "evaluate"};
+    const auto formats = job.value(Json::json_pointer("/export/formats"), Json::array());
+    const bool skip = job.value(Json::json_pointer("/evaluation/skip"), false);
+    if (skip) {
+      // legacy "quantize only": keep quantizing, but an explicit export is now honoured (llm_job writes a
+      // reusable checkpoint without needing the fake PPL an evaluation would have produced).
+      st = {"quantize"};
+      if (!formats.empty()) st.insert("export");
+    } else if (!formats.empty()) {
+      st.insert("export");
+    }
+    if (const auto& dep = job["deploy"]; dep.is_object() &&
+        (dep.contains("vllm") || dep.contains("sglang") || dep.contains("llamacpp")))
+      st.insert("deploy");
+  }
+  const bool has_quantize = st.count("quantize") > 0, has_evaluate = st.count("evaluate") > 0,
+             has_export = st.count("export") > 0, has_deploy = st.count("deploy") > 0;
+
+  // A job that serves an existing export (B2, `artifact`) or evaluates an already-quantized checkpoint
+  // quantizes nothing: no recipe, algorithm or calibration.
   const auto recipes = job.value(Json::json_pointer("/quant/recipe"), Json::array());
-  if (serving_export) {
+  if (!has_quantize) {
     if (job.contains("quant"))
-      add(out, "/quant", "a job that serves an existing export quantizes nothing",
-          "remove quant (the artifact names what was quantized)");
+      add(out, "/quant", "a job that evaluates an existing checkpoint quantizes nothing",
+          "remove quant, or add 'quantize' to stages and drop model.quantized_path / artifact");
   } else if (!recipes.is_array() || recipes.empty()) {
     add(out, "/quant/recipe", "must be a non-empty list of recipe names",
         "pick at least one of w4a16, w4a8, w2a16, w2a8, fp8, bf16");
@@ -273,7 +323,7 @@ std::vector<Problem> validate_jobspec(const Json& job) {
 
   const auto algo = job.value(Json::json_pointer("/quant/algorithm"), std::string("recipe"));
   std::vector<std::string> algo_parts;
-  if (algo != "recipe" && !serving_export) {
+  if (algo != "recipe" && has_quantize) {
     if (auto a = resolve_algorithm(algo); !a)
       add(out, "/quant/algorithm", a.error().message, "run `mqde` with GET /api/v1/algorithms for the list");
     else
@@ -291,8 +341,71 @@ std::vector<Problem> validate_jobspec(const Json& job) {
   }
 
   const auto mtype = job.value(Json::json_pointer("/model/type"), std::string("vla"));
-  if (mtype != "vla" && mtype != "llm" && mtype != "vlm")
-    add(out, "/model/type", fmt::format("'{}' is not 'llm', 'vlm' or 'vla'", mtype), "");
+  if (mtype != "vla" && mtype != "llm" && mtype != "vlm" && mtype != "world" && mtype != "ewm")
+    add(out, "/model/type", fmt::format("'{}' is not 'llm', 'vlm', 'vla', 'world' or 'ewm'", mtype), "");
+
+  // model.quantized_path: evaluate an existing checkpoint instead of quantizing model.path again.
+  std::string quant_format;
+  if (job.contains("model") && job["model"].is_object() && job["model"].contains("quantized_path")) {
+    if (!job["model"]["quantized_path"].is_string() || job["model"]["quantized_path"].get<std::string>().empty())
+      add(out, "/model/quantized_path", "must be a non-empty path", "name the quantized checkpoint directory or GGUF file");
+    if (mtype != "llm")
+      add(out, "/model/quantized_path", "only model.type=llm can evaluate a pre-quantized checkpoint today", "");
+    if (has_quantize)
+      add(out, "/model/quantized_path",
+          "a job that names an existing checkpoint must not quantize it again",
+          "drop 'quantize' from stages (and quant), or remove model.quantized_path");
+    static const std::regex kFormat("[a-z0-9._-]+");
+    quant_format = job["model"].value("quant_format", std::string("auto"));
+    if (!std::regex_match(quant_format, kFormat))
+      add(out, "/model/quant_format", fmt::format("'{}' is not a format name", quant_format),
+          "use auto, awq, gptq, compressed-tensors or gguf");
+  }
+
+  // Stage coherence: what each stage needs from the rest of the job.
+  if (stages_given) {
+    if (!has_quantize && qpath.empty() && !serving_export)
+      add(out, "/stages", "nothing names a checkpoint to evaluate: add 'quantize', set model.quantized_path, or use artifact",
+          "");
+    if (has_deploy && has_quantize && !has_export)
+      add(out, "/stages", "deploy needs the checkpoint the export stage writes",
+          "add 'export' to stages, or drop 'deploy'");
+    if (has_deploy && has_evaluate == false)
+      add(out, "/stages", "deploy benchmarks need the evaluate stage (served PPL / task accuracy)",
+          "add 'evaluate' to stages");
+    if (has_export && !has_quantize)
+      add(out, "/stages", "export needs a quantize stage (there is nothing to write otherwise)", "");
+    if (has_export && job.value(Json::json_pointer("/export/formats"), Json::array()).empty())
+      add(out, "/export/formats", "stages includes export but no format is selected",
+          "set export.formats to gptq, awq or compressed-tensors");
+    if (!has_export && !job.value(Json::json_pointer("/export/formats"), Json::array()).empty())
+      add(out, "/stages", "export.formats is set but 'export' is not in stages",
+          "add 'export' to stages, or remove export.formats");
+    {
+      const auto& dep = job.contains("deploy") && job["deploy"].is_object() ? job["deploy"] : Json::object();
+      const bool any_backend = dep.contains("vllm") || dep.contains("sglang") || dep.contains("llamacpp") ||
+                               dep.contains("native");
+      if (!has_deploy && any_backend)
+        add(out, "/stages", "a serving backend is configured but 'deploy' is not in stages",
+            "add 'deploy' to stages, or remove the backend");
+    }
+    if (has_deploy) {
+      const auto& dep = job.contains("deploy") && job["deploy"].is_object() ? job["deploy"] : Json::object();
+      const bool any_backend = dep.contains("vllm") || dep.contains("sglang") || dep.contains("llamacpp") ||
+                               dep.contains("native");
+      if (!any_backend)
+        add(out, "/deploy", "no serving backend: set deploy.vllm, deploy.sglang, deploy.llamacpp or deploy.native", "");
+      if (!quant_format.empty() && quant_format != "auto") {
+        if (quant_format == "gguf" && (dep.contains("vllm") || dep.contains("sglang")))
+          add(out, "/deploy", "a GGUF checkpoint is served by llama.cpp, not vLLM / SGLang",
+              "use deploy.llamacpp");
+        if (quant_format != "gguf" && dep.contains("llamacpp"))
+          add(out, "/deploy",
+              fmt::format("llama.cpp serves GGUF files; this checkpoint is {}", quant_format),
+              "use deploy.vllm or deploy.sglang");
+      }
+    }
+  }
 
   // calibration.custom_samples (text pasted into the form): only an LLM job reads it, and it has to be a list
   // of strings with some text in them. An empty list means "not given" (the named source is used).
@@ -337,12 +450,10 @@ std::vector<Problem> validate_jobspec(const Json& job) {
   // quantize_only (T-1304/T-1306): calibration + quantization only. Every stage that reads export/deploy/
   // sensitivity/logits_probe/attribution needs an evaluated baseline this skips (see llm_job.py's and
   // vla_job.py's own quantize_only branches), so combining them is a job the Python pipeline cannot honor.
-  if (job.value(Json::json_pointer("/evaluation/skip"), false)) {
+  if (job.value(Json::json_pointer("/evaluation/skip"), false) && !stages_given) {
     if (mtype == "llm") {
-      if (!job.value(Json::json_pointer("/export/formats"), Json::array()).empty())
-        add(out, "/evaluation/skip",
-            "quantize-only is incompatible with export.formats (export needs the fake-quant PPL this skips)",
-            "remove export.formats, or turn off evaluation.skip");
+      // export.formats is now honoured by a quantize-only LLM job (it writes the checkpoint without the fake
+      // PPL an evaluation would have produced), so it is deliberately not rejected here.
       if (job.contains("deploy") && job["deploy"].is_object() && job["deploy"].contains("vllm"))
         add(out, "/evaluation/skip", "quantize-only is incompatible with deploy.vllm",
             "remove deploy.vllm, or turn off evaluation.skip");
@@ -377,6 +488,9 @@ std::vector<Problem> validate_jobspec(const Json& job) {
                llamacpp = dep.contains("llamacpp");
     if (mtype != "llm")
       add(out, "/artifact", "only llm jobs export checkpoints that can be served again", "");
+    if (has_quantize)
+      add(out, "/stages", "an artifact job has nothing to quantize",
+          "remove 'quantize' from stages (and quant)");
     if (!a.is_object()) {
       add(out, "/artifact", "must be {job, recipe, format} or {job, format: gguf, type}", "");
     } else {
@@ -392,12 +506,12 @@ std::vector<Problem> validate_jobspec(const Json& job) {
             "");
       if (!gguf && !std::regex_match(a.value("recipe", std::string()), kName))
         add(out, "/artifact/recipe", "an exported checkpoint is named by its recipe (W4A16, ...)", "");
-      if (!vllm && !sglang && !llamacpp)
+      if (has_deploy && !vllm && !sglang && !llamacpp)
         add(out, "/deploy", "no serving backend: set deploy.vllm, deploy.sglang or deploy.llamacpp", "");
-      else if (gguf && (vllm || sglang))
+      else if (has_deploy && gguf && (vllm || sglang))
         add(out, "/deploy", "a GGUF artifact is served by llama.cpp, not vLLM / SGLang",
             "use deploy.llamacpp");
-      else if (!gguf && llamacpp)
+      else if (has_deploy && !gguf && llamacpp)
         add(out, "/deploy",
             fmt::format("llama.cpp serves GGUF files; a {} checkpoint goes to vLLM or SGLang", af),
             "use deploy.vllm or deploy.sglang");
@@ -414,12 +528,14 @@ std::vector<Problem> validate_jobspec(const Json& job) {
   }
 
   const auto device = job.value(Json::json_pointer("/deploy/device"), std::string());
-  if (device == "cpu" && mtype != "llm")
+  const bool native_serve = job.contains("deploy") && job["deploy"].is_object() &&
+                            job["deploy"].contains("native");
+  if (device == "cpu" && mtype != "llm" && !native_serve)
     add(out, "/deploy/device", "cpu is only supported for model.type=llm",
-        "set deploy.device to 'gpu', or model.type to 'llm'");
+        "set deploy.device to 'gpu', model.type to 'llm', or use the native VLA/WM server");
 
   if (const auto export_formats = job.value(Json::json_pointer("/export/formats"), Json::array());
-      !export_formats.empty() && mtype == "llm") {
+      !export_formats.empty() && mtype == "llm" && has_export) {
     // Export compatibility needs a recipe's actual weight/act spec, which needs the recipe to have loaded
     // above.
     for (const auto& r : recipes) {

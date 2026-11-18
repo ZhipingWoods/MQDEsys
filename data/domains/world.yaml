@@ -1,17 +1,18 @@
-# World model (generic video/world generation, DiT-based). No data/model_families/*.yaml entry exists yet
-# for this domain (see T-1005) -- model_families is intentionally empty rather than pointing at something
-# that does not exist.
+# World model (generic video/world generation, DiT-based). T-1005 implements the experimental
+# quantization/evaluation pipeline: PTQ of the denoising transformer + PSNR/MSE against the FP output.
+# Serving backends stay empty: vLLM/SGLang/llama.cpp serve text tokens, not a second diffusion decode.
 id: world
 order: 40  # wizard tab position: LLM, VLM, VLA, WM, EWM
 display_name: World Model（通用世界模型 / 视频生成）
-model_families: []
-applicable_recipes: []
+model_families: [dit_world]
+applicable_recipes: [bf16, w8a16, fp8, w4a16, w4a8, w2a16, w2a8]
 classic_algorithms:
   - name: ptq-diffusion
     note: >-
-      reference only (literature family: PTQ4DM / Q-Diffusion style post-training quantization for
-      diffusion/video models); not implemented in this repo
-default_eval_dataset: ""
-pipeline_status: ui_only_pending_backend  # no python pipeline exists; see T-1005
+      PTQ4DM / Q-Diffusion style post-training quantization for diffusion models. This repo implements
+      the blockwise RTN/GPTQ/AWQ path (python/mqde/pipeline/world_job.py), with timestep/adaLN
+      modulation and patch embeddings kept in FP.
+default_eval_dataset: synthetic-video
+pipeline_status: implemented
 deploy_backends: []
-deploy_note: "该领域还没有量化流水线，暂无部署后端。"
+deploy_note: "视频/世界模型没有文本推理后端：vLLM、SGLang、llama.cpp 都只服务 token 输出，不包含第二段扩散去噪解码。"

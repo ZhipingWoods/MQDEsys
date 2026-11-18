@@ -26,7 +26,7 @@ TEST(estimator_domain, llm_and_vla_are_marked_implemented_because_their_pipeline
   ASSERT_TRUE(llm) << llm.error().message;
   EXPECT_EQ(llm->id, "llm");
   EXPECT_EQ(llm->pipeline_status, "implemented");
-  EXPECT_EQ(llm->model_families, (std::vector<std::string>{"generic_decoder"}));
+  EXPECT_EQ(llm->model_families, (std::vector<std::string>{"decoder_llm", "generic_decoder"}));
   ASSERT_FALSE(llm->classic_algorithms.empty());
 
   auto vla = load_domain("vla");
@@ -43,12 +43,19 @@ TEST(estimator_domain, vlm_is_implemented_and_knows_the_minicpmv_family) {
             d->model_families.end());
 }
 
-TEST(estimator_domain, domains_with_no_real_pipeline_say_so_instead_of_pretending) {
-  for (const char* id : {"world", "ewm"}) {
-    auto d = load_domain(id);
-    ASSERT_TRUE(d) << id << ": " << d.error().message;
-    EXPECT_EQ(d->pipeline_status, "ui_only_pending_backend") << id;
-  }
+TEST(estimator_domain, world_and_ewm_are_implemented_and_name_their_dit_families) {
+  auto world = load_domain("world");
+  ASSERT_TRUE(world) << world.error().message;
+  EXPECT_EQ(world->pipeline_status, "implemented");
+  EXPECT_EQ(world->model_families, (std::vector<std::string>{"dit_world"}));
+  EXPECT_EQ(world->default_eval_dataset, "synthetic-video");
+  EXPECT_TRUE(world->deploy_backends.empty());
+
+  auto ewm = load_domain("ewm");
+  ASSERT_TRUE(ewm) << ewm.error().message;
+  EXPECT_EQ(ewm->pipeline_status, "implemented");
+  EXPECT_EQ(ewm->model_families, (std::vector<std::string>{"dit_ewm"}));
+  EXPECT_TRUE(ewm->deploy_backends.empty());
 }
 
 TEST(estimator_domain, world_and_ewm_are_distinct_domains_not_aliases) {
@@ -124,7 +131,12 @@ TEST(estimator_domain, deploy_backends_is_loaded_and_emitted_so_the_wizard_can_g
   ASSERT_TRUE(llm) << llm.error().message;
   EXPECT_EQ(llm->deploy_backends, (std::vector<std::string>{"llamacpp", "vllm", "sglang"}));
   EXPECT_EQ(to_json(*llm).at("deploy_backends"), (Json{"llamacpp", "vllm", "sglang"}));
-  for (const char* id : {"vlm", "vla", "world", "ewm"}) {
+  for (const char* id : {"vlm"}) {
+    auto d = load_domain(id);
+    ASSERT_TRUE(d) << id << ": " << d.error().message;
+    EXPECT_EQ(d->deploy_backends, (std::vector<std::string>{"vllm", "sglang"})) << id;
+  }
+  for (const char* id : {"vla", "world", "ewm"}) {
     auto d = load_domain(id);
     ASSERT_TRUE(d) << id << ": " << d.error().message;
     EXPECT_TRUE(d->deploy_backends.empty()) << id;

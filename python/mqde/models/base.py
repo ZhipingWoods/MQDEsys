@@ -26,6 +26,23 @@ def data_dir() -> Path:
     return Path(env) if env else Path(__file__).resolve().parents[3] / "data"
 
 
+def family_for_model_type(model_type: str) -> dict[str, Any]:
+    """The same matching rule as C++ ``modelspec::find_model_family``: first YAML (sorted by filename)
+    whose ``match.model_type`` contains this config's type, else generic_decoder.
+
+    Used by the VLM adapter so a checkpoint does not need a hand-written Python class just to be
+    quantized: Qwen2-VL, LLaVA, InternVL, ... all expose the same four-call contract.
+    """
+    root = data_dir() / "model_families"
+    for path in sorted(root.glob("*.yaml")):
+        with open(path) as f:
+            fam = yaml.safe_load(f) or {}
+        if model_type and model_type in (fam.get("match") or {}).get("model_type", []):
+            return fam
+    with open(root / "generic_decoder.yaml") as f:
+        return yaml.safe_load(f)
+
+
 @dataclass
 class Unit:
     """One quantizable linear layer."""

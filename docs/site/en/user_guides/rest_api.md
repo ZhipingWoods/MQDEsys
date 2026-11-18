@@ -1,8 +1,8 @@
 # REST API reference
 
-**Status: implemented, not yet frozen.** The server (`mqde serve`, cpp-httplib) exposes JSON over HTTP under `/api/v1`, with job progress as Server-Sent Events. There is no OpenAPI file or generated client yet (T-0007): the types are hand-written in `web/src/api.ts` and the routes live in `cpp/src/server/server.cpp`, so treat the shapes as subject to change. The endpoints were read from both files; the examples were run against a live server.
+The server (`mqde serve`, cpp-httplib) exposes JSON over HTTP under `/api/v1`, with job progress delivered as Server-Sent Events. Endpoint definitions live in `cpp/src/server/server.cpp`; typed web client definitions live in `web/src/api.ts`. The examples below can be executed directly against a running server.
 
-Conventions: request bodies are JSON (an empty body means `{}`); errors are `{"code": "...", "message": "..."}` with status 400 (`invalid_argument`, `parse`), 403 (`forbidden`: path outside `--allow`), 404, 409, 500 or 503. Paths for models and datasets must lie under an allowed root. Custom verbs use a colon (`/jobs/<id>:cancel`). The server listens on loopback and has no authentication (planned, T-1204).
+Conventions: request bodies are JSON (an empty body means `{}`); errors are `{"code": "...", "message": "..."}` with status 400 (`invalid_argument`, `parse`), 403 (`forbidden`: path outside `--allow`), 404, 409, 500 or 503. Paths for models and datasets must lie under an allowed root. Custom verbs use a colon (`/jobs/<id>:cancel`). The server listens on loopback and does not enable authentication.
 
 ## System
 
@@ -12,6 +12,9 @@ Conventions: request bodies are JSON (an empty body means `{}`); errors are `{"c
 | `GET /config` | `{allowed_roots, gpus, runs_dir}` |
 | `GET /hardware` | detected devices (`devices`, with matched `profile`) and the job GPU pool (`job_gpus`) |
 | `GET /hardware/profiles` | the hardware profile library |
+| `GET /benchmarks` | offline benchmark metadata, suites and the EvalScope dataset catalogue (`evalscope`, metadata only) |
+| `GET /datasets` | built-in datasets and allowed roots offered by the wizard |
+| `GET /datasets/inspect?path=&kind=` | read-only check whether a data file / directory is usable |
 | `GET /recipes` | quantization recipes (with `id`, specs, `summary`) |
 | `GET /algorithms` | quantization algorithms (from `data/algorithms.yaml`) |
 | `GET /installed` | inference runtimes found on this machine (cached for 30 s) |
@@ -49,7 +52,9 @@ curl -s -X POST localhost:18080/api/v1/estimate \
 |---|---|
 | `GET /catalog?search=&provider=&capability=&limit=&include_demoted=` | local model catalog |
 | `GET /hf/search?q=&limit=` | live Hugging Face search (needs network) |
+| `GET /modelscope/search?q=&limit=` | live ModelScope search (needs network) |
 | `POST /download` | `{model: "<org>/<name>", quant?, budget?, output_dir?, list?}`: start a download (or `list: true` to list file groups); returns a download id |
+| `POST /modelscope/download` | same, from ModelScope; the download status carries `provider: modelscope` |
 | `GET /download/<id>/status` | progress |
 | `POST /download/<id>:cancel` | cancel |
 

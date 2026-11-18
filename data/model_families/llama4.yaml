@@ -1,0 +1,38 @@
+# Llama 4 (Scout / Maverick): early-fusion vision encoder + projection + MoE language model.
+#   model.vision_model.encoder.layers.N   model.multi_modal_projector   model.language_model.layers.N
+family: llama4
+modality: vlm
+match:
+  model_type: [llama4]
+
+config_paths:
+  text: [text_config]
+  vision: [vision_config]
+
+tokens_per_image: 0
+
+components:
+  - name: vision
+    modality: vision
+    prefix: model.vision_model.encoder.layers.
+    block_regex: '^(\d+)\.'
+  - name: vision
+    modality: vision
+    prefix: model.vision_model.
+  - name: merger
+    modality: vision
+    prefix: model.multi_modal_projector.
+  - name: language
+    modality: language
+    prefix: model.language_model.
+    block_regex: 'layers\.(\d+)\.'
+  - name: lm_head
+    modality: language
+    prefix: lm_head.
+
+default_keep_fp:
+  - 'embed_tokens'
+  - 'lm_head'
+  - 'patch_embedding'
+  - 'position_embedding'
+  - 'class_embedding'

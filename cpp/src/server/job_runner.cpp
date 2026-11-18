@@ -105,12 +105,25 @@ std::string JobRunner::submit(const Json& job) {
   const bool wants_gpu =
       (proc.quant_device && *proc.quant_device == "gpu") || (proc.eval_device && *proc.eval_device == "gpu");
   proc.cpu = job.value("/deploy/device"_json_pointer, std::string()) == "cpu" && !wants_gpu;
+  // Pipeline stages: an artifact can be merely evaluated (no serving backend), and a local already-quantized
+  // checkpoint is evaluated by the same module. Everything else keeps the historical routing.
+  bool deploys = true;
+  if (const auto& st = job["stages"]; st.is_array() && !st.empty()) {
+    deploys = false;
+    for (const auto& s : st)
+      if (s.is_string() && s.get<std::string>() == "deploy") deploys = true;
+  }
+  const bool has_qpath = job.contains("model") && job["model"].is_object() && job["model"].contains("quantized_path");
   if (job.contains("artifact"))
-    proc.module = "mqde.pipeline.deploy_job";  // serves an existing export, no quantization
+    proc.module = deploys ? "mqde.pipeline.deploy_job" : "mqde.pipeline.eval_job";
+  else if (has_qpath)
+    proc.module = "mqde.pipeline.eval_job";
   else if (const auto type = job.value("/model/type"_json_pointer, std::string()); type == "llm")
     proc.module = "mqde.pipeline.llm_job";
   else if (type == "vlm")
     proc.module = "mqde.pipeline.vlm_job";
+  else if (type == "world" || type == "ewm")
+    proc.module = "mqde.pipeline.world_job";
   {
     std::lock_guard lk(mu_);
     jobs_[id] = proc;

@@ -10,15 +10,21 @@ algorithms:
   - name: gptq
     label: GPTQ
     kind: quantizer
-    description: Second-order (Hessian) column-wise error compensation, per layer on captured FP activations.
+    description: Second-order (Hessian) column-wise error compensation, per layer on captured FP activations. Retries with a larger damping term when the Hessian is not positive definite; optional static groups.
     needs_calibration: true
-    params: {block_size: 128, damp: 0.01, max_rows: 2048}
+    params: {block_size: 128, damp: 0.01, damp_auto_increment: 0.0015, damp_tries: 6, static_groups: false, max_rows: 2048}
+  - name: hqq
+    label: HQQ
+    kind: quantizer
+    description: Half-Quadratic Quantization. Data-free proximal optimisation of scale/zero (Lp residual), the fallback for 2-bit recipes when no calibration data is available.
+    needs_calibration: false
+    params: {iters: 20, lp_norm: 0.7, beta: 1.0, kappa: 1.01}
   - name: awq
     label: AWQ
     kind: transform
     description: Activation-aware per-input-channel scaling searched to minimise output error, then RTN.
     needs_calibration: true
-    params: {grid: 20, max_rows: 512}
+    params: {grid: 20, clip_grid: 0, max_rows: 512}
   - name: smoothquant
     label: SmoothQuant
     kind: transform
@@ -34,4 +40,9 @@ algorithms:
     label: SmoothQuant + GPTQ
     kind: combo
     description: SmoothQuant migration first, then GPTQ. Recipe default for W4A8.
+    needs_calibration: true
+  - name: awq+hqq
+    label: AWQ + HQQ
+    kind: combo
+    description: AWQ scaling first, then HQQ. Useful for 2-bit groups where GPTQ's Hessian is unstable.
     needs_calibration: true

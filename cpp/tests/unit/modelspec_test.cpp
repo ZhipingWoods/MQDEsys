@@ -1,5 +1,6 @@
 #include <filesystem>
 #include <fstream>
+#include <tuple>
 
 #include <gtest/gtest.h>
 
@@ -212,4 +213,24 @@ TEST(modelspec_vla, minicpm_vla_structure) {
   EXPECT_EQ(dit.modality, "action");
   EXPECT_EQ(dit.block, 15);
   EXPECT_TRUE(spec->warnings.empty());
+}
+
+TEST(modelspec_families, mainstream_architectures_resolve_to_a_specific_template) {
+  // The estimator and the web graph both read `family`/`modality` from this match, so a missing
+  // model_type silently downgrades a VLM to generic_decoder/llm. Pin the common ones.
+  for (const auto& [model_type, family, modality] :
+       std::initializer_list<std::tuple<const char*, const char*, const char*>>{
+           {"qwen2_5_vl", "qwen_vl", "vlm"}, {"qwen3_vl", "qwen_vl", "vlm"},
+           {"llava_next", "llava", "vlm"},   {"internvl_chat", "internvl", "vlm"},
+           {"glm4v", "glm4v", "vlm"},        {"llama4", "llama4", "vlm"},
+           {"idefics3", "idefics3", "vlm"},  {"llama", "decoder_llm", "llm"},
+           {"qwen3_moe", "decoder_llm", "llm"}, {"deepseek_v3", "decoder_llm", "llm"}}) {
+    auto f = find_model_family(model_type);
+    ASSERT_TRUE(f) << model_type << ": " << f.error().to_string();
+    EXPECT_EQ(f->family, family) << model_type;
+    EXPECT_EQ(f->modality, modality) << model_type;
+  }
+  auto unknown = find_model_family("definitely_not_a_real_architecture");
+  ASSERT_TRUE(unknown);
+  EXPECT_EQ(unknown->family, "generic_decoder");
 }

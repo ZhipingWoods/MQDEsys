@@ -1,4 +1,4 @@
-"""Adapter for MiniCPM-V 4.6 (``MiniCPMV4_6ForConditionalGeneration``): ViT + merger + a hybrid-attention language model.
+"""Native-transformers VLM adapter (MiniCPM-V 4.6 first, Qwen-VL / LLaVA / InternVL / ... by family).
 
 The job needs four things from a VLM, and this is all it asks of one (a Qwen3.5-VL adapter only has to provide the same four):
 
@@ -11,6 +11,7 @@ The job needs four things from a VLM, and this is all it asks of one (a Qwen3.5-
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, cast
 
@@ -18,13 +19,20 @@ import numpy as np
 import torch
 from PIL import Image
 
-from mqde.models.base import QuantModel
+from mqde.models.base import QuantModel, family_for_model_type
 
 IMAGE_SIZE = (448, 448)
 
 
-class MiniCPMV:
-    family_name = "minicpmv"
+class HFVLM:
+    """One adapter for every checkpoint whose module tree is described by a data/model_families YAML.
+
+    The family is chosen from config.json's ``model_type`` with the same rule as the C++ estimator, so the
+    report, the layer trace and the estimator all name the same components. MiniCPMV remains a named
+    subclass for callers/tests that want the old entry point; the job uses HFVLM for every domain model.
+    """
+
+    image_size = IMAGE_SIZE
 
     def __init__(self, path: str | Path, device: str = "cuda", dtype: torch.dtype = torch.bfloat16,
                  trust_remote_code: bool = False) -> None:
@@ -32,6 +40,12 @@ class MiniCPMV:
 
         self.path = str(path)
         self.device = torch.device(device)
+        try:
+            cfg = json.loads((Path(path) / "config.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cfg = {}
+        self.family = family_for_model_type(str(cfg.get("model_type", "")))
+        self.family_name = str(self.family.get("family", "generic_decoder"))
         # Off unless asked for (AGENTS.md section 6): it runs the Python files the model directory ships. MiniCPM-V 4.6 is a native
         # transformers architecture and needs none.
         self.processor = AutoProcessor.from_pretrained(self.path, trust_remote_code=trust_remote_code)
@@ -40,14 +54,14 @@ class MiniCPMV:
         self.model: Any = cast(
             Any, AutoModelForImageTextToText.from_pretrained(self.path, trust_remote_code=trust_remote_code, dtype=dtype))
         self.model.to(self.device).eval()
-        self.qmodel = QuantModel(self.model, QuantModel.load_family(self.family_name))
+        self.qmodel = QuantModel(self.model, self.family)
         eos = self.model.generation_config.eos_token_id
         self.eos_ids = set(eos if isinstance(eos, (list, tuple)) else [eos]) | ({self.tokenizer.eos_token_id} - {None})
 
     def preprocess(self, sample: Any) -> dict[str, torch.Tensor]:
         content: list[dict[str, Any]] = []
         for img in sample.images:
-            content.append({"type": "image", "image": np.asarray(Image.fromarray(img).convert("RGB").resize(IMAGE_SIZE)).copy()})
+            content.append({"type": "image", "image": np.asarray(Image.fromarray(img).convert("RGB").resize(self.image_size)).copy()})
         content.append({"type": "text", "text": sample.question})
         inputs = self.processor.apply_chat_template([{"role": "user", "content": content}], tokenize=True, add_generation_prompt=True,
                                                     return_dict=True, return_tensors="pt", processor_kwargs={"padding": False})
@@ -79,3 +93,7 @@ class MiniCPMV:
             self.model(**inputs, use_cache=False, return_dict=True, logits_to_keep=1)
         except TypeError:
             self.model(**inputs, use_cache=False, return_dict=True)
+
+
+class MiniCPMV(HFVLM):
+    """Backwards-compatible name for the MiniCPM-V 4.6 adapter (family detection picks minicpmv)."""

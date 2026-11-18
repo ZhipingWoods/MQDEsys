@@ -59,11 +59,10 @@ try {
     page.on('pageerror', (e) => errors.push(String(e)));
     await page.goto(`${base}/hardware`, { waitUntil: 'load' });
     await page.getByText('MQDE Template Accelerator 0').waitFor({ timeout: 20000 });
-    const rows = (await page.locator('tbody tr').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
-    const r0 = rows.find((r) => r.includes('Template Accelerator 0')) ?? '';
-    const r1 = rows.find((r) => r.includes('Template Accelerator 1')) ?? '';
-    check('hardware page shows device 0: NPU, tmpl1, 16.00 GiB, vendor', /NPU/.test(r0) && r0.includes('tmpl1') && r0.includes('16.00 GiB') && r0.includes('template'), r0);
-    check('hardware page shows device 1 as its own row (12.00 GiB free)', r1.includes('12.00 GiB') && r0 !== r1, r1);
+    const r0 = (await page.getByTestId('probe-device-npu-0').innerText()).replace(/\s+/g, ' ');
+    const r1 = (await page.getByTestId('probe-device-npu-1').innerText()).replace(/\s+/g, ' ');
+    check('probe card shows device 0: NPU, tmpl1, 16.00 GiB free, vendor', /NPU/.test(r0) && r0.includes('tmpl1') && r0.includes('16.00 GiB') && r0.includes('template'), r0);
+    check('probe card shows device 1 separately (12.00 GiB free)', r1.includes('12.00 GiB') && r0 !== r1, r1);
     check('no page errors', errors.length === 0, errors.slice(0, 2).join(' | '));
 
     // ---- T-1307: hardware_db profile rows expand into a detail view with a vendor source link ----

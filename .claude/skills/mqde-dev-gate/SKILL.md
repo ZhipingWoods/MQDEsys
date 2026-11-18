@@ -3,9 +3,9 @@ name: mqde-dev-gate
 description: >
   The checks and steps before MQDEsys code leaves your machine: sync to the GPU/dev server, run the local gate
   (scripts/check_all.sh), scan what a push would publish (scripts/privacy_scan.sh), commit with the project's message
-  format, push, and update docs/TASKS.md and docs/PROGRESS.md. Use before every commit or push, when the user says
+  format, push, and update internal/TASKS.md and internal/PROGRESS.md. Use before every commit or push, when the user says
   "run the gate", "is this ready to push", "commit this", or "sync to the server". Also lists the mistakes that have
-  already cost time here. Do NOT use to decide what to build next (read docs/TASKS.md and AGENTS.md).
+  already cost time here. Do NOT use to decide what to build next (read internal/TASKS.md and AGENTS.md).
 user-invocable: true
 allowed-tools: Bash(git:*) Bash(rsync:*) Bash(bash:*) Bash(python:*) Bash(python3:*) Bash(ssh:*) Bash(cmake:*) Bash(ctest:*) Read Edit Grep Glob
 ---
@@ -80,9 +80,9 @@ Refs: T-0803
 
 ## 5. Update the books (every session)
 
-- `docs/TASKS.md`: status of each touched task with a short, honest reason it is PARTIAL (what exists, what is missing).
+- `internal/TASKS.md`: status of each touched task with a short, honest reason it is PARTIAL (what exists, what is missing).
   DONE only when its acceptance criterion was met and verified.
-- `docs/PROGRESS.md`: a new entry at the top of the log (done, verification output, what is not done, decisions
+- `internal/PROGRESS.md`: a new entry at the top of the log (done, verification output, what is not done, decisions
   needed). Numbers in it must come from real output.
 - Anything needing a maintainer decision goes into the decisions table there as `D-<n>` and the work stops at that
   boundary.

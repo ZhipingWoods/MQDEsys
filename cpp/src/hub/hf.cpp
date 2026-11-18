@@ -28,9 +28,9 @@ std::pair<std::string, std::string> split_rev(const std::string& repo) {
   return {repo.substr(0, at), repo.substr(at + 1)};
 }
 
-std::string resolve_path(const std::string& repo, const std::string& file) {
+std::string resolve_path(const std::string& repo, const std::string& file, const std::string& prefix = {}) {
   const auto [r, rev] = split_rev(repo);
-  return "/" + r + "/resolve/" + url_encode(rev) + "/" + file;
+  return prefix + "/" + r + "/resolve/" + url_encode(rev) + "/" + file;
 }
 
 bool retryable(const httplib::Result& r) { return !r || r->status == 429 || r->status >= 500; }
@@ -56,6 +56,9 @@ std::string token_of(const HfOptions& o) {
 std::unique_ptr<httplib::Client> make_client(const HfOptions& o, const std::string& base) {
   auto cli = std::make_unique<httplib::Client>(base);
   cli->set_follow_location(true);
+  // Some CDNs (notably ModelScope's) reject the default httplib user agent with 403.
+  cli->set_default_headers(
+      {{"User-Agent", "mqde/0.1 (+https://github.com/zhipingwoods/MQDEsys)"}, {"Accept", "*/*"}});
   cli->set_connection_timeout(o.timeout_s, 0);
   cli->set_read_timeout(o.timeout_s, 0);
   for (const char* ca :
@@ -114,6 +117,14 @@ std::string default_endpoint() {
   return s;
 }
 
+std::string fallback_endpoint() {
+  if (const char* off = std::getenv("MQDE_HF_NO_FALLBACK"); off && *off && std::string(off) != "0") return {};
+  const char* e = std::getenv("MQDE_HF_FALLBACK_ENDPOINT");
+  std::string s = e && *e ? e : "https://hf-mirror.com";
+  while (s.ends_with('/')) s.pop_back();
+  return s;
+}
+
 Result<RepoRef> parse_repo_ref(std::string_view s) {
   RepoRef r;
   std::string str(s);
@@ -145,7 +156,7 @@ Result<Json> model_info(const HfOptions& o, const std::string& repo) {
 }
 
 Result<Json> fetch_json_file(const HfOptions& o, const std::string& repo, const std::string& file) {
-  return get_json(o, resolve_path(repo, file), repo + "/" + file);
+  return get_json(o, resolve_path(repo, file, o.repo_path_prefix), repo + "/" + file);
 }
 
 Result<std::vector<RepoFile>> list_files(const HfOptions& o, const std::string& repo) {
@@ -194,8 +205,9 @@ Result<uint64_t> download_file(const HfOptions& o, const std::string& repo, cons
     bool resumed = false;
     bool restart = false;
     auto r = cli->Get(
-        resolve_path(repo, file), hdrs,
+        resolve_path(repo, file, o.repo_path_prefix), hdrs,
         [&](const httplib::Response& resp) {
+          if (resp.status >= 300 && resp.status < 400) return true;  // follow the CDN redirect
           resumed = resp.status == 206;
           if (offset > 0 && resp.status == 200) restart = true;  // server ignored Range: start over below
           return resp.status == 200 || resp.status == 206;
@@ -305,8 +317,9 @@ Result<void> fetch_range(const HfOptions& o, const std::string& repo, const std:
     bool aborted = false;
     uint64_t got = 0;
     auto r = cli->Get(
-        resolve_path(repo, file), httplib::Headers{httplib::make_range_header({{start, end}})},
+        resolve_path(repo, file, o.repo_path_prefix), httplib::Headers{httplib::make_range_header({{start, end}})},
         [&](const httplib::Response& resp) {
+          if (resp.status >= 300 && resp.status < 400) return true;  // follow the CDN redirect
           ok = resp.status == 206;
           return ok;
         },
@@ -345,7 +358,7 @@ Result<uint64_t> download_file_chunked(const HfOptions& o, const std::string& re
                                        const std::function<bool(uint64_t, uint64_t)>& progress) {
   if (num_chunks <= 1) return download_file(o, repo, file, dest, progress);
   auto probe_cli = make_client(o, o.endpoint);
-  MQDE_ASSIGN_OR_RETURN(RangeProbe probe, probe_range(*probe_cli, resolve_path(repo, file)));
+  MQDE_ASSIGN_OR_RETURN(RangeProbe probe, probe_range(*probe_cli, resolve_path(repo, file, o.repo_path_prefix)));
   if (!probe.range_ok || probe.total < static_cast<uint64_t>(num_chunks) * kMinBytesPerChunk)
     return download_file(o, repo, file, dest, progress);  // not worth splitting, or can't be split
 
@@ -488,7 +501,9 @@ std::vector<FileGroup> group_files(const std::vector<RepoFile>& files) {
       R"((?:^|[-_.])((?:I?Q\d(?:_[A-Z0-9]+)*)|FP16|F16|BF16|FP32|F32)(?:[-_.]|$))", std::regex::icase);
   std::map<std::string, FileGroup> gguf;
   FileGroup st{"safetensors", {}, 0, 16};
+  FileGroup pt{"pytorch", {}, 0, 8};
   bool has_st = false;
+  bool has_pt = false;
   std::vector<RepoFile> side;  // config / tokenizer files that ride along with safetensors
   for (const auto& f : files) {
     const std::string name = fs::path(f.path).filename().string();
@@ -508,19 +523,38 @@ std::vector<FileGroup> group_files(const std::vector<RepoFile>& files) {
       st.files.push_back(f);
       st.bytes += f.size;
       has_st = true;
+    } else if (name.ends_with(".bin") || name.ends_with(".pt") || name.ends_with(".pth") ||
+               name.ends_with(".ckpt")) {
+      pt.files.push_back(f);
+      pt.bytes += f.size;
+      has_pt = true;
     } else if (name.ends_with(".json") || name.ends_with(".txt") || name.ends_with(".model") ||
-               name.ends_with(".py") || name.ends_with(".jinja") || name == "tokenizer.model") {
+               name.ends_with(".py") || name.ends_with(".jinja") || name.ends_with(".vocab") ||
+               name == "tokenizer.model") {
       side.push_back(f);
     }
   }
   std::vector<FileGroup> out;
-  for (auto& [_, g] : gguf) out.push_back(std::move(g));
+  for (auto& [_, g] : gguf) {
+    for (const auto& s : side) {
+      g.files.push_back(s);
+      g.bytes += s.size;
+    }
+    out.push_back(std::move(g));
+  }
   if (has_st) {
     for (const auto& s : side) {
       st.files.push_back(s);
       st.bytes += s.size;
     }
     out.push_back(std::move(st));
+  }
+  if (has_pt) {
+    for (const auto& s : side) {
+      pt.files.push_back(s);
+      pt.bytes += s.size;
+    }
+    out.push_back(std::move(pt));
   }
   return out;
 }

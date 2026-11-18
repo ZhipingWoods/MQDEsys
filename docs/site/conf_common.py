@@ -12,7 +12,7 @@ extensions = [
 ]
 source_suffix = {".md": "markdown"}
 root_doc = "index"
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "_status_tables.md"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 myst_heading_anchors = 3
 myst_enable_extensions = ["colon_fence", "deflist", "attrs_inline"]

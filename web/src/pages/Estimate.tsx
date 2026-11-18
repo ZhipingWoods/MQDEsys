@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, Estimate, fmt, fmtBytes, gib, probeNote, RuntimeParams } from "../api";
 import { barItem, baseOption, Chart, refLine, series, token } from "../charts";
 import { DEFAULT_MODEL, useAsync, useDebounced } from "../hooks";
-import { domainDefaultModel, useDomain } from "../domain";
+import { domainDefaultModel, familyLabel, useDomain } from "../domain";
 import { useSearchParams } from "react-router-dom";
+import { Icon, IconName } from "../components/Icon";
 
 const PARTS: { key: keyof Estimate["breakdown"]; label: string }[] = [
   { key: "weights", label: "权重" },
@@ -44,14 +45,26 @@ export default function EstimatePage() {
   const matrix = useAsync(() => api.matrix(q.model, q.rt), [q.model, JSON.stringify(q.rt)]);
   const ests = est.data?.estimates ?? [];
   const cap = ests[0]?.capacity_bytes ?? 0;
+  const best = useMemo(() => {
+    const feasible = ests.filter((e) => e.feasible);
+    // 先排除实验配方，避免推荐 W2A16 这类仅用于研究的方案；都不可行时才退回全部候选。
+    const pool = feasible.length ? feasible : ests;
+    const production = pool.filter((e) => e.recipe_detail?.maturity === "production");
+    const preferred = production.length ? production : pool;
+    return [...preferred].sort((a, b) => b.max_concurrency - a.max_concurrency)[0];
+  }, [est.data]);
 
   const setR = (k: keyof RuntimeParams, v: number) => setRt({ ...rt, [k]: v });
   const toggle = (id: string) => setPicked(picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id]);
 
   return (
     <>
-      <h1>资源预估</h1>
-      <p className="subtitle">不加载权重：解析 config.json 与 safetensors 头，由 C++ 预估器计算模型占用、KV Cache / 状态、并发上限与延迟下界。</p>
+      <div className="page-head">
+        <div>
+          <h1>资源预估</h1>
+          <p className="subtitle">不加载权重，直接判断这套模型 × 配方 × 硬件放不放得下。</p>
+        </div>
+      </div>
 
       <div className="card">
         <div className="form-row">
@@ -118,10 +131,10 @@ export default function EstimatePage() {
 
       {spec.data && (
         <div className="tiles">
-          <Tile label="模型" value={String(spec.data.family)} hint={`${spec.data.modality?.toUpperCase()} · ${(spec.data.total_params / 1e9).toFixed(2)} B 参数`} />
+          {best && <Tile label="推荐配方" value={best.recipe} hint={best.feasible ? `最大并发 ${best.max_concurrency} · 峰值 ${fmtBytes(best.peak_bytes)}` : "当前配置都放不下"} />}
+          <Tile label="模型" value={familyLabel(String(spec.data.family))} hint={`${spec.data.modality?.toUpperCase()} · ${(spec.data.total_params / 1e9).toFixed(2)} B 参数`} />
           <Tile label="语言模型层" value={`${spec.data.text.n_layers}`} hint={`${spec.data.text.n_full_attention} 全注意力 + ${spec.data.text.n_linear_attention} 线性注意力`} />
           <Tile label="上下文 token" value={`${ests[0]?.context_tokens ?? "–"}`} hint={`${rt.images_per_step} 图 × ${spec.data.vision?.tokens_per_image ?? 0} + ${rt.text_tokens} 文本`} />
-          <Tile label="KV / token" value={fmtBytes(ests[0]?.kv_bytes_per_token)} hint={`线性注意力状态 ${fmtBytes(ests[0]?.state_bytes_per_seq)} / 序列`} />
           <Tile label="设备可用显存" value={fmtBytes(cap)} hint={est.data?.hardware.name} />
         </div>
       )}
@@ -129,39 +142,46 @@ export default function EstimatePage() {
       {ests.length > 0 && (
         <>
           <div className="card">
-            <h2>显存构成 vs 可用容量（并发 {rt.concurrency}）</h2>
-            <Chart height={300} option={() => memoryStack(ests, cap)} />
+            <h2>显存构成（并发 {rt.concurrency}）</h2>
+            <p className="note">可用显存 {fmtBytes(cap)}；可部署性与峰值占比见下表。</p>
+            <Chart height={300} option={() => memoryStack(ests)} />
             <EstimateTable ests={ests} />
           </div>
-          <div className="grid-2">
-            <div className="card">
-              <h2>峰值显存 vs 并发数</h2>
-              <Chart option={() => curve(ests, "concurrency", cap, "并发数")} />
+          <details className="card details-card">
+            <summary>详细曲线与组件拆分</summary>
+            <div className="grid-2">
+              <div>
+                <h3>峰值显存 vs 并发数</h3>
+                <Chart option={() => curve(ests, "concurrency", cap, "并发数")} />
+              </div>
+              <div>
+                <h3>峰值显存 vs 每步图像数</h3>
+                <Chart option={() => curve(ests, "images", cap, "图像数")} />
+              </div>
             </div>
-            <div className="card">
-              <h2>峰值显存 vs 每步图像数（历史帧）</h2>
-              <Chart option={() => curve(ests, "images", cap, "图像数")} />
-            </div>
-          </div>
-          <div className="card">
-            <h2>各组件权重占用（按配方）</h2>
+            <h3>各组件权重占用（按配方）</h3>
             <Chart height={260} option={() => componentBars(ests)} />
-          </div>
+          </details>
         </>
       )}
 
-      {matrix.data && <MatrixCard cells={matrix.data.cells} />}
+      {matrix.data && (
+        <details className="card details-card">
+          <summary>可部署矩阵（配方 × 硬件）</summary>
+          <MatrixCard cells={matrix.data.cells} embedded />
+        </details>
+      )}
 
       {ests[0] && (
-        <div className="card note">
-          <h2>预估假设</h2>
+        <details className="card details-card">
+          <summary>预估假设与置信度</summary>
           <ul>
             {ests[0].assumptions.map((a) => (
               <li key={a}>{a}</li>
             ))}
             <li>置信度：{ests[0].confidence}（尚无该硬件 × 后端 × 配方的实测回填时为 low）</li>
           </ul>
-        </div>
+        </details>
       )}
     </>
   );
@@ -176,9 +196,14 @@ function Num(p: { label: string; value: number; min?: number; step?: number; onC
   );
 }
 
-export function Tile({ label, value, hint }: { label: string; value: string; hint?: string }) {
+export function Tile({ label, value, hint, icon }: { label: string; value: string; hint?: string; icon?: IconName }) {
   return (
     <div className="tile">
+      {icon && (
+        <span className="tile-icon" aria-hidden="true">
+          <Icon name={icon} size={16} />
+        </span>
+      )}
       <div className="label">{label}</div>
       <div className="value">{value}</div>
       {hint && <div className="hint">{hint}</div>}
@@ -225,7 +250,7 @@ function EstimateTable({ ests }: { ests: Estimate[] }) {
   );
 }
 
-function memoryStack(ests: Estimate[], cap: number) {
+function memoryStack(ests: Estimate[]) {
   const o = baseOption();
   return {
     ...o,
@@ -233,27 +258,31 @@ function memoryStack(ests: Estimate[], cap: number) {
     grid: { ...(o.grid as object), top: 56, right: 30 },
     tooltip: { ...(o.tooltip as object), trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (v: number) => `${v.toFixed(3)} GiB` },
     xAxis: { ...(o.xAxis as object), type: "category", data: ests.map((e) => e.recipe) },
-    yAxis: { ...(o.yAxis as object), type: "value", name: "GiB", nameTextStyle: { color: token("--text-muted") }, max: Math.ceil(Math.max(gib(cap) * 1.08, ...ests.map((e) => gib(e.peak_bytes) * 1.1))) },
+    yAxis: {
+      ...(o.yAxis as object),
+      type: "value",
+      name: "GiB",
+      nameTextStyle: { color: token("--text-muted") },
+      max: Math.ceil(Math.max(...ests.map((e) => gib(e.peak_bytes)), 0.5) * 1.25 * 10) / 10,
+    },
     series: [
       ...PARTS.map((p, i) => ({
         name: p.label,
         type: "bar",
         stack: "mem",
-        barMaxWidth: 44,
+        barMaxWidth: 52,
+        label: i === PARTS.length - 1
+          ? {
+              show: true,
+              position: "top",
+              color: token("--text-secondary"),
+              fontSize: 11,
+              formatter: (d: { dataIndex: number }) => `${gib(ests[d.dataIndex].peak_bytes).toFixed(2)} GiB`,
+            }
+          : undefined,
         data: ests.map((e) => gib(e.breakdown[p.key])),
         itemStyle: barItem(i, i === PARTS.length - 1),
       })),
-      // capacity reference: a dashed, symbol-less line across every category (recessive text ink)
-      {
-        name: "可用显存",
-        type: "line",
-        data: ests.map(() => gib(cap)),
-        symbol: "none",
-        silent: true,
-        lineStyle: { color: token("--text-secondary"), type: "dashed", width: 1 },
-        endLabel: { show: true, formatter: `可用 ${gib(cap).toFixed(1)} GiB`, color: token("--text-secondary"), fontSize: 11, offset: [-70, -12] },
-        tooltip: { show: false },
-      },
     ],
   };
 }
@@ -301,15 +330,15 @@ function componentBars(ests: Estimate[]) {
   };
 }
 
-function MatrixCard({ cells }: { cells: { hardware: string; hardware_name: string; recipe: string; feasible: boolean; max_concurrency: number; latency_floor_ms: number; peak_bytes: number; capacity_bytes: number }[] }) {
+function MatrixCard({ cells, embedded = false }: { cells: { hardware: string; hardware_name: string; recipe: string; feasible: boolean; max_concurrency: number; latency_floor_ms: number; peak_bytes: number; capacity_bytes: number }[]; embedded?: boolean }) {
   const hws = useMemo(() => [...new Set(cells.map((c) => c.hardware_name))], [cells]);
   const rs = useMemo(() => [...new Set(cells.map((c) => c.recipe))], [cells]);
   const maxC = Math.max(1, ...cells.map((c) => c.max_concurrency));
   // 5-step sequential blue (validated ramp); log scale because capacity spans orders of magnitude
   const step = (c: number) => Math.min(4, Math.floor((Math.log2(c + 1) / Math.log2(maxC + 1)) * 4.999));
   return (
-    <div className="card">
-      <h2>可部署矩阵（配方 × 硬件，数值 = 最大并发）</h2>
+    <div className={embedded ? "" : "card"}>
+      {!embedded && <h2>可部署矩阵（配方 × 硬件，数值 = 最大并发）</h2>}
       <div className="table-wrap">
         <table className="matrix">
           <thead>

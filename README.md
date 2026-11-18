@@ -1,59 +1,187 @@
-**中文** | [English](README_EN.md)
+<p align="center">
+  <b>MQDEsys</b><br>
+  Model Quantization &amp; Deployment Evaluation System<br>
+  模型量化部署评估系统
+</p>
 
-# MQDEsys — 模型量化部署评估系统
+<p align="center">
+  <a href="README_EN.md">English</a> &nbsp;｜&nbsp; <b>中文</b>
+</p>
 
-指定模型、量化配方（W8A16 / FP8 / W4A16 / W4A8 / W2A16 / W2A8）、评估数据和目标硬件后，系统会：
+<p align="center">
+  <img src="https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus" alt="C++20">
+  <img src="https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB?logo=python" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react" alt="React 18">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT">
+  <a href="docs/site/zh/index.md"><img src="https://img.shields.io/badge/Docs-中文-1D5EFF" alt="中文文档"></a>
+</p>
 
-1. **预估**（C++，不加载权重）：计算模型占用、KV Cache / 线性注意力状态、激活，得出单/多并发峰值显存、最大并发、延迟下界，以及“配方 × 硬件”的可部署矩阵。
-2. **量化评估**（Python 执行器，由 C++ 调度到 GPU 池）：生成 BF16 基线，逐模态做误差归因，执行 fake-quant 并逐层追踪误差。
-3. **可视化**（Web）：展示实时执行过程和日志、逐层误差热力图、最差层列表以及配方对比。
+MQDEsys 是面向大模型量化、评测与部署的一体化实验平台。用户指定模型、量化配方、评测数据和目标硬件后，系统完成资源预估、量化、数据集评测、权重导出、推理部署和性能压测，并在统一的作业记录中保存全过程数据。
 
-目前首个支持的模型是 VLA 模型 MiniCPM-RobotManip。
+## 系统概览
 
-文档导航：
+![作业与执行](docs/site/_shared/img/ui-jobs.png)
 
-| 文件 | 内容 |
+![作业详情](docs/site/_shared/img/ui-job-llm.png)
+
+![硬件与后端](docs/site/_shared/img/ui-hardware.png)
+
+![新建评测作业](docs/site/_shared/img/ui-new-eval.png)
+
+## 核心能力
+
+### 资源预估与硬件适配
+
+- 在不加载模型权重的前提下计算权重、量化元数据、KV Cache、激活和运行时开销；
+- 计算单并发与多并发峰值显存、最大并发数、TTFT / TPOT 下界；
+- 对同一模型在边缘设备、工作站和数据中心 GPU 上生成跨硬件部署建议；
+- 支持 NVIDIA Jetson Orin / Thor、DGX Spark、RTX、H100、AMD MI300X、Intel Gaudi、Ascend、MetaX 等硬件画像；
+- 使用 FlagTree 风格 target 描述计算平台，并通过 HAL 插件读取设备信息。
+
+### 量化
+
+- 支持 RTN、GPTQ、AWQ、HQQ、SmoothQuant、FP8 及组合算法；
+- 支持混合精度规则、KV Cache 量化；
+- 逐层、逐模态追踪量化误差，定位到具体 block、线性层和转换环节；
+- 支持 fake-quant 与真实 checkpoint 的数值一致性校验。
+
+### 数据集评测
+
+- 内置 WikiText-2 PPL、Smoke QA、Smoke MCQ 离线评测；
+- 原生支持 GSM8K、MMLU、ARC-Challenge、HellaSwag、Winogrande；
+- 提供 EvalScope 数据集目录，覆盖知识、数学、代码、中文、长上下文、指令遵循和 Agent 等类别；
+- 支持 PPL、MCQ、QA 和分类准确率等报告视图；
+- 可选集成 lm-eval 与 EvalScope 命令行工具。
+
+### 部署与压测
+
+- 支持 vLLM、SGLang、llama.cpp；
+- 支持 GPTQ、AWQ、compressed-tensors 和 GGUF 权重；
+- 提供部署后 PPL、TTFT、TPOT、ITL、吞吐量和并发饱和点；
+- 为 VLA、WM、EWM 提供原生连续输出服务：`/v1/actions` 与 `/v1/video`。
+
+### 模型库
+
+- 支持本地模型和 HuggingFace 模型目录；
+- 支持 HuggingFace、ModelScope 在线搜索、权重组查看和断点续传下载。
+
+## 系统组成
+
+| 组件 | 职责 |
 |------|------|
-| [AGENTS.md](AGENTS.md) | Agent 工作规则（入口） |
-| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 环境、构建、测试、调试、提交 |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统设计 |
-| [docs/STRUCTURE.md](docs/STRUCTURE.md) | 每个文件是干什么的、谁能改 |
-| [docs/TASKS.md](docs/TASKS.md) | 任务清单与验收标准 |
-| [docs/REFERENCES.md](docs/REFERENCES.md) | 参考的开源项目；附录 A 为 llmfit 算法细节 |
-| [docs/PROGRESS.md](docs/PROGRESS.md) | 会话日志与当前进度 |
+| C++ 控制面 | 资源预估、规划、硬件探针、数值核心、HAL、REST API |
+| Python 执行器 | 量化算法、模型适配、数据集评测、权重导出、作业流水线 |
+| React 控制台 | 作业管理、资源预估、硬件与后端、模型库和结果分析 |
+| 数据目录 | 配方、硬件画像、后端参数和评测数据集目录 |
 
-## 快速开始（4090 开发机）
+## 作业模式
+
+| 模式 | 说明 |
+|------|------|
+| 全流程 | 预估 → 量化 → 评测 → 导出 → 部署 → 压测 |
+| 仅量化 | 生成并导出可复用 checkpoint，不执行评测或部署 |
+| 仅评测 | 直接加载已有量化 checkpoint，执行数据集评测 |
+
+## 快速开始
+
+### 构建
 
 ```bash
-source /root/miniconda3/etc/profile.d/conda.sh && conda activate mqde
-cmake --preset dev && cmake --build --preset dev -j 32 && ctest --preset dev
-PYTHONPATH=python python -m pytest python/tests -q
+git clone https://github.com/zhipingwoods/MQDEsys.git
+cd MQDEsys
 
-build/dev/bin/mqde probe
-build/dev/bin/mqde model inspect /cache/wuzhiping/hub/MiniCPM-RobotManip
-build/dev/bin/mqde estimate -m /cache/wuzhiping/hub/MiniCPM-RobotManip -r bf16,w4a16,fp8 --images 2 --conc 1,8,64
+cmake --preset dev
+cmake --build --preset dev -j 32
+ctest --preset dev
 
-CUDA_VISIBLE_DEVICES=2 PYTHONPATH=python python -m mqde.pipeline.vla_job examples/jobs/minicpm_vla_libero.yaml
+pip install -e "python[dev,quant]"
+PYTHONPATH=python pytest python/tests -q
 
-(cd web && npm install --registry=https://registry.npmmirror.com && npm run build)
-build/dev/bin/mqde serve --repo $PWD --runs $PWD/runs --web $PWD/web/dist \
-  --python $CONDA_PREFIX/bin/python --gpus 2,3 --allow /cache/wuzhiping/hub --port 18080
-# 本机：ssh -N -L 18080:127.0.0.1:18080 4090，然后打开 http://localhost:18080
+cd web && npm install && npm run build && cd ..
 ```
 
-## 目录
+### 启动服务
+
+```bash
+build/dev/bin/mqde serve \
+  --repo "$PWD" \
+  --runs "$PWD/runs" \
+  --web "$PWD/web/dist" \
+  --python "$(which python)" \
+  --gpus 0,1 \
+  --allow /path/to/models \
+  --port 18080
+```
+
+服务默认监听 `127.0.0.1:18080`。
+
+### 静态展示页与交互式 Demo
+
+```bash
+# 静态产品展示页
+python3 -m http.server 19090
+# http://127.0.0.1:19090/site/
+
+# Gradio 交互式 Demo（调用同一套 REST API）
+pip install -r demo/requirements-gradio.txt
+MQDE_API=http://127.0.0.1:18080 python demo/gradio_app.py
+# http://127.0.0.1:7860/
+```
+
+## 支持范围
+
+| 维度 | 支持内容 |
+|------|----------|
+| 模型领域 | LLM、VLM、VLA、World Model、EWM |
+| 量化配方 | W8A16、FP8、W4A16、W4A8、W2A16、W2A8、BF16 |
+| 量化算法 | RTN、GPTQ、AWQ、HQQ、SmoothQuant、组合算法 |
+| 评测 | PPL、MCQ、QA、原生数据集、lm-eval、EvalScope、逐层 / 逐模态误差 |
+| 推理后端 | vLLM、SGLang、llama.cpp |
+| 硬件 | NVIDIA、AMD、Intel、Ascend、MetaX，以及 Jetson / DGX Spark 等边缘和工作站设备 |
+| 模型来源 | 本地目录、HuggingFace、ModelScope |
+
+## 目录结构
 
 | 路径 | 内容 |
 |------|------|
-| `cpp/` | C++ 核心：common、modelspec、quant（数值唯一规范）、estimator、server，C 硬件探针，CLI，pybind11 绑定 |
-| `python/mqde/` | 执行器：Torch 数值镜像、模型适配、数据、fake-quant 引擎与追踪、作业流水线 |
-| `data/` | 配方、硬件画像、后端参数、模型架构模板（数据驱动，新增无需改代码） |
-| `web/` | React + ECharts 前端 |
-| `examples/jobs/` | 作业示例 |
-| `docs/` | 架构、目录职责、任务清单、进度 |
+| `cpp/` | C++20 控制面、预估器、规划器、HAL 和 REST API |
+| `python/mqde/` | Python 执行器、算法、评测、导出和流水线 |
+| `web/` | React + TypeScript + ECharts 前端 |
+| `data/` | 配方、硬件画像、后端参数、评测数据集目录 |
+| `examples/jobs/` | JobSpec 示例 |
+| `docs/` | 用户文档（Sphinx 源码） |
+| `docs/site/` | 中英文文档站点 |
+| `site/` | 静态产品展示页 |
+| `demo/` | Gradio 交互式 Demo |
 
-`3rdpart/` 里的第三方参考库是 git 子模块（GitHub 上点击目录会跳转到上游仓库对应提交），源码不随本仓库分发。
-`runs/`、`build/`、模型权重和 `*.gguf` 体积大，不入库。
+## 文档
+
+| 文档 | 内容 |
+|------|------|
+| [docs/site/zh/index.md](docs/site/zh/index.md) | 中文用户文档 |
+| [docs/site/en/index.md](docs/site/en/index.md) | English user guide |
+| [docs/site/zh/advanced/architecture.md](docs/site/zh/advanced/architecture.md) | 系统架构 |
+| [docs/site/zh/get_started/installation.md](docs/site/zh/get_started/installation.md) | 构建与部署 |
+| [docs/site/zh/user_guides/rest_api.md](docs/site/zh/user_guides/rest_api.md) | REST API 参考 |
+
+构建文档站点：
+
+```bash
+cd docs/site
+pip install -r requirements.txt
+make html
+```
+
+## 参考项目
+
+- [EvalScope](https://github.com/modelscope/evalscope)：评测数据集目录、评测报告和文档组织；
+- [Unsloth](https://github.com/unslothai/unsloth)：量化与微调工作流；
+- [GPTQModel](https://github.com/ModelCloud/GPTQModel)：GPTQ / AWQ 量化与导出；
+- [llmfit](https://github.com/AlexsJones/llmfit)：资源预估与硬件适配；
+- [Netron](https://github.com/lutzroeder/netron)：权重与计算图可视化；
+- [FlagTree](https://github.com/flagos-ai/FlagTree)：多平台 target 与后端适配。
+
+以上项目位于 `3rdpart/`，以 git submodule 形式引用，源码不随本仓库分发。
 
 ## 许可证
 

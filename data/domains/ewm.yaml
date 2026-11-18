@@ -1,20 +1,18 @@
-# Embodied World Model (EWM): action-conditioned world/state prediction for robotics, distinct from the
-# generic "world" domain -- it is conditioned on an agent's actions rather than predicting unconditioned
-# video continuations. Shares the same underlying DiT-style numerics as `world` but needs its own entry
-# because calibration/evaluation data and action-conditioning are domain-specific. No model_families entry
-# or python pipeline exists yet; this is a placeholder so the domain is selectable in the UI (T-1304) and
-# clearly marked as not yet backed by a real pipeline, rather than silently absent.
+# Embodied World Model (EWM): action-conditioned world/state prediction for robotics. Shares the
+# DiT numerics with `world`; the evaluation samples carry per-frame action vectors and the report
+# records that conditioning explicitly.
 id: ewm
 order: 50  # wizard tab position: LLM, VLM, VLA, WM, EWM
 display_name: EWM（具身世界模型，动作条件）
-model_families: []
-applicable_recipes: []
+model_families: [dit_ewm]
+applicable_recipes: [bf16, w8a16, fp8, w4a16, w4a8, w2a16, w2a8]
 classic_algorithms:
   - name: ptq-diffusion
     note: >-
-      reference only, same literature family as `world`; action-conditioning variant not implemented in
-      this repo
-default_eval_dataset: ""
-pipeline_status: ui_only_pending_backend
+      Same post-training quantization family as `world`; the action encoder is a separate component
+      (kept FP by default, `also_quantize: [action]` opts in) and the report attributes PSNR damage
+      to the video backbone vs. the action path.
+default_eval_dataset: synthetic-video
+pipeline_status: implemented
 deploy_backends: []
-deploy_note: "该领域还没有量化流水线，暂无部署后端。"
+deploy_note: "动作条件世界模型同样没有可用的文本推理后端：输出是未来视频帧，不是 token。"

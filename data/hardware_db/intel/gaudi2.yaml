@@ -1,0 +1,10 @@
+id: intel/gaudi2
+vendor: intel
+name: Intel Gaudi 2
+arch: gaudi2
+match_names: ["Gaudi 2", "Gaudi2", "HL-225"]
+mem_bytes: 103079215104       # 96 GiB HBM2e
+mem_bw_gbps: 2450
+peak_tflops: {fp32: 432.0, bf16: 432.0, fp16: 432.0, fp8: 864.0, int8: 864.0}
+native_formats: [bf16, fp16, fp8_e4m3, fp8_e5m2, int8]
+source: https://www.intel.com/content/www/us/en/products/details/processors/gaudi.html

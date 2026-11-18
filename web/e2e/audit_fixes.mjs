@@ -97,7 +97,7 @@ try {
   check('a valid ?tab= still opens that recipe', true);
 
   // ---- catalog grouping ----
-  await page.goto(`${base}/catalog`, { waitUntil: 'load' });
+  await page.goto(`${base}/catalog?tab=catalog`, { waitUntil: 'load' });
   await page.getByTestId('catalog-count').waitFor({ timeout: 15000 });
   await page.waitForFunction(() => /\d+ 条 · \d+ 个类别/.test(document.querySelector('[data-testid="catalog-count"]')?.textContent ?? ''), null, { timeout: 15000 });
   const total = Number((await page.getByTestId('catalog-count').innerText()).match(/(\d+) 条/)[1]);

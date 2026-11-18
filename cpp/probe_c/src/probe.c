@@ -21,6 +21,10 @@ static char g_last_error[256] = "";
 
 const char* mqde_probe_last_error(void) { return g_last_error; }
 
+/* Shared with target.c so target parse errors are visible through the same API. Not part of the public
+ * header: it is only a link-time helper between the two translation units of libmqde_probe. */
+void mqde_probe_set_last_error(const char* msg) { snprintf(g_last_error, sizeof g_last_error, "%s", msg ? msg : ""); }
+
 const char* mqde_dev_kind_name(mqde_dev_kind kind) {
   switch (kind) {
     case MQDE_DEV_CPU:

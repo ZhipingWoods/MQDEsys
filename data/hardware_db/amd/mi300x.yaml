@@ -1,0 +1,10 @@
+id: amd/mi300x
+vendor: amd
+name: AMD Instinct MI300X
+arch: gfx942
+match_names: ["MI300X", "Instinct MI300X"]
+mem_bytes: 206158430208       # 192 GiB HBM3
+mem_bw_gbps: 5300
+peak_tflops: {fp32: 163.4, bf16: 1307.4, fp16: 1307.4, fp8: 2614.9, int8: 2614.9, int4: 2614.9}
+native_formats: [bf16, fp16, fp8_e4m3, fp8_e5m2, int8, int4]
+source: https://www.amd.com/en/products/accelerators/instinct/mi300/mi300x.html

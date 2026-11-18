@@ -69,6 +69,7 @@ class JobSpec:
     # T-1304: advanced per-job override of per_group recipes' group_size; see llm_job.py's LLMJobSpec
     # field of the same name for the full rationale (identical semantics here).
     group_size_override: int | None = None
+    native_serve: dict[str, Any] | None = None
     seed: int = 0
     output_dir: str = "runs"
 
@@ -93,6 +94,8 @@ class JobSpec:
             extra_modalities=list(q.get("also_quantize", [])),
             quantize_only=bool(e.get("skip", False)),
             group_size_override=int(q["group_size"]) if q.get("group_size") is not None else None,
+            native_serve=(dep.get("native") if isinstance(dep.get("native"), dict)
+                          else ({} if dep.get("native") else None)),
             seed=int(d.get("seed", 0)),
             output_dir=d.get("output_dir", "runs"),
         )
@@ -368,6 +371,14 @@ class VLAJob:
 
             rep["eval"] = self._stage("eval_fake", eval_fake, msg=recipe.name)
             rep["summary"] = self._summarize(rep)
+            if spec.native_serve and not spec.quantize_only:
+                from mqde.backend.continuous_server import smoke_and_load
+
+                def deploy_native() -> dict[str, Any]:
+                    return smoke_and_load(vla, "vla", spec.native_serve,
+                                          model_name=Path(spec.model_path).name, action_conditioned=False, frames=4)
+
+                rep["deploy"] = {"native": self._stage("deploy_native", deploy_native, msg=recipe.name)}
             engine.restore()
             self.report["recipes"][recipe.name] = rep
             self._save()

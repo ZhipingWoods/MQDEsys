@@ -129,7 +129,7 @@ def _register() -> None:
         id="sglang",
         server_class="SglangServer",
         spec_field="sglang",
-        export_formats=["awq", "gptq", "compressed_tensors"],
+        export_formats=["awq", "gptq", "compressed-tensors"],
         needs_cuda=True,
         bin_check=lambda: sglang_python() and None,
         module="mqde.backend.sglang_server",

@@ -12,7 +12,7 @@ conda activate mqde
 BUILD_DIR=build/dev scripts/check_all.sh
 ```
 
-- 工具链清单是 [`docs/proposals/T-0006-ci/environment.ci.yml`](../proposals/T-0006-ci/environment.ci.yml)（GCC 12、CMake、Ninja、C++ 依赖、CPU 版 torch、pytest/ruff/mypy、固定版本的 clang-format）。CI 方案启用后它会搬到仓库根目录，`ENV_FILE=...` 可覆盖路径。
+- 工具链清单是 [`internal/docs/proposals/T-0006-ci/environment.ci.yml`](../proposals/T-0006-ci/environment.ci.yml)（GCC 12、CMake、Ninja、C++ 依赖、CPU 版 torch、pytest/ruff/mypy、固定版本的 clang-format）。CI 方案启用后它会搬到仓库根目录，`ENV_FILE=...` 可覆盖路径。
 - 必须 GCC 12：系统 g++ 11 编不过 `std::async`；`-Werror` 对 GCC 与 Clang 的行为不同，本地只用 Clang 会漏。
 - `scripts/dev_setup.sh --check` 只报告会做什么，不改任何东西；重复运行是更新环境并复用构建目录。
 - 带 GPU 的开发机再装 CUDA 版 torch 即可（`pip install torch --index-url https://download.pytorch.org/whl/cu1xx`）；没有 GPU 时 GPU 相关测试自动跳过。

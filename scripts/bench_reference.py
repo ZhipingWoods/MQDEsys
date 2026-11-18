@@ -3,9 +3,9 @@
 thresholds, the recipe x export x backend deployment matrix, llama.cpp, and the estimator's weight-memory error against what
 vLLM / SGLang report loading. Reads reports, runs nothing:
 
-    python scripts/bench_reference.py --report runs/<job>/report.json [--report ...] [--estimates est.json] --out docs/reports/m4-reference.md
+    python scripts/bench_reference.py --report runs/<job>/report.json [--report ...] [--estimates est.json] --out internal/docs/reports/m4-reference.md
 
-    python scripts/bench_reference.sh --suite m4 --server http://127.0.0.1:18080 --model /path/to/Qwen2.5-0.5B-Instruct --out docs/reports/m4-reference.md
+    python scripts/bench_reference.sh --suite m4 --server http://127.0.0.1:18080 --model /path/to/Qwen2.5-0.5B-Instruct --out internal/docs/reports/m4-reference.md
 
 `--suite m4` submits the reference jobs to a running server (all validated first, so nothing takes the GPU unless every job is
 valid), waits for them, fetches their reports and the estimator's numbers, and renders the same page.

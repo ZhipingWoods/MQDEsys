@@ -1,0 +1,10 @@
+# llama.cpp / llama-server. Small fixed overhead, per-sequence activation buffers, and a low MFU: the
+# CPU/CUDA/Metal backends are memory-bandwidth bound and do not use tensor cores for prompt processing
+# in the same way vLLM does. Values are conservative starting points, refined by measured feedback.
+id: llamacpp
+runtime_overhead_bytes: 134217728
+allocator_factor: 1.0
+eta_bw: 0.55
+mfu: 0.20
+activation_model: per_seq
+max_batched_tokens: 2048

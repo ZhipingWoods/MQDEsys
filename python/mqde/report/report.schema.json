@@ -15,7 +15,8 @@
     },
     "kind": {
       "enum": [
-        "llm"
+        "llm",
+        "llm_eval"
       ]
     },
     "error": {

@@ -35,12 +35,14 @@ export default function GraphPage() {
 
 function HfGraph() {
   const lib = useAsync(api.models, []);
+  const recipes = useAsync(api.recipes, []);
   const [params] = useSearchParams();
   const urlModel = useRef(params.get("model") ?? "");
   const [model, setModel] = useState(urlModel.current);
   const [hfInput, setHfInput] = useState("");
   const [focus, setFocus] = useState("");
   const [picked, setPicked] = useState<GraphNode | null>(null);
+  const [previewRecipe, setPreviewRecipe] = useState("w4a16");
   const { domain } = useDomain();
   const mine = (lib.data ?? []).filter((m) => modelInDomain(m, domain));
   const others = (lib.data ?? []).filter((m) => !modelInDomain(m, domain));
@@ -64,13 +66,17 @@ function HfGraph() {
     setPicked(null);
   }, [root.data]);
   const meta = lib.data?.find((m) => m.path === model);
+  const recipe = recipes.data?.find((r) => r.id === previewRecipe);
+  const qbits = recipe ? (recipe.weight.bits ?? 16) : null;
+  const fpBytes = meta?.total_bytes ?? 0;
+  const qbytes = meta && qbits != null && fpBytes > 0 ? Math.round((fpBytes * qbits) / 16) : null;
 
   return (
     <>
       <div className="page-head">
         <div>
           <h1>模型结构</h1>
-          <p className="subtitle">仿 netron：按组件 → 块 → 模块浏览网络，节点颜色表示算子类型；点击节点查看权重张量、数值分布与量化误差预览。</p>
+          <p className="subtitle">组件 → 块 → 模块；选中节点查看权重、分布与量化误差。</p>
         </div>
         <div className="field" style={{ minWidth: 320 }}>
           <label>模型</label>
@@ -105,8 +111,21 @@ function HfGraph() {
           <div className="tile"><div className="label">逻辑参数</div><div className="value">{fmtParams(meta.logical_params ?? meta.total_params ?? 0)}</div><div className="hint">{meta.active_params && meta.active_params !== meta.logical_params ? `活跃 ${fmtParams(meta.active_params)}` : "稠密"}</div></div>
           <div className="tile"><div className="label">磁盘大小</div><div className="value">{fmtBytes(meta.total_bytes)}</div><div className="hint">{meta.checkpoint_quant ? `已量化 · ${meta.checkpoint_quant.method} ${meta.checkpoint_quant.algo}` : "未量化"}</div></div>
           <div className="tile"><div className="label">组件</div><div className="value">{meta.components?.length ?? 0}</div><div className="hint">{meta.components?.map((c) => c.name).join(" · ")}</div></div>
+          <div className="tile"><div className="label">量化预览</div><div className="value">{qbytes == null ? "关闭" : fmtBytes(qbytes)}</div><div className="hint">{recipe ? `${recipe.name} · 约 ${fmtBytes(fpBytes)} 的 ${Math.round((qbits! / 16) * 100)}%（按位宽估算）` : "选择配方后显示"}</div></div>
         </div>
       )}
+      <div className="card form-row" style={{ alignItems: "center" }} data-testid="quant-preview-bar">
+        <div className="field" style={{ minWidth: 220 }}>
+          <label>节点量化预览</label>
+          <select value={previewRecipe} onChange={(e) => setPreviewRecipe(e.target.value)} data-testid="quant-preview-recipe">
+            <option value="">关闭</option>
+            {(recipes.data ?? []).filter((r) => r.weight.format !== "none").map((r) => (
+              <option key={r.id} value={r.id}>{r.name} · W{r.weight.bits ?? 16}</option>
+            ))}
+          </select>
+        </div>
+        <span className="small muted">节点内的“≈”是按权重位宽估算的量化后字节；右侧属性面板的 SQNR 来自真实张量数值。</span>
+      </div>
       {root.error && <div className="error-box">{root.error}</div>}
       <div className="graph-shell">
         <div className="card tree">
@@ -116,7 +135,7 @@ function HfGraph() {
           ))}
         </div>
         <div className="canvas">
-          {view.data ? <BlockGraph node={view.data} picked={picked} onPick={setPicked} /> : <div className="empty">选择左侧的块</div>}
+          {view.data ? <BlockGraph node={view.data} picked={picked} onPick={setPicked} qbits={qbits} /> : <div className="empty">选择左侧的块</div>}
         </div>
         <Props model={model} node={picked} />
       </div>
@@ -204,7 +223,7 @@ function layout(mods: GraphNode[]): GraphNode[][] {
     });
 }
 
-function BlockGraph({ node, picked, onPick }: { node: GraphNode; picked: GraphNode | null; onPick: (n: GraphNode) => void }) {
+function BlockGraph({ node, picked, onPick, qbits }: { node: GraphNode; picked: GraphNode | null; onPick: (n: GraphNode) => void; qbits: number | null }) {
   const mods = (node.children ?? []).filter((c) => c.kind === "module");
   const rows = useMemo(() => layout(mods), [node]);
   return (
@@ -217,7 +236,7 @@ function BlockGraph({ node, picked, onPick }: { node: GraphNode; picked: GraphNo
           {i > 0 && <div className="gedge" />}
           <div className="gpar" style={r.length === 1 ? {} : undefined}>
             {r.map((m) => (
-              <GNode key={m.path + m.name} m={m} on={picked?.path === m.path && picked?.name === m.name} wide={r.length === 1} onPick={onPick} />
+              <GNode key={m.path + m.name} m={m} on={picked?.path === m.path && picked?.name === m.name} wide={r.length === 1} onPick={onPick} qbits={qbits} />
             ))}
           </div>
         </div>
@@ -226,9 +245,10 @@ function BlockGraph({ node, picked, onPick }: { node: GraphNode; picked: GraphNo
   );
 }
 
-function GNode({ m, on, wide, onPick }: { m: GraphNode; on: boolean; wide: boolean; onPick: (n: GraphNode) => void }) {
+function GNode({ m, on, wide, onPick, qbits }: { m: GraphNode; on: boolean; wide: boolean; onPick: (n: GraphNode) => void; qbits: number | null }) {
   const w = m.tensors?.find((t) => t.name === "weight" || t.name === "qweight") ?? m.tensors?.[0];
   const q = m.tensors?.some((t) => t.quantizable);
+  const qn = qbits != null && q && w ? Math.round(((w.logical_shape.length ? w.logical_shape : w.shape).reduce((a, b) => a * b, 1) * qbits) / 8) : null;
   return (
     <div className={`gnode ${on ? "on" : ""}`} style={wide ? { width: 280 } : undefined} onClick={() => onPick(m)}>
       <div className="gh" style={{ background: `var(${OP_VAR[m.op ?? "Param"] ?? "--op-param"})` }}>
@@ -242,6 +262,7 @@ function GNode({ m, on, wide, onPick }: { m: GraphNode; on: boolean; wide: boole
             {w.dtype} [{(w.logical_shape.length ? w.logical_shape : w.shape).join("×")}] {q && <span className="q">· 可量化</span>}
           </div>
         )}
+        {qn != null && <div className="small muted">量化后 ≈ {fmtBytes(qn)}</div>}
       </div>
     </div>
   );

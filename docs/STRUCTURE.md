@@ -38,7 +38,7 @@
 ```
 MQDEsys/
 ├── AGENTS.md                     [L2] Agent 工作手册（入口文件，先读它）
-├── CLAUDE.md                     [L2] 引用 AGENTS.md（Claude Code 自动加载）
+├── internal/CLAUDE.md                     [L2] 引用 AGENTS.md（Claude Code 自动加载）
 ├── README.md                     [L1] 项目介绍、快速开始
 ├── CMakeLists.txt                [L2] 顶层 CMake：选项、子目录、全局编译标志
 ├── CMakePresets.json             [L2] dev / release 等预设
@@ -119,7 +119,7 @@ MQDEsys/
 |------|------|------|
 | `fit/fit.yaml` | **llmfit 常数表**：每参数字节（显存/速度两套）、量化层级、质量惩罚、适配阈值、带宽效率、运行模式系数、后端 K 常数、用途权重与目标、质量分档。改任何一个值都会改变所有评估结论 | **L2** |
 | `recipes/*.yaml` | 量化配方：`bf16`、`fp8`、`w8a16`、`w4a16`、`w4a8`、`w2a16`、`w2a8`。含权重/激活/KV 三段 QuantSpec、适用模态、成熟度 | L1 |
-| `hardware_db/<vendor>/<id>.yaml` | 硬件画像：显存、带宽、各精度算力、原生支持格式。现有 `nvidia/{rtx4090,a100-80g,h100-sxm,jetson-agx-orin-64g}` | L1 |
+| `hardware_db/<vendor>/<id>.yaml` | 硬件画像：显存、带宽、各精度算力、原生支持格式。现有 `nvidia/{rtx4090,a100-80g,h100-sxm,jetson-agx-orin-32g,jetson-agx-orin-64g,jetson-orin-nx-16g,jetson-orin-nano-8g,jetson-agx-thor,dgx-spark-gb10}` 及 AMD/Intel/MetaX/Ascend 画像 | L1 |
 | `model_families/*.yaml` | 架构模板：匹配规则、config 路径映射、组件前缀与块正则、默认保持高精度的层。现有 `generic_decoder`、`minicpm_vla`、`minicpmo`、`qwen3_5` | L1 |
 | `backends/*.yaml` | 推理后端能力：支持的量化格式、固定开销。现有 `hf_transformers` | L1 |
 

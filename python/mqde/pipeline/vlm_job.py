@@ -159,9 +159,9 @@ class VLMJob:
 
     @staticmethod
     def _default_adapter(spec: VLMJobSpec) -> Any:
-        from mqde.models.minicpmv import MiniCPMV
+        from mqde.models.minicpmv import HFVLM
 
-        return MiniCPMV(spec.model_path, device=spec.device)
+        return HFVLM(spec.model_path, device=spec.device)
 
     # ------------------------------------------------------------------ helpers
     def _stage(self, name: str, fn: Callable[[], Any], **kw: Any) -> Any:

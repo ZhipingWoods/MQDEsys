@@ -222,9 +222,9 @@ try {
   check('a llama.cpp-only parent: switching vLLM on afterwards still gets the planner\'s format (awq for its 4-bit recipe)', JSON.stringify((await preview()).export?.formats) === '["awq"]' && !!(await deploy()).llamacpp && !!(await deploy()).vllm);
 
   // ---------------------------------------------------------------- quantize-only
-  await page.getByTestId('opt-quantize-only').check();
-  check('"quantize only" greys out all three cards and says why', (await page.getByTestId('backend-toggle-vllm').isDisabled()) && (await page.getByTestId('backend-toggle-llamacpp').isDisabled()) && (await page.getByTestId('backend-toggle-sglang').isDisabled()) && /仅量化不评测已开启/.test(await text('backend-section')));
-  await page.getByTestId('opt-quantize-only').uncheck();
+  await page.getByTestId('job-mode-quantize').click();
+  check('"quantize only" hides the serving section and removes deploy from stages', (await page.getByTestId('backend-cards').count()) === 0);
+  await page.getByTestId('job-mode-full').click();
 
   // ---------------------------------------------------------------- a reused artifact goes to exactly one backend
   await page.goto(`${base}/new?from=${PARENT}&step=deploy`, { waitUntil: 'load' });

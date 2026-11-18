@@ -163,6 +163,9 @@ TEST(estimator_recipes, all_builtin_recipes_load) {
   auto hws = list_data_entries("hardware_db");
   ASSERT_TRUE(hws);
   for (const auto& n : *hws) EXPECT_TRUE(load_hardware(n)) << n;
+  auto bes = list_data_entries("backends");
+  ASSERT_TRUE(bes);
+  for (const auto& n : *bes) EXPECT_TRUE(load_backend(n)) << n;
   auto m = match_hardware("NVIDIA GeForce RTX 4090");
   ASSERT_TRUE(m);
   EXPECT_EQ(m->id, "nvidia/rtx4090");

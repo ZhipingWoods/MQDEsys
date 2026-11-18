@@ -1,6 +1,6 @@
 # 资源预估与可部署性
 
-**状态：已实现**（CLI、REST、Web）。性能数字是基于公式的估计，除非存在本机实测；它们不是承诺。
+资源预估提供命令行、REST 接口与 Web 界面三种使用方式。性能指标为基于公式的估计，存在本机实测时以实测为准。
 
 本页的所有内容都只读取模型的 `config.json` 和 safetensors *头部*（即使是远程模型也只有几 KiB），从不读取权重。模型可以是本地目录，也可以是 `hf:<org>/<name>[@revision]`。
 
@@ -80,4 +80,4 @@ Web 页面 [部署预评估](web_ui.md#部署预评估) 展示同样的分析，
 
 ## 硬件与后端画像
 
-画像是 YAML：`data/hardware_db/<vendor>/<id>.yaml`（显存、带宽、各精度峰值算力、原生支持格式）和 `data/backends/<name>.yaml`。已有硬件：`nvidia/rtx4090`、`nvidia/a100-80g`、`nvidia/h100-sxm`、`nvidia/jetson-agx-orin-64g`。目前只有 NVIDIA 画像；AMD、Apple GPU 和 Ascend 画像为计划中（T-1103 至 T-1105）。`mqde probe` 通过 NVML（动态加载）探测 NVIDIA GPU 和主机 CPU；没有匹配画像的机器上，设备只是不显示画像。
+画像是 YAML：`data/hardware_db/<vendor>/<id>.yaml`（显存、带宽、各精度峰值算力、原生支持格式）和 `data/backends/<name>.yaml`。已有 NVIDIA 画像：`rtx4090`、`a100-80g`、`h100-sxm`、`jetson-agx-orin-32g/64g`、`jetson-orin-nx-16g`、`jetson-orin-nano-8g`、`jetson-agx-thor`、`dgx-spark-gb10`，以及 AMD MI300X、Intel Gaudi 2、MetaX C500、Ascend 910B。硬件页可卡片式选择这些画像并直接带入新建作业。`mqde probe` 通过 NVML（动态加载）探测 NVIDIA GPU 和主机 CPU；没有匹配画像的机器上，设备只是不显示画像。

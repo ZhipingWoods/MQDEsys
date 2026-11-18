@@ -1,0 +1,12 @@
+id: nvidia/jetson-agx-thor
+vendor: nvidia
+name: Jetson AGX Thor 128GB
+arch: sm_110
+match_names: ["Jetson AGX Thor", "Jetson Thor", "T5000"]
+mem_bytes: 137438953472         # 128 GiB unified LPDDR5X
+mem_bw_gbps: 273
+# Vendor publishes 2070 FP4 TFLOPS sparse. The values below are dense equivalents (approx.);
+# BF16/FP16 are not published as standalone figures, so they are scaled conservatively.
+peak_tflops: {bf16: 258.8, fp16: 258.8, fp8: 517.5, int8: 517.5, int4: 1035}
+native_formats: [bf16, fp16, fp8_e4m3, fp8_e5m2, int8, int4]
+source: https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-thor/

@@ -81,50 +81,52 @@ export default function BackendEnvsCard() {
 
   const busy = install?.state === "running";
   return (
-    <div className="card table-wrap" data-testid="backend-envs-card">
-      <h2>推理后端环境（vLLM / SGLang / llama.cpp）</h2>
-      <p className="note">
-        由 uv 管理的独立环境（vLLM、SGLang 各一个 venv；llama.cpp 为官方发行包）。更新后立即对之后提交的作业生效，不需要重启服务。
-        <button className="secondary" style={{ marginLeft: 12 }} disabled={checking || busy} onClick={() => load(true)} data-testid="backend-env-check">
+    <div className="card" data-testid="backend-envs-card">
+      <div className="card-head">
+        <div>
+          <h2>推理后端环境</h2>
+          <p className="note" style={{ margin: 0 }}>vLLM / SGLang / llama.cpp 各自独立安装；更新后对之后提交的作业立即生效。</p>
+        </div>
+        <button className="secondary" disabled={checking || busy} onClick={() => load(true)} data-testid="backend-env-check">
           {checking ? "检查中…" : "检查更新"}
         </button>
-      </p>
+      </div>
       {err && <div className="error-box" data-testid="backend-env-error">{err}</div>}
-      <table>
-        <thead>
-          <tr>
-            <th>后端</th>
-            <th>当前版本</th>
-            <th>来源</th>
-            <th>最新版本</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {rows?.map((e) => {
-            const a = actionFor(e);
-            return (
-              <tr key={e.id} data-testid={`backend-env-${e.id}`}>
-                <td>
+      <div className="backend-env-grid">
+        {rows?.map((e) => {
+          const a = actionFor(e);
+          return (
+            <article key={e.id} className={`backend-env-card ${e.installed ? "installed" : "missing"} ${e.id}`} data-testid={`backend-env-${e.id}`}>
+              <div className="backend-env-head">
+                <span className={`backend-env-logo ${e.id}`} aria-hidden="true">{e.id === "vllm" ? "V" : e.id === "sglang" ? "S" : "L"}</span>
+                <div className="backend-env-title">
                   <b>{NAMES[e.id]}</b>
-                </td>
-                <td className="mono" data-testid={`backend-env-version-${e.id}`} title={e.path ?? ""}>
-                  {e.installed ? (e.version ? fmtVersion(e.version) : "未知") : <span className="muted">未安装</span>}
-                </td>
-                <td className="small muted">{e.source_build ? "源码构建（3rdpart/llama.cpp）" : e.source ? SOURCE[e.source] : "—"}</td>
-                <td className="mono" data-testid={`backend-env-latest-${e.id}`} title={e.source_build ? "源码构建的版本随子模块走，不跟官方发行包比较" : e.check_error ?? ""}>
-                  {e.source_build ? <span className="muted">随子模块</span> : e.latest ? fmtVersion(e.latest) : e.check_error ? <span className="muted">无法获取</span> : "…"}
-                </td>
-                <td>
-                  <button disabled={a.disabled || busy} title={a.hint} onClick={() => start(e, a.version)} data-testid={`backend-env-action-${e.id}`}>
-                    {a.label}
-                  </button>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+                  <small>{e.source_build ? "源码构建（3rdpart/llama.cpp）" : e.source ? SOURCE[e.source] : "未安装"}</small>
+                </div>
+                <span className={`status ${e.installed ? "good" : "muted"}`}>{e.installed ? "可用" : "未安装"}</span>
+              </div>
+              <div className="backend-env-versions">
+                <div>
+                  <span>当前版本</span>
+                  <b className="mono" data-testid={`backend-env-version-${e.id}`} title={e.path ?? ""}>
+                    {e.installed ? (e.version ? fmtVersion(e.version) : "未知") : "—"}
+                  </b>
+                </div>
+                <div>
+                  <span>最新版本</span>
+                  <b className="mono" data-testid={`backend-env-latest-${e.id}`} title={e.source_build ? "源码构建的版本随子模块走，不跟官方发行包比较" : e.check_error ?? ""}>
+                    {e.source_build ? "随子模块" : e.latest ? fmtVersion(e.latest) : e.check_error ? "无法获取" : "…"}
+                  </b>
+                </div>
+              </div>
+              <button className={e.installed ? "secondary" : ""} disabled={a.disabled || busy} title={a.hint} onClick={() => start(e, a.version)} data-testid={`backend-env-action-${e.id}`}>
+                {a.label}
+              </button>
+            </article>
+          );
+        })}
+        {!rows && <div className="muted small">读取后端环境中…</div>}
+      </div>
       {install && (
         <div style={{ marginTop: 12 }} data-testid="backend-install">
           <p className="small">

@@ -1,0 +1,11 @@
+id: nvidia/jetson-orin-nano-8g
+vendor: nvidia
+name: Jetson Orin Nano 8GB
+arch: sm_87
+match_names: ["Jetson Orin Nano 8GB", "Orin Nano 8GB", "Orin Nano Super"]
+mem_bytes: 8589934592           # unified memory shared with the CPU
+mem_bw_gbps: 68
+# Dense tensor-core estimates derived from the vendor's 40 TOPS INT8 (sparse) figure; not measured.
+peak_tflops: {fp32: 1.3, bf16: 10, fp16: 10, int8: 20, int4: 40}
+native_formats: [bf16, fp16, int8, int4]
+source: https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/

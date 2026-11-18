@@ -1,0 +1,10 @@
+id: metax/c500
+vendor: metax
+name: MetaX C500
+arch: c500
+match_names: ["C500", "MetaX C500", "MXC500"]
+mem_bytes: 68719476736        # 64 GiB HBM2e
+mem_bw_gbps: 1600
+peak_tflops: {fp32: 32.0, bf16: 128.0, fp16: 128.0, int8: 256.0}
+native_formats: [bf16, fp16, int8]
+source: https://www.metax-tech.com/

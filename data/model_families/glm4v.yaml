@@ -1,0 +1,39 @@
+# GLM-4V / GLM-4.1V / GLM-4.5V: a ViT + merger followed by the GLM language model.
+# Same module naming as the Qwen-VL family, kept separate so the report names the architecture
+# the checkpoint actually uses.
+family: glm4v
+modality: vlm
+match:
+  model_type: [glm4v, glm4v_moe]
+
+config_paths:
+  text: [text_config]
+  vision: [vision_config]
+
+tokens_per_image: 0
+
+components:
+  - name: vision
+    modality: vision
+    prefix: model.visual.blocks.
+    block_regex: '^(\d+)\.'
+  - name: vision_merger
+    modality: vision
+    prefix: model.visual.merger.
+  - name: vision
+    modality: vision
+    prefix: model.visual.
+  - name: language
+    modality: language
+    prefix: model.language_model.
+    block_regex: 'layers\.(\d+)\.'
+  - name: lm_head
+    modality: language
+    prefix: lm_head.
+
+default_keep_fp:
+  - 'embed_tokens'
+  - 'lm_head'
+  - 'patch_embed'
+  - 'pos_embed'
+  - 'merger'

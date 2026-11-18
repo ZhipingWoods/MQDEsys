@@ -34,8 +34,9 @@ def _out_mse(algo: str, w: torch.Tensor, x: torch.Tensor, ws: QuantSpec, as_: Qu
 
 
 def test_registry_and_resolve() -> None:
-    assert {"rtn", "gptq", "awq", "smoothquant"} <= set(algorithms.ALGO_REGISTRY)
+    assert {"rtn", "gptq", "hqq", "awq", "smoothquant"} <= set(algorithms.ALGO_REGISTRY)
     assert algorithms.resolve("awq+gptq") == ["awq", "gptq"]
+    assert algorithms.resolve("awq+hqq") == ["awq", "hqq"]
     assert algorithms.resolve("smoothquant") == ["smoothquant", "rtn"]
     assert algorithms.resolve("none") == ["rtn"]
     with pytest.raises(ValueError):
@@ -43,7 +44,7 @@ def test_registry_and_resolve() -> None:
     with pytest.raises(ValueError):
         algorithms.resolve("awq+smoothquant")
     names = {a["name"] for a in algorithms.algorithm_catalog()}
-    assert {"rtn", "gptq", "awq", "smoothquant", "awq+gptq", "smoothquant+gptq"} <= names
+    assert {"rtn", "gptq", "hqq", "awq", "smoothquant", "awq+gptq", "smoothquant+gptq", "awq+hqq"} <= names
 
 
 @pytest.mark.parametrize("ws", [W4G, W3C], ids=["w4g32", "w3ch"])
@@ -86,3 +87,55 @@ def test_fp8_gptq_falls_back() -> None:
     w, x = _layer()
     r = algorithms.run("gptq", w, x, QuantSpec(format="fp8_e4m3", bits=8, granularity="per_channel"), NONE)
     assert not r.final and "RTN" in str(r.info)
+
+
+def test_hqq_is_data_free_and_stays_on_the_integer_grid() -> None:
+    w, _ = _layer()
+    r = algorithms.run("hqq", w, None, W4G, NONE)  # no calibration activations at all
+    assert r.final and r.info["hqq"]["data_free"]
+    g = r.w.reshape(-1, 32)
+    assert max(len(torch.unique(row)) for row in g) <= 16
+    # materialize returns exactly the weight/qparams HQQ produced (no second quantization)
+    dq, scale, zero = algorithms.materialize(r, W4G)
+    torch.testing.assert_close(dq, r.w)
+    assert scale.shape == zero.shape == (r.w.shape[0] * (r.w.shape[1] // 32), 1)
+
+
+def test_hqq_beats_rtn_for_two_bit_groups() -> None:
+    w, x = _layer(seed=3, rows=32, cols=128)
+    w2 = QuantSpec(format="int", bits=2, symmetric=False, granularity="per_group", group_size=32, calib="minmax")
+    rtn, hqq = _out_mse("rtn", w, x, w2, NONE), _out_mse("hqq", w, x, w2, NONE)
+    assert hqq < rtn * 0.95, (rtn, hqq)
+
+
+def test_hqq_symmetric_keeps_zero_point_zero() -> None:
+    w, _ = _layer()
+    r = algorithms.run("hqq", w, None, W3C, NONE)
+    assert r.zero is not None and torch.count_nonzero(r.zero) == 0
+    assert r.scale is not None and r.scale.shape == (w.shape[0], 1)
+
+
+def test_gptq_static_groups_reports_the_fixed_qparams() -> None:
+    w, x = _layer()
+    r = algorithms.ALGO_REGISTRY["gptq"](w, x, W4G, NONE, {"static_groups": True})
+    assert r.final and r.info["static_groups"] is True
+    assert r.scale is not None and r.zero is not None
+    assert r.scale.shape == (w.shape[0] * (w.shape[1] // 32), 1)
+    assert _out_mse("gptq", w, x, W4G, NONE) > 0  # the normal path still works
+
+
+def test_awq_clip_search_moves_scales_and_never_hurts_much() -> None:
+    w, x = _layer(seed=4)
+    plain = algorithms.ALGO_REGISTRY["awq"](w, x, W4G, NONE, {"grid": 10, "max_rows": 256})
+    clipped = algorithms.ALGO_REGISTRY["awq"](w, x, W4G, NONE, {"grid": 10, "max_rows": 256, "clip_grid": 8})
+    assert clipped.info["clip_grid"] == 8
+    assert clipped.info["clip_ratio_mean"] <= 1.0
+    ps = plain.in_scale if plain.in_scale is not None else torch.ones(w.shape[1])
+    cs = clipped.in_scale if clipped.in_scale is not None else torch.ones(w.shape[1])
+    # Compare the *quantized* layer output, (x / s) @ Q(w * s)^T, not the FP transform: the latter is
+    # exact by construction and would hide every clipping error.
+    pq = fake_quant(plain.w, W4G)[0]
+    cq = fake_quant(clipped.w, W4G)[0]
+    ep = float((x @ w.T - (x / ps) @ pq.T).pow(2).mean())
+    ec = float((x @ w.T - (x / cs) @ cq.T).pow(2).mean())
+    assert ec <= ep * 1.05, (ep, ec)

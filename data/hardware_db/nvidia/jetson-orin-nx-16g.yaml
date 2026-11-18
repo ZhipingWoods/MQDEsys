@@ -1,0 +1,11 @@
+id: nvidia/jetson-orin-nx-16g
+vendor: nvidia
+name: Jetson Orin NX 16GB
+arch: sm_87
+match_names: ["Jetson Orin NX 16GB", "Orin NX 16GB"]
+mem_bytes: 17179869184          # unified memory shared with the CPU
+mem_bw_gbps: 102.4
+# Dense tensor-core estimates derived from the vendor's 100 TOPS INT8 (sparse) figure; not measured.
+peak_tflops: {fp32: 2.7, bf16: 25, fp16: 25, int8: 50, int4: 100}
+native_formats: [bf16, fp16, int8, int4]
+source: https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/

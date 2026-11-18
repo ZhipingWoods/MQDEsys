@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, DeployJobReport, fmt, fmtBytes, gib, JobListItem, JobReport, llamaSpeed, LLMJobReport, VLMJobReport } from "../api";
+import { api, DeployJobReport, fmt, fmtBytes, gib, JobListItem, JobReport, llamaSpeed, LLMJobReport, VLMJobReport, WorldJobReport } from "../api";
 import { ScoreMatrix } from "../components/ScoreMatrix";
 import { matrixEntries } from "../matrix";
 import { DomainPendingNote, useDomain } from "../domain";
@@ -10,15 +10,15 @@ import { baseOption, Chart, series, token } from "../charts";
 /** Accuracy vs. cost across finished jobs: VLA (action error vs. deployed memory) and LLM (PPL vs. weight bits). */
 export default function ComparePage() {
   const [jobs, setJobs] = useState<JobListItem[]>([]);
-  const [reports, setReports] = useState<(JobReport | LLMJobReport | VLMJobReport | DeployJobReport)[]>([]);
+  const [reports, setReports] = useState<(JobReport | LLMJobReport | VLMJobReport | WorldJobReport | DeployJobReport)[]>([]);
   const [params, setParams] = useSearchParams();
   const { domain, setDomain } = useDomain();
   // a ?tab= link (from a job page) wins once; after that the tab is the navigation bar's domain
   const urlTab = params.get("tab");
   useEffect(() => {
-    if (urlTab && ["llm", "vlm", "vla"].includes(urlTab) && urlTab !== domain) setDomain(urlTab);
+    if (urlTab && ["llm", "vlm", "vla", "world", "ewm"].includes(urlTab) && urlTab !== domain) setDomain(urlTab);
   }, [urlTab]); // eslint-disable-line react-hooks/exhaustive-deps
-  const tab = ["llm", "vlm", "vla"].includes(domain) ? domain : null;
+  const tab = ["llm", "vlm", "vla", "world", "ewm"].includes(domain) ? domain : null;
   const pick = (t: string) => {
     setDomain(t);
     setParams({ tab: t }, { replace: true });
@@ -33,12 +33,13 @@ export default function ComparePage() {
   }, []);
   const llm = reports.filter((r): r is LLMJobReport => r.kind === "llm");
   const vlm = reports.filter((r): r is VLMJobReport => (r.kind as string) === "vlm");
+  const world = reports.filter((r): r is WorldJobReport => (r.kind as string) === "world" || (r.kind as string) === "ewm");
   const dep = reports.filter((r): r is DeployJobReport => r.kind === "llm_deploy");
-  const vla = reports.filter((r): r is JobReport => r.kind !== "llm" && (r.kind as string) !== "vlm" && r.kind !== "llm_deploy");
+  const vla = reports.filter((r): r is JobReport => r.kind !== "llm" && (r.kind as string) !== "vlm" && (r.kind as string) !== "world" && (r.kind as string) !== "ewm" && r.kind !== "llm_deploy");
   return (
     <>
       <h1>评测结果对比</h1>
-      <p className="subtitle">汇总已完成作业：精度与成本的权衡。LLM {llm.length} 个作业 · VLM {vlm.length} 个作业 · VLA {vla.length} 个作业。</p>
+      <p className="subtitle">汇总已完成作业：精度与成本的权衡。LLM {llm.length} 个作业 · VLM {vlm.length} 个作业 · VLA {vla.length} 个作业 · WM/EWM {world.length} 个作业。</p>
       <div className="tabs">
         <div className={`tab ${tab === "llm" ? "on" : ""}`} onClick={() => pick("llm")}>
           LLM（PPL）
@@ -49,9 +50,15 @@ export default function ComparePage() {
         <div className={`tab ${tab === "vla" ? "on" : ""}`} onClick={() => pick("vla")}>
           VLA（动作误差）
         </div>
+        <div className={`tab ${tab === "world" ? "on" : ""}`} onClick={() => pick("world")} data-testid="compare-tab-world">
+          WM（视频 PSNR）
+        </div>
+        <div className={`tab ${tab === "ewm" ? "on" : ""}`} onClick={() => pick("ewm")} data-testid="compare-tab-ewm">
+          EWM（动作条件）
+        </div>
       </div>
       <DomainPendingNote />
-      {tab === "llm" ? <LLMCompare reps={llm} deploys={dep} /> : tab === "vlm" ? <VLMCompare reps={vlm} /> : tab === "vla" ? <VLACompare reps={vla} /> : null}
+      {tab === "llm" ? <LLMCompare reps={llm} deploys={dep} /> : tab === "vlm" ? <VLMCompare reps={vlm} /> : tab === "vla" ? <VLACompare reps={vla} /> : tab === "world" || tab === "ewm" ? <WorldCompare reps={world.filter((r) => r.kind === tab)} /> : null}
       {jobs.length === 0 && <p className="muted">暂无已完成作业</p>}
     </>
   );
@@ -97,6 +104,55 @@ function VLMCompare({ reps }: { reps: VLMJobReport[] }) {
                 <td className="num">{pct(x.summary.top1_agreement)}</td>
                 <td className="num">{pct(x.summary.generation_exact_match)}</td>
                 <td className="num">{pct(x.summary.gt_accuracy)}</td>
+              </tr>
+            ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function WorldCompare({ reps }: { reps: WorldJobReport[] }) {
+  const rows = reps.flatMap((r) =>
+    Object.values(r.recipes ?? {})
+      .filter((x) => x.summary.psnr_vs_ref != null)
+      .map((x) => ({ job: r.job_id, name: r.spec?.name, kind: r.kind, base: r.baseline?.psnr_vs_gt, x })),
+  );
+  if (rows.length === 0) return <p className="muted">暂无带评测结果的 WM / EWM 作业</p>;
+  const n = (v: number | null | undefined, d = 2) => (v == null ? "–" : v.toFixed(d));
+  return (
+    <div className="card table-wrap">
+      <h2>世界模型配方：生成结果相对 BF16 的保真度</h2>
+      <table data-testid="world-compare-table">
+        <thead>
+          <tr>
+            <th>作业</th>
+            <th>领域</th>
+            <th>配方</th>
+            <th>算法</th>
+            <th>PSNR vs BF16</th>
+            <th>MSE vs BF16</th>
+            <th>PSNR vs 真实未来</th>
+            <th>相对 BF16 的 PSNR 下降</th>
+            <th>低于采样噪声？</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows
+            .sort((a, b) => (b.x.summary.psnr_vs_ref ?? 0) - (a.x.summary.psnr_vs_ref ?? 0))
+            .map(({ job, name, kind, x }) => (
+              <tr key={job + x.recipe}>
+                <td>
+                  <Link to={`/jobs/${job}`}>{name ?? job}</Link>
+                </td>
+                <td>{kind === "ewm" ? "EWM" : "WM"}</td>
+                <td>{x.recipe}</td>
+                <td>{x.algorithm}</td>
+                <td className="num">{n(x.summary.psnr_vs_ref)} dB</td>
+                <td className="num">{x.summary.mse_vs_ref == null ? "–" : x.summary.mse_vs_ref.toExponential(2)}</td>
+                <td className="num">{n(x.summary.psnr_vs_gt)} dB</td>
+                <td className="num">{x.summary.psnr_drop_db == null ? "–" : `${x.summary.psnr_drop_db.toFixed(3)} dB`}</td>
+                <td>{x.summary.below_noise_floor == null ? "–" : x.summary.below_noise_floor ? "✓" : "✗"}</td>
               </tr>
             ))}
         </tbody>

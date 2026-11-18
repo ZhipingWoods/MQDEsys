@@ -78,6 +78,10 @@ double component_tokens(const std::string& comp, const Shape& sh) {
   if (comp == "merger") return static_cast<double>(sh.vis_tokens) / 4.0;
   if (comp == "language") return static_cast<double>(sh.ctx);
   if (comp == "action_head") return static_cast<double>(sh.action_tokens * sh.action_steps);
+  // DiT / world-model denoiser: one pass over the clip's latent tokens (the estimator's ctx is the
+  // closest existing shape; video frame count is not part of RuntimeParams yet).
+  if (comp == "transformer" || comp == "denoiser" || comp == "world") return static_cast<double>(sh.ctx);
+  if (comp == "action_encoder") return static_cast<double>(sh.action_tokens > 0 ? sh.action_tokens : sh.ctx);
   if (comp == "lm_head") return 1.0;
   return 0.0;
 }

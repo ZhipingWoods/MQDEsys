@@ -1,47 +1,45 @@
-# Export formats and the fake/real consistency check
+# Export formats and consistency checks
 
-**Status: partial.** GPTQ, AWQ, compressed-tensors and GGUF export work and are verified; SGLang and TensorRT-LLM targets are planned.
+Fake quantization evaluates accuracy but does not reduce model size: weights remain floating-point values on the quantization grid. Exporters convert the fake-quantized model into checkpoints that inference engines can load directly. Enable them with `export.formats` in the job YAML or `--export gptq,awq,compressed-tensors` on the command line. Each recipe is written to `<job-dir>/export/<recipe>-<format>/`, containing `model.safetensors`, `config.json` (with `quantization_config`), `quantize_config.json` (GPTQ/AWQ) and tokenizer files.
 
-Fake quantization evaluates accuracy but does not shrink anything: weights stay in floating point on the quantization grid. An **exporter** turns the fake-quantized model into a checkpoint that a serving engine loads. Enable them with `export.formats` in the job YAML or `--export gptq,awq,compressed-tensors`. Each recipe writes `<job-dir>/export/<recipe>-<format>/` containing `model.safetensors`, `config.json` (with `quantization_config`), `quantize_config.json` (GPTQ/AWQ) and the tokenizer files.
+Before writing, every exporter runs `check()`. Layers that cannot be represented are reported in the job report as `status: unsupported` with the layer name and reason, rather than being exported incorrectly.
 
-Before writing, each exporter runs `check()`. A layer it cannot represent is *reported* (job report: `status: unsupported`, with the layer and reason) rather than exported wrongly.
+## Supported formats
 
-## Formats
-
-| Format (`--export`) | Layout | Supported weights | Loads in |
+| Format (`--export`) | Layout | Supported weights | Compatible engines |
 |---|---|---|---|
-| `gptq` | GPTQ v1: `qweight`, `qzeros`, `scales`, `g_idx` (`desc_act=false`) | INT 2, 3, 4, 8 bit, per-group or per-channel, symmetric or asymmetric | vLLM, SGLang, transformers (by design) |
-| `awq` | AWQ GEMM, `zero_point: true` | INT4, per-group only | vLLM (verified), SGLang, transformers (by design) |
-| `compressed-tensors` | `pack-quantized` (`weight_packed`, `weight_scale`, `weight_shape`, packed zero points) for INT4/INT8; `float-quantized` for FP8 E4M3 | INT 4/8 weight-only; FP8 per-channel or per-tensor with dynamic per-token or static per-tensor activation scales | vLLM (verified) |
-| GGUF (`--llamacpp` types) | llama.cpp's converter writes F16, then `blk.*.weight` tensors are re-encoded | `q8_0`, `q5_0`, `q4_0`, `iq4_nl`, `q4_k`, `q2_k` | llama.cpp |
+| `gptq` | GPTQ v1: `qweight`, `qzeros`, `scales`, `g_idx` (`desc_act=false`) | INT 2/3/4/8 bit, per-group or per-channel, symmetric or asymmetric | vLLM, SGLang, transformers |
+| `awq` | AWQ GEMM, `zero_point: true` | INT4, per-group | vLLM, SGLang, transformers |
+| `compressed-tensors` | `pack-quantized` for INT4/INT8 (`weight_packed`, `weight_scale`, `weight_shape`, packed zero points); `float-quantized` for FP8 E4M3 | INT 4/8 weight-only; FP8 per-channel or per-tensor, with dynamic per-token or static per-tensor activation scales | vLLM |
+| GGUF | F16 written by the llama.cpp converter, then `blk.*.weight` tensors re-encoded | `q8_0`, `q5_0`, `q4_0`, `iq4_nl`, `q4_k`, `q2_k` | llama.cpp |
 
-Not exportable today: integer weights with quantized activations (W4A8, W8A8-int) in compressed-tensors, per-tensor integer scales, per-group FP8 scales, and layers whose AWQ/SmoothQuant scale could not be folded into the previous operation. GPTQ and AWQ checkpoints never contain activation quantization; the engine runs activations in fp16, and the job notes that.
+Unsupported combinations include compressed-tensors integer weights with quantized activations (W4A8, W8A8-int), per-tensor integer scales, per-group FP8 scales, and layers whose AWQ/SmoothQuant scaling cannot fold into the preceding operator. GPTQ and AWQ checkpoints do not contain activation quantization; engines compute activations in FP16, and the job notes this in the report.
 
-### Smoothing scales are folded
+## Smoothing factor folding
 
-AWQ and SmoothQuant produce one scale per group of layers that read the same input. The exporter requires them to have been folded into the operation that produces that input (RMSNorm weight, `up_proj` rows, `v_proj` rows), which is exact in floating point and costs no extra division at inference. In grouped-query-attention models `o_proj` is left unsmoothed.
+AWQ and SmoothQuant produce one scaling factor per group of layers that read the same input. Exporters require this factor to be folded into the operator producing that input (RMSNorm weights, rows of `up_proj`, rows of `v_proj`). The transformation is exact in floating point, and inference requires no extra division. In grouped-query attention models, `o_proj` is not smoothed.
 
-### Mixed precision in checkpoints
+## Mixed-precision checkpoints
 
-Per-layer bit overrides are written as GPTQModel's `dynamic` config for GPTQ, as `modules_to_not_convert` for AWQ, and as extra `config_groups` plus `ignore` for compressed-tensors. Layers kept in FP (`skip: true`, `lm_head`) are listed as such.
+Per-layer bit-width overrides are written into each format's configuration: GPTQ uses GPTQModel's `dynamic` config, AWQ uses `modules_to_not_convert`, and compressed-tensors adds `config_groups` plus `ignore`. Layers kept in floating point (`skip: true`, `lm_head`) are listed explicitly.
 
-### GGUF details
+## GGUF details
 
-`convert_hf_to_gguf.py` from a llama.cpp source tree writes the F16 file (`MQDE_LLAMACPP_SRC` points at it). Linear tensors are then quantized with MQDEsys's own packer, whose output was compared byte for byte against `llama-quantize` on Qwen2.5-0.5B for all six types (290 tensors each). Tensors whose row length does not divide the block size follow llama.cpp's fallback: Q4_K falls back to Q5_0 and Q2_K to Q4_0; if that also does not divide, the tensor stays F16. Embeddings, the output head and norms stay F16/F32. GGUF quantizes the original weights with llama.cpp's numerics, independently of the job's recipes and algorithms, so compare it with the recipe results only through PPL.
+`convert_hf_to_gguf.py` from the llama.cpp source directory writes an F16 file (the directory is set with `MQDE_LLAMACPP_SRC`). Linear-layer tensors are then quantized by MQDEsys's own packer. On Qwen2.5-0.5B, the output of six quantization types (290 tensors each) matches `llama-quantize` byte for byte. Tensors whose row length is not divisible by the block size follow llama.cpp's fallback rules: Q4_K falls back to Q5_0, Q2_K to Q4_0; if still indivisible, F16 is retained. Embeddings, output heads and norms remain F16/F32. GGUF quantizes raw weights with llama.cpp's own numerics, independent of the job's recipe and algorithm, and is therefore compared against recipe results through PPL only.
 
-### Marlin packing
+## Marlin packing
 
-`mqde.core.pack_marlin` / `unpack_marlin` implement the Marlin tile layout for 4- and 8-bit weights with 16-bit activations, ported from vLLM v0.30.0 and checked byte for byte against vLLM's reference functions for three shapes. The exporters do not write Marlin checkpoints; vLLM repacks GPTQ/AWQ/compressed-tensors weights into Marlin itself at load time (it selected `MarlinLinearKernel` for the 4-bit checkpoints below). A byte-for-byte check against `gptq_marlin_repack` of an installed vLLM is written but still pending.
+`mqde.core.pack_marlin` and `unpack_marlin` implement the Marlin tile layout for 4/8-bit weights with 16-bit activations, ported from vLLM v0.30.0, and match vLLM's reference functions byte for byte across three shapes. Exporters do not write Marlin checkpoints directly; vLLM repacks GPTQ/AWQ/compressed-tensors weights into Marlin layout at load time. The project includes a byte-for-byte comparison test against vLLM's `gptq_marlin_repack`.
 
-## The fake/real consistency check (S10)
+## Consistency verification
 
-After each export the pipeline runs two stages:
+After export, the pipeline performs two checks:
 
-1. `real_check`: read the checkpoint back with a reference unpacker, rebuild integer codes and zero points for every layer, and compare with the fake-quantized model. Codes and zero points must be **identical** (any difference is a packing bug); the dequantized weight may differ only through fp16 storage of the scales (reported as max-abs and relative L2).
-2. `eval_real`: swap the dequantized real weights into the model and measure PPL again.
+1. **Authenticity check**: read the checkpoint back with the reference unpacker, reconstruct each layer's integer codes and zero points, and compare them with the fake-quantized model. Codes and zero points must be identical; any difference is a packing defect. Dequantized weights may differ only because scales are stored in FP16, reported as max-abs and relative L2 error.
+2. **Real-weight re-evaluation**: substitute the dequantized real weights into the model and measure PPL again.
 
-Result on Qwen2.5-0.5B-Instruct, W4A16 GPTQ (job 20261008-101629-62da92 in the UI): the AWQ and compressed-tensors checkpoints are 448 MiB each, all integer codes identical, weight relative L2 2.0e-4, and real-weight PPL 20.656 against fake-quantized 20.655 (+0.00%). For the FP8 compressed-tensors export of the same model the real-weight PPL is 18.333 and the vLLM-served PPL 18.382 (+0.27%).
+For Qwen2.5-0.5B-Instruct with W4A16 GPTQ: both the AWQ and compressed-tensors checkpoints are 448 MiB, all integer codes match, the relative L2 weight error is 2.0e-4, and real-weight PPL is 20.656 versus 20.655 for fake quantization (+0.00%). For the same model, FP8 compressed-tensors gives real-weight PPL 18.333 and served PPL 18.382 (+0.27%).
 
 ```{note}
-vLLM 0.30.0's validator rejects asymmetric 4-bit GPTQ (`bits=4, sym=False`), which is what the `w4a16` recipe produces. This is a vLLM constraint, not an export bug; the file is structurally correct. Use the AWQ or compressed-tensors export for vLLM, or a symmetric recipe.
+vLLM 0.30.0 rejects asymmetric 4-bit GPTQ (`bits=4, sym=False`), which is the format produced by the `w4a16` recipe. This is a vLLM restriction, not an export defect. Use an AWQ or compressed-tensors export, or a symmetric recipe, when targeting vLLM.
 ```

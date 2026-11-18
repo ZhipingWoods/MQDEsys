@@ -1,14 +1,12 @@
 # Deployment and benchmarking
 
-**Status: partial.** llama.cpp (GGUF, CPU and Metal) and vLLM run end to end in Python. The C++ backend interface, SGLang, TensorRT-LLM, the evalscope adapter and the report page for boundary search are not done. lm-eval runs through its official command line (below).
+After export, a job can deploy each checkpoint with a real inference engine, verify that it responds, apply load and measure served accuracy. When an engine binary is missing, the stage is marked `skipped` and the reason is recorded in the report. A failed start is marked `failed` with diagnostics identified from the engine log (out of memory, unsupported quantization configuration, KV cache too small, port in use, missing files, and so on).
 
-After export, a job can serve each checkpoint with a real engine, check it answers, load it, and score it. A missing engine binary makes the stage `skipped` (reason in the report); a failed start is `failed` with a diagnosis recognised from the engine's log (out of memory, unsupported quantization config, KV cache too small, port in use, missing file ...).
-
-The servers always bind to `127.0.0.1` because they have no authentication.
+All inference servers bind to `127.0.0.1`.
 
 ## llama.cpp (GGUF)
 
-Build llama.cpp out of tree (CPU, or Metal on Apple silicon) and point MQDEsys at the binaries (see [Installation](../get_started/installation.md)). For Metal, configure with `-DGGML_METAL=ON`; the dev-server CPU build uses `-DGGML_CUDA=OFF`. `-DLLAMA_CURL=OFF` avoids a dependency. The needed targets are `llama-perplexity`, `llama-quantize`, `llama-bench` and `llama-server`. The CUDA build of llama.cpp has not been exercised.
+Build llama.cpp outside the source tree (CPU, or Metal on Apple silicon) and make the binaries discoverable by MQDEsys (see [Installation](../get_started/installation.md)). Metal builds use `-DGGML_METAL=ON`; CPU builds use `-DGGML_CUDA=OFF`; `-DLLAMA_CURL=OFF` removes one dependency. Required targets are `llama-perplexity`, `llama-quantize`, `llama-bench` and `llama-server`.
 
 ```bash
 PYTHONPATH=python python -m mqde.pipeline.llm_job \
@@ -17,22 +15,22 @@ PYTHONPATH=python python -m mqde.pipeline.llm_job \
   --llamacpp-serve '{"concurrency": 4, "requests": 16}' --job-dir runs/gguf-demo
 ```
 
-For F16 and every requested type the job runs `llama-perplexity` (context = `evaluation.seq_len`, `evaluation.max_windows` chunks, scoring the second half of each chunk), `llama-bench` (prefill pp and decode tg tok/s), then starts `llama-server`, sends a chat request ("What is the capital of France?" must answer Paris) and runs a closed-loop streaming load.
+For F16 and each requested GGUF type, the job runs `llama-perplexity` (context from `evaluation.seq_len`, `evaluation.max_windows` chunks, scoring only the second half of each chunk), `llama-bench` (prefill and decode tok/s), then starts `llama-server`, sends a smoke request and runs a closed-loop streaming load test.
 
-Recorded on an Apple M5 (16 GB), Qwen2.5-0.5B-Instruct, 4 threads, 40 chunks of 512 (`docs/PROGRESS.md`):
+Measurements on an Apple M5 (16 GB) with Qwen2.5-0.5B-Instruct, 4 threads and 40 chunks of 512:
 
-| Type | PPL Metal | PPL CPU | decode tok/s Metal / CPU | serve tok/s at 4 concurrent | TTFT p50 |
+| Type | PPL Metal | PPL CPU | decode tok/s Metal / CPU | serve tok/s at 4 concurrency | TTFT p50 |
 |---|---|---|---|---|---|
 | f16 | 13.889 | 13.889 | 121 / 82 | 327 | 118 ms |
 | q8_0 | 13.904 | 13.923 | 170 / 122 | 412 | 117 ms |
 | q4_k | 14.718 | 14.742 | 194 / 137 | 401 | 123 ms |
 | iq4_nl | 15.082 | 15.073 | 200 / 163 | 423 | 116 ms |
 
-With `-ngl 99` the log shows `offloaded 25/25 layers to GPU`; with `-ngl 0` all layers stay on the CPU. On the Linux dev server (CPU, 48 threads) the same model gave Q4_K PPL 14.75 and 113 tok/s served at 4 concurrent. The web job page shows this table (see the screenshot in the [UI tour](web_ui.md)).
+With `-ngl 99` the log shows `offloaded 25/25 layers to GPU`; with `-ngl 0` all layers remain on the CPU. On a Linux CPU server (48 threads), the same model at Q4_K gives PPL 14.75 and 113 tok/s at 4-way concurrency. The job page presents this table (see the [UI guide](web_ui.md)).
 
 ## vLLM
 
-vLLM needs a CUDA GPU and normally lives in its own environment: MQDEsys launches `vllm serve` as a subprocess (`MQDE_VLLM_BIN` or `vllm` on `PATH`) and talks HTTP; nothing from vLLM is imported.
+vLLM requires a CUDA GPU and is normally installed in its own environment. MQDEsys starts `vllm serve` as a subprocess (`MQDE_VLLM_BIN` or `vllm` on `PATH`), communicates over HTTP, and does not import vLLM code.
 
 ```bash
 PYTHONPATH=python python -m mqde.pipeline.llm_job \
@@ -40,29 +38,38 @@ PYTHONPATH=python python -m mqde.pipeline.llm_job \
   --vllm '{"gpu_memory_utilization": 0.3}' --job-dir runs/vllm-demo
 ```
 
-For each exported checkpoint the `deploy_vllm` stage starts the server, sends a smoke request, runs a load test, reads engine facts from the startup log (KV cache capacity, weight memory, quantization kernel), and computes **served PPL**.
+For each exported checkpoint, the deployment stage starts the server, sends a smoke request, runs the load test, reads engine information from the startup log (KV cache capacity, weight memory, quantization kernel), and computes served PPL.
 
-Recorded on an RTX 4090, vLLM 0.30.0, Qwen2.5-0.5B-Instruct, W4A16 / FP8 exported by MQDEsys (`docs/PROGRESS.md`, job 20261008-101629-62da92 for the first two rows):
+Measurements on an RTX 4090 with vLLM 0.30.0 and Qwen2.5-0.5B-Instruct (W4A16 and FP8 exported by MQDEsys):
 
-| Checkpoint | Kernel chosen by vLLM | real PPL | served PPL | delta | TTFT p50 | TPOT p50 | tok/s (4 conc.) |
+| Checkpoint | vLLM kernel | Real-weight PPL | Served PPL | Delta | TTFT p50 | TPOT p50 | tok/s (4 concurrent) |
 |---|---|---|---|---|---|---|---|
 | W4A16 AWQ | MarlinLinearKernel | 20.656 | 20.658 | +0.01% | 52 ms | 16.2 ms | 240 |
 | W4A16 compressed-tensors | MarlinLinearKernel | 20.656 | 20.658 | +0.01% | 55 ms | 16.9 ms | 225 |
 | FP8 compressed-tensors | CutlassFP8ScaledMMLinearKernel | 18.333 | 18.382 | +0.27% | 65 ms | 19.6 ms | 199 |
 
-## Building blocks (Python)
+## SGLang
 
-You can use the pieces directly. All live under `python/mqde/`.
+SGLang runs under a separate interpreter, specified with `MQDE_SGLANG_PYTHON` or created by `scripts/setup_backend.py` as a managed environment. The deployment flow matches vLLM: start `sglang.launch_server`, send a smoke request, run the load test and read weight memory and KV cache capacity from the startup log.
 
-### `eval/loadtest.py`: TTFT / TPOT / throughput
+## Standalone components
 
-`run_load(port, LoadSpec(...))` streams requests against `POST /v1/completions` (`api="openai"`: vLLM, SGLang, llama-server) or llama-server's native `/completion` (`api="llama"`). Two modes: **closed loop** (`concurrency` workers back to back) and **open loop** (Poisson arrivals at `rate` req/s, at most `max_inflight` at once; `schedule_lag_ms` tells you if the generator, not the server, was the bottleneck). Prompts are token-id lists of exactly `prompt_len` tokens that differ per request, so prefix caching cannot hide the work; generation ignores EOS and produces exactly `n_predict` tokens.
+The following components live under `python/mqde/` and can be used independently.
 
-Definitions: TTFT = first token arrival minus request sent; TPOT = (last minus first arrival) / (tokens - 1); ITL = gaps between token arrivals; E2E = last arrival minus request sent; throughput = output tokens of successful requests / wall time. p50, p90 and p99 are reported. Against a mock server with TTFT 100 ms and TPOT 20 ms the measured error was under 2 ms.
+### `eval/loadtest.py`: TTFT, TPOT and throughput
 
-### `eval/lm_eval_adapter.py`: task accuracy through the official `lm-eval`
+`run_load(port, LoadSpec(...))` sends streaming requests to `POST /v1/completions` (`api="openai"`, applicable to vLLM, SGLang and llama-server) or llama-server's native `/completion` (`api="llama"`). Two modes are supported:
 
-PPL can stay almost unchanged while task accuracy collapses, so the deployed model can also be scored on lm-evaluation-harness tasks (ADR-0002). MQDEsys never imports lm-eval: it runs the `lm-eval` command you installed (`MQDE_LM_EVAL_BIN`, else `lm-eval` on `PATH`) against the vLLM server the stage already started, through lm-eval's `local-completions` model on 127.0.0.1, and reads the JSON it writes. Install it in its own environment (it needs `transformers` for the tokenizer; no torch). Datasets come from the Hugging Face hub or a mirror (`HF_ENDPOINT`).
+- **Closed loop**: `concurrency` workers send requests continuously.
+- **Open loop**: Poisson arrivals at `rate` req/s with at most `max_inflight` requests in flight; `schedule_lag_ms` indicates whether the bottleneck is the load generator or the server.
+
+Inputs are token-id lists of exactly `prompt_len` tokens, different for every request, so prefix caching cannot hide the real computation. Generation ignores EOS and produces exactly `n_predict` tokens.
+
+Definitions: TTFT is the time from request dispatch to the first token; TPOT is (last token time minus first token time) / (token count - 1); ITL is the interval between consecutive tokens; E2E is the time from request dispatch to the last token; throughput is successful output tokens divided by wall-clock time. The report includes p50, p90 and p99. Against a mock server with TTFT 100 ms and TPOT 20 ms, measurement error is below 2 ms.
+
+### `eval/lm_eval_adapter.py`: task accuracy
+
+Served models can be scored on lm-evaluation-harness tasks. MQDEsys does not import lm-eval; it invokes the installed `lm-eval` command (`MQDE_LM_EVAL_BIN`, otherwise `lm-eval` on `PATH`), connects through lm-eval's `local-completions` model to the vLLM server started by the stage, and reads the resulting JSON. Install lm-eval in a separate environment (the tokenizer requires `transformers`, not torch). Datasets are fetched from Hugging Face or a mirror (`HF_ENDPOINT`).
 
 ```bash
 PYTHONPATH=python MQDE_LM_EVAL_BIN=/path/to/envs/lmeval/bin/lm-eval python -m mqde.pipeline.llm_job \
@@ -70,35 +77,35 @@ PYTHONPATH=python MQDE_LM_EVAL_BIN=/path/to/envs/lmeval/bin/lm-eval python -m mq
   --vllm '{"gpu_memory_utilization": 0.4, "lm_eval": {"tasks": ["gsm8k"], "limit": 50, "num_fewshot": 5}}'
 ```
 
-Options under `lm_eval`: `tasks`, `limit` (default 50), `num_fewshot`, `concurrency`, `seed`, `max_gen_toks`, `max_model_len` (default 4096, because 5-shot prompts are about 1.4k tokens), `timeout`, and `baseline` (default true). With `baseline` the same run is repeated on the **unquantized** model, served the same way, and shown as the first row of the report's accuracy table; a quantized score means nothing without it. A missing `lm-eval` makes the stage `skipped`; a failing run is recorded as `failed` with the first server error, and the job still finishes.
+Options under `lm_eval`: `tasks`, `limit` (default 50), `num_fewshot`, `concurrency`, `seed`, `max_gen_toks`, `max_model_len` (default 4096), `timeout` and `baseline` (default true). With `baseline` enabled, the same evaluation is repeated on the unquantized model and appears as the first row of the accuracy table. When `lm-eval` is missing, the stage is marked `skipped`; a failed run is marked `failed` with the first server error recorded, and the job still completes.
 
-Checked on an RTX 4090 with lm-eval 0.4.13, Qwen2.5-0.5B-Instruct, gsm8k, 5-shot, 50 samples (`docs/PROGRESS.md`):
+Measurements on an RTX 4090 with lm-eval 0.4.13, Qwen2.5-0.5B-Instruct, gsm8k, 5-shot, 50 samples:
 
 | Model | strict-match | flexible-extract |
 |---|---:|---:|
-| Unquantized (fp16, vLLM) | 0.20 ± 0.057 | 0.28 ± 0.064 |
-| W4A16 GPTQ, exported as AWQ | 0.02 ± 0.020 | 0.06 ± 0.034 |
+| Unquantized (FP16, vLLM) | 0.20 ± 0.057 | 0.28 ± 0.064 |
+| W4A16 GPTQ exported as AWQ | 0.02 ± 0.020 | 0.06 ± 0.034 |
 
-The same checkpoint's PPL moved from 18.10 to 20.66. With 50 samples the standard errors are large, and the unquantized strict-match score was 0.18 in an earlier run with other server settings (one sample of 50), so read this as a clear drop on one small model, not as a precise number. Run directly with the same arguments, the official CLI gave bit-identical scores to the adapter (gsm8k, 20 samples).
+PPL for the same checkpoint changes from 18.10 to 20.66. The standard error at 50 samples is large; the result indicates a substantial degradation on a small model rather than a precise value. Running the official CLI directly with the same parameters produces identical scores.
 
-### `eval/served_ppl.py`: accuracy of the deployed model
+### `eval/served_ppl.py`: served accuracy
 
-`served_perplexity(port, ids, seq_len, max_windows)` computes PPL from the engine's own `prompt_logprobs`, with the same non-overlapping windows as the fake and real PPL, so differences isolate what the serving stack (kernels, dtype) adds. It needs an engine that returns prompt log-probabilities: vLLM does, llama-server does not.
+`served_perplexity(port, ids, seq_len, max_windows)` computes PPL from the engine's prompt log-probabilities, using the same windows as fake-quantized and real-weight PPL, so the difference reflects the inference stack (kernels, dtype). The feature requires the engine to return prompt log-probabilities: vLLM supports this, llama-server does not.
 
-### `eval/resources.py`: memory sampling
+### `eval/resources.py`: resource sampling
 
-`ResourceSampler` samples GPU memory, power and utilization every 100 ms from one long-running `nvidia-smi` process, and host memory (the server's process tree) with `ps`. GPU memory is whole-device, so the summary also reports the baseline and the peak above it. Without `nvidia-smi` the GPU part is disabled.
+`ResourceSampler` runs a persistent `nvidia-smi` process sampling GPU memory, power and utilization every 100 ms, and samples host memory (server process tree) through `ps`. GPU memory is the whole-device value, so the summary also reports the baseline and the peak above baseline. GPU sampling is disabled when `nvidia-smi` is unavailable.
 
-### `eval/boundary.py`: largest concurrency or context that is served
+### `eval/boundary.py`: maximum concurrency or context
 
-Bisection over concurrency (fixed context) or context (fixed concurrency); every probe starts a fresh backend so a crash at one point cannot poison the next, and passes only if the server started, every request succeeded and the process is alive.
+Performs a binary search over concurrency (fixed context) or context (fixed concurrency). Each probe starts a fresh backend, so a crash at one point does not affect later probes; a point passes only when the server starts successfully, all requests succeed and the process remains alive.
 
 ```bash
 PYTHONPATH=python python -m mqde.eval.boundary vllm <CHECKPOINT_DIR> --gpu 0 --max-len 1024 --lo 1 --hi 256
 ```
 
-Options: `--axis concurrency|context`, `--concurrency` (for the context axis), `--lo`, `--hi`, `--step`, `--util`, `--workdir`. It has been tested against the mock backend; **it has not yet been run against a real vLLM**, each probe costs about 30 s of startup, and the result is not yet shown next to the estimator in a report. Treat it as a tool, not a verified result.
+Options: `--axis concurrency|context`, `--concurrency` (for the context axis), `--lo`, `--hi`, `--step`, `--util`, `--workdir`.
 
-## Estimator versus measurement
+## Estimate versus measurement
 
-vLLM reported a weight memory of 0.59 GiB for Qwen2.5-0.5B FP8, equal to the estimate. Maximum concurrency used to disagree (estimate 74, vLLM 509 at 1024 context, 0.3 memory utilization) because the estimator charged activations per sequence; with the `vllm` backend profile it gives 488, 0.96 of vLLM's figure (see [Estimation](estimate.md)). Feeding measurements back into the estimator (stage S15) is planned.
+For Qwen2.5-0.5B FP8, vLLM reports 0.59 GiB of weight memory, matching the estimate. At 1024 context and 0.3 memory utilization, maximum concurrency is estimated at 74 when activations are counted per sequence, while vLLM reports 509. With the `vllm` backend profile, which counts activations per batch, the estimate is 488, or 0.96 of vLLM's value (see [Resource estimation](estimate.md)).

@@ -1,0 +1,5 @@
+# Named benchmark suites for the offline evaluator (python/mqde/eval/registry.py).
+# "quick" is what the new-job wizard selects by default; "standard" is a wider set.
+suites:
+  quick: [wikitext2_ppl, smoke_qa]
+  standard: [wikitext2_ppl, smoke_qa, smoke_mcq]

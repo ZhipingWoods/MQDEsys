@@ -3,7 +3,7 @@
 id: llm
 order: 10  # wizard tab position: LLM, VLM, VLA, WM, EWM
 display_name: LLM（纯语言模型）
-model_families: [generic_decoder]
+model_families: [decoder_llm, generic_decoder]
 applicable_recipes: []  # empty = no domain-specific restriction today; every data/recipes/*.yaml applies
 classic_algorithms:
   - name: rtn

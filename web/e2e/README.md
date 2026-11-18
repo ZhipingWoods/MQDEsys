@@ -25,4 +25,4 @@ Exit code: 0 all checks passed, 1 a check failed, 2 binary or `web/dist` missing
 
 Status: verified on macOS with Chrome (14/14, and 2 of them fail when the button is broken on purpose). The dev server has
 neither Playwright nor Chrome, so this is **not** part of `scripts/check_all.sh`; wiring it in changes the gate (L2, see
-docs/PROGRESS.md D-10).
+internal/PROGRESS.md D-10).

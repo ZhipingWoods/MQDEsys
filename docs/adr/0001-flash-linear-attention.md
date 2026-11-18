@@ -79,7 +79,7 @@ Falling back to the slow path.
 4. 重新剖析，**逐模块计时**，验证内核数量变化。
 5. 若快路径下步速 ≥15 steps/s（保守估计），将 `speed_is_upper_bound` 标志保留，
    但更新公式注释说明误差已收窄；若 ≥30 steps/s，考虑重新校准公式斜率。
-6. 更新 `docs/PROGRESS.md` 和本 ADR 状态为 Accepted/Done。
+6. 更新 `internal/PROGRESS.md` 和本 ADR 状态为 Accepted/Done。
 
 ---
 

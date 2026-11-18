@@ -75,6 +75,17 @@ TEST(hub, safetensors_group_includes_config) {
   EXPECT_EQ(g[0].files.size(), 4u);
 }
 
+TEST(hub, pytorch_and_gguf_groups_carry_sidecar_files) {
+  const auto pt = group_files({{"pytorch_model.bin", 100}, {"config.json", 1}, {"vocab.txt", 2}});
+  ASSERT_EQ(pt.size(), 1u);
+  EXPECT_EQ(pt[0].key, "pytorch");
+  EXPECT_EQ(pt[0].bytes, 103u);
+  const auto gguf = group_files({{"model-q4_k_m.gguf", 100}, {"config.json", 1}, {"tokenizer.json", 2}});
+  ASSERT_EQ(gguf.size(), 1u);
+  EXPECT_EQ(gguf[0].key, "Q4_K_M");
+  EXPECT_EQ(gguf[0].bytes, 103u);
+}
+
 TEST(hub, entry_from_hub_maps_required_fields) {
   const auto e = entry_from_hub(qwen7_info(), qwen7_config());
   EXPECT_EQ(e.name, "Qwen/Qwen2.5-7B-Instruct");

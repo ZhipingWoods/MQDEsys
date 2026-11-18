@@ -6,7 +6,7 @@ find_package(httplib REQUIRED)
 
 # ---- probe (pure C99, vendor libraries are dlopen'ed at runtime) ----
 # The HAL plugin loader (hal_loader.c) lives here too: plugin devices join the built-in ones inside mqde_probe_all().
-add_library(mqde_probe STATIC probe_c/src/probe.c probe_c/src/hal_loader.c)
+add_library(mqde_probe STATIC probe_c/src/probe.c probe_c/src/hal_loader.c probe_c/src/target.c)
 target_include_directories(mqde_probe PUBLIC probe_c/include include)
 find_package(Threads REQUIRED)
 find_package(SQLite3 REQUIRED)
@@ -25,7 +25,9 @@ if(NOT WIN32)
   mqde_add_plugin(cpu plugins/cpu/cpu.c)
   mqde_add_plugin(cuda plugins/cuda/cuda.c)
   mqde_add_plugin(rocm plugins/rocm/rocm.c)
+  mqde_add_plugin(ascend plugins/ascend/ascend.c)
   target_link_libraries(mqde_plugin_rocm PRIVATE ${CMAKE_DL_LIBS})
+  target_link_libraries(mqde_plugin_ascend PRIVATE ${CMAKE_DL_LIBS})
 endif()
 if(APPLE)
   # Metal is Objective-C and macOS only: built on the Mac, absent elsewhere.
@@ -106,7 +108,7 @@ else()
 endif()
 
 # ---- hub (Hugging Face client + model catalog) ----
-add_library(mqde_hub STATIC src/hub/hf.cpp src/hub/catalog.cpp)
+add_library(mqde_hub STATIC src/hub/hf.cpp src/hub/catalog.cpp src/hub/modelscope.cpp)
 target_link_libraries(mqde_hub PUBLIC mqde_modelspec PRIVATE httplib::httplib)
 
 # ---- planner (compatibility matrix + JobSpec validation) ----
@@ -204,6 +206,10 @@ if(MQDE_BUILD_TESTS)
     set_target_properties(fake_hip PROPERTIES PREFIX "" SUFFIX ".so" OUTPUT_NAME libamdhip64
       LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/fake_runtimes C_VISIBILITY_PRESET default)
     add_dependencies(mqde_unit_tests fake_hip)
+    add_library(fake_ascend MODULE tests/fakes/fake_ascend.c)
+    set_target_properties(fake_ascend PROPERTIES PREFIX "" SUFFIX ".so" OUTPUT_NAME libascendcl
+      LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/fake_runtimes C_VISIBILITY_PRESET default)
+    add_dependencies(mqde_unit_tests fake_ascend)
     target_compile_definitions(mqde_unit_tests PRIVATE MQDE_FAKE_RUNTIME_DIR="${CMAKE_BINARY_DIR}/fake_runtimes")
     target_compile_definitions(mqde_unit_tests PRIVATE MQDE_HAL_CASE_DIR="${MQDE_HAL_CASE_DIR}"
       MQDE_TEMPLATE_PLUGIN_DIR="${CMAKE_BINARY_DIR}/bin/plugins")

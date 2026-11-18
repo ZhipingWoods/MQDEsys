@@ -13,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ENV_NAME=${ENV_NAME:-mqde}
-ENV_FILE=${ENV_FILE:-docs/proposals/T-0006-ci/environment.ci.yml}
+ENV_FILE=${ENV_FILE:-internal/docs/proposals/T-0006-ci/environment.ci.yml}
 BUILD=${BUILD_DIR:-build/dev}
 DO_ENV=1 DO_WEB=1 CHECK=0
 for a in "$@"; do

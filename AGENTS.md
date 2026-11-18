@@ -27,8 +27,8 @@
 | 顺序 | 文档 | 什么时候读 | 你能从中得到什么 |
 |------|------|-----------|-----------------|
 | 1 | `AGENTS.md`（本文件） | 每次接手 | 规则、流程、禁止事项 |
-| 2 | [`docs/PROGRESS.md`](docs/PROGRESS.md) | 每次接手 | **当前干到哪儿了**、上一位留下的交接信息、阻塞项 |
-| 3 | [`docs/TASKS.md`](docs/TASKS.md) | 选任务时 | 全部任务、依赖、状态、验收与校验方法 |
+| 2 | [`internal/PROGRESS.md`](internal/PROGRESS.md) | 每次接手 | **当前干到哪儿了**、上一位留下的交接信息、阻塞项 |
+| 3 | [`internal/TASKS.md`](internal/TASKS.md) | 选任务时 | 全部任务、依赖、状态、验收与校验方法 |
 | 4 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 做任务前读相关章节 | 设计意图、接口、公式、数据流 |
 | 5 | [`docs/STRUCTURE.md`](docs/STRUCTURE.md) | 新增/修改文件前 | 文件放哪、谁能改、改了要谁审（L0–L3） |
 | 6 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | 第一次动手前 | 机器分工、同步、构建、测试、起服务、调试、提交自查 |
@@ -186,7 +186,7 @@ Refs: T-0208
 
 ---
 
-## 10. 交接模板（写入 docs/PROGRESS.md 顶部“会话日志”）
+## 10. 交接模板（写入 internal/PROGRESS.md 顶部“会话日志”）
 
 ```markdown
 ### YYYY-MM-DD HH:MM · @agent-name · T-xxxx <任务标题>

@@ -58,7 +58,7 @@ try {
   const link = page.locator('.nav a[href="/compare"]');
   await link.hover();
   const tip = await link.evaluate((el) => getComputedStyle(el, '::after').content);
-  check('a collapsed item names itself on hover', tip.includes('配方对比'), tip);
+  check('a collapsed item names itself on hover', tip.includes('评测结果对比'), tip);
   await link.click();
   await page.waitForURL(/\/compare$/);
   check('navigation still works from the rail', (await side.getAttribute('data-collapsed')) === '1');

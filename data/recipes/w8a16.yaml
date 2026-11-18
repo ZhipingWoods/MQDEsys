@@ -2,7 +2,7 @@ name: W8A16
 description: 8-bit integer weights (per-channel), 16-bit activations. Near-lossless reference point.
 maturity: production
 default_algorithm: rtn
-modalities: [vision, language]
+modalities: [vision, language, world]
 weight: {format: int, bits: 8, symmetric: true, granularity: per_channel, calib: minmax}
 act: {format: none}
 kv: {format: none}

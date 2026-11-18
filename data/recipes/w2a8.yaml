@@ -2,7 +2,7 @@ name: W2A8
 description: 2-bit integer weights, 8-bit integer activations (dynamic per-token). Experimental; simulation only unless a hardware plugin provides kernels.
 maturity: experimental
 default_algorithm: gptq
-modalities: [vision, language]
+modalities: [vision, language, world]
 weight: {format: int, bits: 2, symmetric: false, granularity: per_group, group_size: 64, calib: mse}
 act: {format: int, bits: 8, symmetric: true, granularity: per_token, dynamic: true}
 kv: {format: none}

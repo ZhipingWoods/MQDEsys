@@ -1,10 +1,36 @@
 # MQDEsys
 
-**MQDEsys** (Model Quantization & Deployment Evaluation System) answers one question end to end: *if I quantize this model with this recipe and deploy it on this hardware, what do I get?* You name a model, a quantization recipe (W8A16, FP8, W4A16, W4A8, W2A16, W2A8), evaluation data and target hardware; the system estimates resources, quantizes, evaluates, exports real low-bit checkpoints, serves them with an inference engine, load-tests them, and shows every step in a web UI, down to the layer that loses the most accuracy.
+**MQDEsys** (Model Quantization & Deployment Evaluation System) evaluates how a model performs under a given quantization recipe and target hardware. Given a model, a quantization recipe (W8A16, FP8, W4A16, W4A8, W2A16, W2A8), evaluation data and target hardware, the system estimates resources, quantizes, evaluates, exports real low-bit checkpoints, serves them with an inference engine and runs load tests. The web UI presents the complete process, down to the layer with the largest accuracy loss.
 
 ```{note}
-MQDEsys is under active development. Every page marks what is **implemented**, **partial** or **planned**; the [Status & roadmap](status.md) page lists all tasks. Numbers in these docs come from real runs recorded in the repository (`docs/PROGRESS.md`) or in the web UI, and the model used is almost always Qwen2.5-0.5B-Instruct.
+This documentation describes the architecture, interfaces and usage of the current MQDEsys release. The models, configurations and evaluation data in the examples illustrate typical workflows; replace them with the target model, dataset and hardware in production.
 ```
+
+## UI preview
+
+::::{grid} 1 2 2 2
+:gutter: 2
+
+:::{grid-item-card} Jobs and execution
+:img-top: ../_shared/img/ui-jobs.png
+Full, quantize-only, evaluate-only and deploy jobs in one list, with mode, stage and progress visible.
+:::
+
+:::{grid-item-card} Job detail
+:img-top: ../_shared/img/ui-job-llm.png
+Progress ring, stage pipeline, live log, metrics and per-recipe error analysis.
+:::
+
+:::{grid-item-card} Hardware and backends
+:img-top: ../_shared/img/ui-hardware.png
+Backend environments, target-device probes, capability lines and grouped hardware profiles.
+:::
+
+:::{grid-item-card} Evaluate-only job
+:img-top: ../_shared/img/ui-new-eval.png
+Checkpoint, datasets and run settings in three blocks; advanced options folded away.
+:::
+::::
 
 ::::{grid} 1 2 2 3
 :gutter: 2
@@ -44,6 +70,12 @@ llama.cpp (CPU and Metal), vLLM, load tests, served PPL, OOM boundary search.
 :link-type: doc
 A tour of every page, plus the HTTP API behind it.
 :::
+
+:::{grid-item-card} Dataset evaluation
+:link: user_guides/evaluation
+:link-type: doc
+Offline PPL / QA / MCQ, the 144-dataset EvalScope catalogue, metrics and reports.
+:::
 ::::
 
 ```{toctree}
@@ -61,6 +93,7 @@ get_started/quickstart
 
 user_guides/estimate
 user_guides/quantization
+user_guides/evaluation
 user_guides/job_spec
 user_guides/export
 user_guides/deploy_benchmark
@@ -82,5 +115,4 @@ advanced/testing
 :caption: Reference
 
 faq
-status
 ```

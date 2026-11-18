@@ -25,6 +25,7 @@
 #include "mqde/hal/mqde_hal.h"
 #include "mqde/hub/catalog.h"
 #include "mqde/hub/hf.h"
+#include "mqde/hub/modelscope.h"
 #include "mqde/planner/validate.h"
 #include "mqde/quant/metrics.h"
 #include "mqde/quant/ops.h"
@@ -61,7 +62,9 @@ std::optional<Json> parse_body(const httplib::Request& req, httplib::Response& r
 
 bool path_allowed(const std::vector<std::string>& roots, const std::string& p) {
   // Built-in datasets resolved by the executor from the local HF cache (not filesystem paths).
-  if (p == "synthetic" || p == "wikitext-2-raw-v1:train" || p == "wikitext-2-raw-v1:test") return true;
+  if (p == "synthetic" || p == "synthetic-video" || p == "wikitext-2-raw-v1:train" ||
+      p == "wikitext-2-raw-v1:test")
+    return true;
   std::error_code ec;
   const auto canon = fs::weakly_canonical(p, ec).string();
   if (ec) return false;
@@ -102,6 +105,14 @@ Json summarize_events(const fs::path& p) {
       const auto type = ev.value("type", "");
       if (type == "job_state") s["state"] = ev.value("state", "UNKNOWN");
       if (type == "stage_started") s["stage"] = ev.value("stage", "");
+      if (type == "progress") {
+        s["progress"] = ev.value("value", 0.0);
+        s["progress_msg"] = ev.value("msg", "");
+      }
+      if (type == "trace") {
+        s["trace_index"] = ev.value("index", 0);
+        s["trace_total"] = ev.value("total", 0);
+      }
       if (n == 1) s["started_ts"] = ev.value("ts", 0.0);
       s["last_ts"] = ev.value("ts", 0.0);
     } catch (...) {
@@ -317,6 +328,10 @@ Result<void> serve(const ServerOptions& o) {
                   {"driver_version", devs[i].driver_version}};
         if (devs[i].kind == MQDE_DEV_GPU)
           if (auto hw = estimator::match_hardware(devs[i].name)) d["profile"] = hw->id;
+        mqde_target t{};
+        char target[64];
+        if (mqde_target_for_device(&devs[i], &t) == 0 && mqde_target_format(&t, target, sizeof target) == 0)
+          d["target"] = target;
         arr.push_back(d);
       }
     send_json(res, {{"devices", arr}, {"job_gpus", runner.gpu_status()}});
@@ -430,6 +445,24 @@ Result<void> serve(const ServerOptions& o) {
     auto a = load_algorithms();
     if (!a) return send_error(res, a.error());
     send_json(res, *a);
+  });
+  // Offline evaluation catalog (data/datasets/benchmarks.yaml + eval_suites.yaml). eval_job.py is the
+  // authority for scoring; this endpoint lets the wizard/CLI discover the same names without importing it.
+  svr.Get("/api/v1/benchmarks", [](const httplib::Request&, httplib::Response& res) {
+    auto b = load_structured_file(data_dir() / "datasets" / "benchmarks.yaml");
+    auto s = load_structured_file(data_dir() / "datasets" / "eval_suites.yaml");
+    auto ext = load_structured_file(data_dir() / "datasets" / "evalscope_catalog.yaml");
+    auto nat = load_structured_file(data_dir() / "datasets" / "native_benchmarks.yaml");
+    if (!b) return send_error(res, b.error());
+    Json suites = s ? s->value("suites", Json::object()) : Json::object();
+    // `evalscope` is metadata for the external CLI's datasets: the wizard uses it for the grouped
+    // dropdown, but only `benchmarks` (runner=offline) can be scored without a serving backend.
+    Json external = ext ? ext->value("datasets", Json::array()) : Json::array();
+    send_json(res, {{"benchmarks", b->value("benchmarks", Json::array())},
+                    {"suites", suites},
+                    {"native", nat ? nat->value("benchmarks", Json::array()) : Json::array()},
+                    {"evalscope", external},
+                    {"evalscope_source", ext ? ext->value("source", "evalscope") : "evalscope"}});
   });
   svr.Get("/api/v1/config", [&](const httplib::Request&, httplib::Response& res) {
     send_json(res, {{"allowed_roots", o.allowed_roots},
@@ -666,12 +699,14 @@ Result<void> serve(const ServerOptions& o) {
     const auto path = req.get_param_value("path");
     const auto kind = req.has_param("kind") ? req.get_param_value("kind") : std::string("text");
     if (path.empty()) return send_error(res, 400, "invalid_argument", "path is required");
-    if (kind != "text" && kind != "lerobot")
-      return send_error(res, 400, "invalid_argument", "kind must be 'text' or 'lerobot'");
+    if (kind != "text" && kind != "lerobot" && kind != "world")
+      return send_error(res, 400, "invalid_argument", "kind must be 'text', 'lerobot' or 'world'");
     if (is_builtin_dataset(path)) return send_json(res, {{"builtin", true}, {"id", path}, {"usable", true}});
     if (!path_allowed(o.allowed_roots, path))
       return send_error(res, 403, "forbidden", "path is outside allowed roots (--allow)");
-    send_json(res, to_json(kind == "lerobot" ? inspect_lerobot_dataset(path) : inspect_text_dataset(path)));
+    send_json(res, to_json(kind == "lerobot" ? inspect_lerobot_dataset(path)
+                                             : kind == "world" ? inspect_world_dataset(path)
+                                                               : inspect_text_dataset(path)));
   });
 
   svr.Get("/api/v1/gguf", [&](const httplib::Request&, httplib::Response& res) {
@@ -1140,10 +1175,21 @@ Result<void> serve(const ServerOptions& o) {
     const std::string q = req.get_param_value("q");
     if (q.empty()) return send_error(res, 400, "invalid_argument", "q is required");
     const std::string limit = req.has_param("limit") ? req.get_param_value("limit") : "20";
-    auto l =
-        hub::list_models({}, "search=" + hub::url_encode(q) + "&limit=" + std::to_string(std::stoi(limit)) +
-                                 "&sort=downloads&direction=-1&expand[]=safetensors&expand[]=downloads"
-                                 "&expand[]=likes&expand[]=pipeline_tag&expand[]=author");
+    const std::string query =
+        "search=" + hub::url_encode(q) + "&limit=" + std::to_string(std::stoi(limit)) +
+        "&sort=downloads&direction=-1&expand[]=safetensors&expand[]=downloads"
+        "&expand[]=likes&expand[]=pipeline_tag&expand[]=author";
+    hub::HfOptions primary;
+    primary.timeout_s = 2;  // fail over to the mirror quickly; the mirror request gives the real diagnosis
+    auto l = hub::list_models(primary, query);
+    if (!l) {
+      if (const auto alt = hub::fallback_endpoint(); !alt.empty()) {
+        hub::HfOptions o;
+        o.endpoint = alt;
+        o.timeout_s = 15;
+        l = hub::list_models(o, query);
+      }
+    }
     if (!l) return send_error(res, l.error());
     Json arr = Json::array();
     for (const auto& m : *l)
@@ -1158,9 +1204,41 @@ Result<void> serve(const ServerOptions& o) {
     send_json(res, {{"models", arr}});
   });
 
+  // ModelScope live search. Its OpenAPI response uses PascalCase-free fields but the same information
+  // the HF search returns, so the model-library tab can reuse one renderer.
+  svr.Get("/api/v1/modelscope/search", [](const httplib::Request& req, httplib::Response& res) {
+    const std::string q = req.get_param_value("q");
+    if (q.empty()) return send_error(res, 400, "invalid_argument", "q is required");
+    int limit = 20;
+    try {
+      limit = std::stoi(req.has_param("limit") ? req.get_param_value("limit") : "20");
+    } catch (...) {
+      return send_error(res, 400, "invalid_argument", "limit must be an integer");
+    }
+    auto r = hub::modelscope_search(hub::default_modelscope_options(), q, limit);
+    if (!r) return send_error(res, r.error());
+    Json arr = Json::array();
+    for (const auto& m : (*r)["models"]) {
+      const std::string id = m.value("id", "");
+      const auto slash = id.find('/');
+      const auto tasks = m.value("tasks", std::vector<std::string>{});
+      arr.push_back({{"name", id},
+                     {"provider", slash == std::string::npos ? "" : id.substr(0, slash)},
+                     {"display_name", m.value("display_name", id)},
+                     {"pipeline_tag", tasks.empty() ? "" : tasks.front()},
+                     {"downloads", m.value("downloads", int64_t{0})},
+                     {"likes", m.value("likes", int64_t{0})},
+                     {"parameters_raw", m.value("params", int64_t{0})},
+                     {"license", m.value("license", "")},
+                     {"file_size", m.value("file_size", int64_t{0})},
+                     {"gated", m.value("gated", false)}});
+    }
+    send_json(res, {{"models", arr}, {"total", (*r).value("total_count", int64_t{0})}});
+  });
+
   // Written by the download thread, read by status handlers: counters are atomic, state/error under `m`.
   struct Download {
-    std::string id, repo, group, dir;  // immutable after creation
+    std::string id, repo, provider, group, dir, endpoint;  // immutable after creation
     uint64_t total = 0;
     size_t files_total = 0;
     std::atomic<uint64_t> done{0};
@@ -1180,6 +1258,8 @@ Result<void> serve(const ServerOptions& o) {
     std::lock_guard lk(d.m);
     return Json{{"id", d.id},
                 {"repo", d.repo},
+                {"provider", d.provider},
+                {"endpoint", d.endpoint},
                 {"group", d.group},
                 {"dir", d.dir},
                 {"state", d.state},
@@ -1190,41 +1270,57 @@ Result<void> serve(const ServerOptions& o) {
                 {"files_total", d.files_total}};
   };
 
-  svr.Post("/api/v1/download", [&](const httplib::Request& req, httplib::Response& res) {
-    auto body = parse_body(req, res);
-    if (!body) return;
-    std::string repo = body->value("model", "");
+  auto start_download = [&](const Json& body, std::string provider, httplib::Response& res) {
+    std::string repo = body.value("model", "");
     if (repo.starts_with("hf:")) repo = repo.substr(3);
+    if (repo.starts_with("ms:")) repo = repo.substr(3);
     static const std::regex repo_re(R"(^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$)");
     if (!std::regex_match(repo, repo_re))
       return send_error(res, 400, "invalid_argument", "model must be <org>/<name>");
     if (o.allowed_roots.empty())
       return send_error(res, 403, "forbidden", "server has no --allow root to download into");
-    const std::string out_root = body->value("output_dir", o.allowed_roots.front());
+    const std::string out_root = body.value("output_dir", o.allowed_roots.front());
     if (!path_allowed(o.allowed_roots, out_root))
       return send_error(res, 403, "forbidden", "output_dir is outside allowed roots");
-    auto files = hub::list_files({}, repo);
+    const bool ms = provider == "modelscope";
+    hub::HfOptions dl_opts{};
+    dl_opts.timeout_s = 3;
+    auto files = ms ? hub::modelscope_list_files(hub::default_modelscope_options(), repo) : hub::list_files(dl_opts, repo);
+    if (!ms && !files) {
+      if (const auto alt = hub::fallback_endpoint(); !alt.empty()) {
+        hub::HfOptions o;
+        o.endpoint = alt;
+        o.timeout_s = 15;
+        auto mirrored = hub::list_files(o, repo);
+        if (mirrored) {
+          files = std::move(mirrored);
+          dl_opts = o;
+        }
+      }
+    }
     if (!files) return send_error(res, files.error());
     const auto groups = hub::group_files(*files);
     uint64_t budget = 0;
-    if (const auto b = body->value("budget", ""); !b.empty()) {
+    if (const auto b = body.value("budget", ""); !b.empty()) {
       auto p = hub::parse_size(b);
       if (!p) return send_error(res, 400, "invalid_argument", "bad budget '" + b + "'");
       budget = *p;
     }
-    const auto g = hub::choose_group(groups, budget, body->value("quant", ""));
+    const auto g = hub::choose_group(groups, budget, body.value("quant", ""));
     if (!g)
       return send_error(res, 404, "not_found", "no downloadable weights (or requested quant) in " + repo);
-    if (body->value("list", false)) {
+    if (body.value("list", false)) {
       Json arr = Json::array();
       for (const auto& x : groups)
         arr.push_back(
             {{"group", x.key}, {"bytes", x.bytes}, {"files", x.files.size()}, {"quality", x.quality}});
-      return send_json(res, {{"groups", arr}, {"chosen", g->key}});
+      return send_json(res, {{"groups", arr}, {"chosen", g->key}, {"provider", provider}});
     }
     auto d = std::make_shared<Download>();
     d->id = fmt::format("dl-{}", std::chrono::steady_clock::now().time_since_epoch().count());
     d->repo = repo;
+    d->provider = provider;
+    d->endpoint = ms ? hub::default_modelscope_options().endpoint : dl_opts.endpoint;
     d->group = g->key;
     d->dir = (std::filesystem::path(out_root) / repo.substr(repo.find('/') + 1)).string();
     d->total = g->bytes;
@@ -1233,17 +1329,36 @@ Result<void> serve(const ServerOptions& o) {
       std::lock_guard lk(dl_mu);
       downloads[d->id] = d;
     }
-    std::thread([d, files = g->files] {
+    std::thread([d, files = g->files, ms, dl_opts] {
       d->set("running");
-      constexpr int kDownloadChunks = 4;  // download_file_chunked falls back to a single stream on its own
-                                          // for small files or a server that does not support Range
+      const hub::HfOptions file_opts =
+          ms ? hub::modelscope_hf_options(hub::default_modelscope_options()) : dl_opts;
+      // Listing can fail over quickly; actual file transfers need the normal long read timeout.
+      hub::HfOptions transfer_opts = file_opts;
+      transfer_opts.timeout_s = 120;
+      // ModelScope's default branch is "master", while the shared downloader defaults to "main".
+      const std::string dl_repo = ms ? d->repo + "@master" : d->repo;
+      // Download chunks: four parallel ranges on Hugging Face; ModelScope's CDN can close
+      // concurrent range connections even though it advertises Range support, so use one stream.
+      const int download_chunks = ms ? 1 : 4;
       for (const auto& f : files) {
         const uint64_t base = d->done.load();
-        auto r = hub::download_file_chunked({}, d->repo, f.path, std::filesystem::path(d->dir) / f.path,
-                                            kDownloadChunks, [&](uint64_t cur, uint64_t) {
+        auto r = hub::download_file_chunked(transfer_opts, dl_repo, f.path, std::filesystem::path(d->dir) / f.path,
+                                            download_chunks, [&](uint64_t cur, uint64_t) {
                                               d->done = base + cur;
                                               return !d->cancel.load();
                                             });
+        if (!r && !ms) {
+          if (const auto alt = hub::fallback_endpoint(); !alt.empty() && alt != transfer_opts.endpoint) {
+            auto mirrored_opts = transfer_opts;
+            mirrored_opts.endpoint = alt;
+            r = hub::download_file_chunked(mirrored_opts, dl_repo, f.path, std::filesystem::path(d->dir) / f.path,
+                                            download_chunks, [&](uint64_t cur, uint64_t) {
+                                              d->done = base + cur;
+                                              return !d->cancel.load();
+                                            });
+          }
+        }
         if (!r) return d->set(d->cancel ? "cancelled" : "failed", r.error().message);
         d->done = base + *r;
         ++d->files_done;
@@ -1251,6 +1366,16 @@ Result<void> serve(const ServerOptions& o) {
       d->set("succeeded");
     }).detach();
     send_json(res, dl_json(*d), 202);
+  };
+  svr.Post("/api/v1/download", [&](const httplib::Request& req, httplib::Response& res) {
+    auto body = parse_body(req, res);
+    if (!body) return;
+    start_download(*body, "hf", res);
+  });
+  svr.Post("/api/v1/modelscope/download", [&](const httplib::Request& req, httplib::Response& res) {
+    auto body = parse_body(req, res);
+    if (!body) return;
+    start_download(*body, "modelscope", res);
   });
 
   svr.Get(R"(/api/v1/download/([A-Za-z0-9-]+)/status)",
@@ -1316,8 +1441,15 @@ Result<void> serve(const ServerOptions& o) {
     if (!body) return;
     Json job = *body;
     const auto model = job.value("/model/path"_json_pointer, "");
-    if (!path_allowed(o.allowed_roots, model))
+    if (!model.empty() && !path_allowed(o.allowed_roots, model))
       return send_error(res, 403, "forbidden", "model path is outside allowed roots");
+    const auto quantized = job.contains("model") && job["model"].is_object() &&
+                                   job["model"].contains("quantized_path") &&
+                                   job["model"]["quantized_path"].is_string()
+                               ? job["model"]["quantized_path"].get<std::string>()
+                               : std::string();
+    if (!quantized.empty() && !path_allowed(o.allowed_roots, quantized))
+      return send_error(res, 403, "forbidden", "model.quantized_path is outside allowed roots");
     for (const char* ptr : {"/calibration/dataset", "/evaluation/dataset"}) {
       const auto ds = job.value(Json::json_pointer(ptr), std::string("synthetic"));
       if (!path_allowed(o.allowed_roots, ds))
@@ -1351,27 +1483,34 @@ Result<void> serve(const ServerOptions& o) {
     // Built-ins (synthetic, wikitext-2) are resolved by the executor itself and are not checked here.
     {
       Json bad = Json::array();
-      auto check = [&](const char* field, const char* ptr, bool lerobot) {
+      auto check = [&](const char* field, const char* ptr, int kind) {
         const auto v = job.value(Json::json_pointer(ptr), Json());
         if (!v.is_string() || v.get<std::string>().empty() || is_builtin_dataset(v.get<std::string>()))
           return;
         const auto path = v.get<std::string>();
-        const auto info = lerobot ? inspect_lerobot_dataset(path) : inspect_text_dataset(path);
+        const auto info = kind == 1 ? inspect_lerobot_dataset(path)
+                                    : kind == 2 ? inspect_world_dataset(path)
+                                                : inspect_text_dataset(path);
         if (!info.usable)
           bad.push_back({{"field", field},
                          {"message", fmt::format("{}: {}", path, info.reason)},
-                         {"suggestion", lerobot ? "use 'synthetic' or a LeRobot v3 directory"
-                                                : "name a text file (.txt .md .jsonl .json .parquet) or a "
-                                                  "directory of them, or use the built-in wikitext-2"}});
+                         {"suggestion", kind == 1 ? "use 'synthetic' or a LeRobot v3 directory"
+                                          : kind == 2 ? "use 'synthetic-video' or a directory of .npz clips"
+                                                      : "name a text file (.txt .md .jsonl .json .parquet) or a "
+                                                        "directory of them, or use the built-in wikitext-2"}});
       };
       const auto mt = job.value("/model/type"_json_pointer, std::string());
       if (mt == "llm") {
-        check("calibration.dataset", "/calibration/dataset", false);
-        check("evaluation.dataset", "/evaluation/dataset", false);
+        check("calibration.dataset", "/calibration/dataset", 0);
+        check("evaluation.dataset", "/evaluation/dataset", 0);
       }
       if (mt == "vla" || mt == "vlm") {
-        check("calibration.dataset", "/calibration/dataset", true);
-        check("evaluation.dataset", "/evaluation/dataset", true);
+        check("calibration.dataset", "/calibration/dataset", 1);
+        check("evaluation.dataset", "/evaluation/dataset", 1);
+      }
+      if (mt == "world" || mt == "ewm") {
+        check("calibration.dataset", "/calibration/dataset", 2);
+        check("evaluation.dataset", "/evaluation/dataset", 2);
       }
       if (!bad.empty()) {
         std::vector<std::string> lines;
@@ -1418,7 +1557,8 @@ Result<void> serve(const ServerOptions& o) {
       const Json jy = spec_yaml ? *spec_yaml : Json::object();
       // report.kind is written by llm_job; job.yaml carries model.type for server-submitted jobs; else VLA
       const auto rep_kind = rep.is_object() ? rep.value("kind", "") : std::string();
-      j["kind"] = rep_kind == "llm" || rep_kind == "vlm" || rep_kind == "llm_deploy"
+      j["kind"] = rep_kind == "llm" || rep_kind == "vlm" || rep_kind == "world" || rep_kind == "ewm" ||
+                          rep_kind == "llm_deploy"
                       ? rep_kind
                       : jy.value("/model/type"_json_pointer, std::string("vla"));
       j["device"] =
@@ -1441,6 +1581,12 @@ Result<void> serve(const ServerOptions& o) {
       }
       if (const auto pj = jy.value("/metadata/parent_job"_json_pointer, std::string()); !pj.empty())
         j["parent_job"] = pj;
+      // Explicit stage list makes the "only quantize / only evaluate / full pipeline" mode
+      // visible in the list without opening the job.
+      if (rep.is_object())
+        j["stages"] = rep.value("/spec/stages"_json_pointer, Json::array());
+      else
+        j["stages"] = jy.value("/stages"_json_pointer, Json::array());
       arr.push_back(j);
     }
     std::sort(arr.begin(), arr.end(), [](const Json& a, const Json& b) { return a["job_id"] > b["job_id"]; });

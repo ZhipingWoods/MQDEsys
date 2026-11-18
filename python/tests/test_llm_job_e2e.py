@@ -79,6 +79,21 @@ def test_quantize_only_skips_every_eval_export_and_deploy_stage(job_env: None, t
                           "real_check", "eval_real", "deploy_llamacpp", "lm_eval_baseline"):
         assert skipped_stage not in stages, f"{skipped_stage} ran despite quantize_only"
     assert stages == ["validate", "inspect", "calib_prepare", "quantize", "report"]
+
+
+def test_quantize_and_export_without_evaluating_writes_a_reusable_checkpoint(job_env: None, tmp_path: Path) -> None:
+    job = LLMJob(spec(tmp_path, stages=["quantize", "export"], export=["awq"]), job_dir=tmp_path / "j")
+    rep = job.run()
+    assert "error" not in rep
+    assert rep["plan"] == ["quantize", "export"]
+    stages = [s["stage"] for s in rep["stages"]]
+    for skipped in ("eval_baseline", "eval_fake_wo_kv", "eval_real", "deploy_llamacpp"):
+        assert skipped not in stages, f"{skipped} ran without an evaluate stage"
+    assert "eval" not in rep["data"]
+    ex = rep["recipes"]["W4A16"]["export"]["awq"]
+    assert ex["status"] == "exported"
+    assert ex["real_ppl"] is None and ex["real_vs_fake_ppl_pct"] is None
+    assert (tmp_path / "j" / "export" / "w4a16-awq" / "config.json").is_file()
     assert "baseline" not in rep
     assert "llamacpp" not in rep
     r = rep["recipes"]["W4A16"]
@@ -86,7 +101,7 @@ def test_quantize_only_skips_every_eval_export_and_deploy_stage(job_env: None, t
     assert r["eval"] == {}
     assert r["summary"]["ppl"] is None and r["summary"]["ppl_delta_pct"] is None
     assert r["summary"]["worst_layers"], "worst_layers still comes from the quantize-time trace, not an eval stage"
-    assert "export" not in r and "sensitivity" not in r
+    assert "export" in r and "sensitivity" not in r
 
 
 def test_quantize_only_still_quantizes_multiple_recipes(job_env: None, tmp_path: Path) -> None:
@@ -95,6 +110,17 @@ def test_quantize_only_still_quantizes_multiple_recipes(job_env: None, tmp_path:
     assert set(rep["recipes"]) == {"W4A16", "W2A16"}
     for r in rep["recipes"].values():
         assert r["layers"] and r["eval"] == {}
+
+
+def test_hqq_runs_through_the_real_blockwise_job_for_a_two_bit_recipe(job_env: None, tmp_path: Path) -> None:
+    job = LLMJob(spec(tmp_path, recipes=["w2a16"], algorithm="hqq", stages=["quantize"]), job_dir=tmp_path / "j")
+    rep = job.run()
+    assert "error" not in rep
+    r = rep["recipes"]["W2A16"]
+    assert r["algorithm"] == "hqq"
+    assert r["layers"] and all(layer["algorithm"] == "hqq" for layer in r["layers"])
+    assert r["summary"]["ppl"] is None  # quantize-only: no evaluation was requested
+    assert all(layer["w_sqnr_db"] is not None for layer in r["layers"])
 
 
 def test_from_yaml_parses_quant_device_and_eval_device_with_deploy_device_as_fallback(tmp_path: Path) -> None:
@@ -171,6 +197,29 @@ def test_sglang_stage_serves_smokes_loads_and_scores_through_the_mock(job_env: N
     assert r["served_vs_real_ppl_pct"] == pytest.approx(100 * (math.exp(1.5) / 4.0 - 1))
     assert r["engine"]["kv_cache_tokens"] == 12345 and r["load"]["ok"] == 4
     assert "--model-path" in r["args"] and str(ckpt) in r["args"]
+
+
+def test_sglang_can_run_lm_eval_on_the_same_served_checkpoint(job_env: None, tmp_path: Path,
+                                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    sys.path.insert(0, str(Path(__file__).parent))
+    import mock_backend
+
+    monkeypatch.setenv("MQDE_SGLANG_PYTHON", str(mock_backend.wrapper(tmp_path, "python")))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    ckpt = tmp_path / "ckpt-awq"
+    ckpt.mkdir()
+    job = LLMJob(spec(tmp_path, sglang={"requests": 2, "concurrency": 1, "prompt_len": 16, "n_predict": 2,
+                                        "lm_eval": {"tasks": ["gsm8k"], "limit": 2}}), job_dir=tmp_path / "j")
+    seen: dict[str, object] = {}
+
+    def fake_lm_eval(port: int, model_dir: Path, out_dir: Path, cfg: dict, served_name: str) -> dict:
+        seen.update(port=port, model_dir=model_dir, cfg=cfg, served_name=served_name)
+        return {"status": "succeeded", "tasks": {"gsm8k": {"metrics": {}}}}
+
+    monkeypatch.setattr(job, "_lm_eval", fake_lm_eval)
+    r = job._sglang_serve(ckpt, torch.arange(1000, 1000 + 4 * 64), 4.0)
+    assert r["status"] == "succeeded" and r["lm_eval"]["status"] == "succeeded"
+    assert seen["model_dir"] == ckpt and seen["cfg"]["tasks"] == ["gsm8k"]
 
 
 def test_group_size_override_applies_to_per_group_recipes_and_is_a_logged_noop_for_others(job_env: None, tmp_path: Path) -> None:
@@ -300,6 +349,8 @@ def test_baseline_lm_eval_is_on_by_default_and_can_be_switched_off() -> None:
     assert not wants_lm_eval_baseline(None) and not wants_lm_eval_baseline({}) and not wants_lm_eval_baseline({"lm_eval": None})
     assert wants_lm_eval_baseline({"lm_eval": {"tasks": ["gsm8k"]}})
     assert not wants_lm_eval_baseline({"lm_eval": {"tasks": ["gsm8k"], "baseline": False}})
+    assert wants_lm_eval_baseline(None, {"lm_eval": {"tasks": ["gsm8k"]}})
+    assert not wants_lm_eval_baseline(None, {"lm_eval": {"tasks": ["gsm8k"], "baseline": False}})
 
 
 def test_layers_carry_weight_and_activation_distributions(job_env: None, tmp_path: Path) -> None:

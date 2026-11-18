@@ -88,6 +88,11 @@
   - 自定义 JSONL：格式与 evalscope 的 general_qa / general_mcq 相同。
 - **Perf**：参数与指标名照搬（`parallel, number, rate, TTFT, TPOT, ITL, Latency, Output/Total Throughput` 及 p50/p90/p99）。并发扫描的子目录命名为 `parallel_{p}_number_{n}`。输出 `benchmark_summary.json` 和 `benchmark_percentile.json`。
 - **UI**：Dashboard / Reports（Overview、Details、Predictions 逐样本）/ Compare（模型 × benchmark 矩阵）/ Perf 报告。
+- **数据集目录（2026-11-16 对齐）**：`scripts/gen_evalscope_catalog.py` 从 evalscope 的
+  `docs/zh/get_started/supported_dataset/llm.md` 抽取名称、显示名、标签与文档链接，生成
+  `data/datasets/evalscope_catalog.yaml`。`GET /api/v1/benchmarks` 同时返回本系统的离线
+  benchmark 和这份外部目录；前端用“套件 → 类别 → 数据集”的下拉列表选择，并明确标记
+  `offline: false` 的条目仍需 EvalScope + 已部署服务。
 
 ## 5. FlagTree → 多硬件部署（`hal`）
 

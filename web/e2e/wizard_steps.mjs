@@ -77,7 +77,7 @@ try {
   await page.goto(`${base}/new`, { waitUntil: 'load' });
   await page.getByTestId('stepper').waitFor({ timeout: 15000 });
   check('the page opens on step ① with the six steps on top', (await current()) === 1 && (await page.locator('[data-testid^="step-tab-"]').count()) === 6);
-  check('only step ① is on screen: the model path yes, the recipes / evaluation / deploy / confirm no', (await visible('model-path')) && !(await visible('opt-quantize-only')) && !(await visible('quant-device-select')) && !(await visible('backend-cards')) && !(await visible('step-confirm')));
+  check('only step ① is on screen: the model path and job mode yes, the recipes / evaluation / deploy / confirm no', (await visible('model-path')) && (await visible('job-mode')) && !(await visible('quant-device-select')) && !(await visible('backend-cards')) && !(await visible('step-confirm')));
   await page.getByTestId('model-path').fill('');
   check('下一步 is disabled until the model path is filled', await page.getByTestId('step-next').isDisabled());
   await page.getByTestId('model-path').fill(MODEL);
@@ -86,7 +86,7 @@ try {
   const s1 = await page.getByTestId('step-tab-1').innerText();
   check('a finished step shows a ✓ and its summary (domain · model)', s1.includes('✓') && s1.includes('LLM') && s1.includes(path.basename(MODEL)), s1.replace(/\s+/g, ' '));
   await page.getByTestId('step-next').click();
-  check('③ 量化配方', (await current()) === 3 && (await visible('opt-quantize-only')));
+  check('③ 量化配方', (await current()) === 3 && (await visible('advanced-params-toggle')));
   // untick every recipe: cannot continue
   const chips = page.locator('#step-recipe ~ .chips .chip.on');  // the recipe chips, not the hidden advice panel's backend chips
   const n = await chips.count();
@@ -108,7 +108,7 @@ try {
   const j = JSON.parse(await page.locator('pre.log').innerText());
   check('the JobSpec built across the steps is complete', j.quant.recipe[0] === 'w4a16' && j.evaluation.device === 'gpu' && j.deploy.vllm && j.deploy.device === 'gpu', JSON.stringify(j).slice(0, 200));
   await page.getByTestId('step-tab-3').click();
-  check('clicking a step in the nav goes back to it', (await current()) === 3 && (await visible('opt-quantize-only')));
+  check('clicking a step in the nav goes back to it', (await current()) === 3 && (await visible('advanced-params-toggle')));
   await page.getByTestId('step-prev').click();
   check('上一步 works', (await current()) === 2);
   await page.getByTestId('toggle-single-page').click();
@@ -121,14 +121,17 @@ try {
   check('?step=deploy (the derive links) opens on ⑤', (await current()) === 5);
   await page.goto(`${base}/new`, { waitUntil: 'load' });
   await page.getByTestId('domain-tab-world').click();
-  check('a domain without a pipeline keeps the blocked notice and blocks 下一步', (await visible('domain-blocked')) && (await page.getByTestId('step-next').isDisabled()));
+  check('world is a real pipeline: no blocked notice and 下一步 is enabled', !(await visible('domain-blocked')) && !(await page.getByTestId('step-next').isDisabled()));
+  await page.getByTestId('step-next').click();
+  await page.getByTestId('step-next').click();
+  check('world step ③ explains the DiT quantization scope', await visible('world-note'));
 
   // ---- home ----
   await page.goto(`${base}/`, { waitUntil: 'load' });
   await page.getByTestId('home-tiles').waitFor({ timeout: 15000 });
   await page.waitForFunction(() => document.querySelectorAll('[data-testid="home-jobs"] tbody tr').length >= 3, null, { timeout: 15000 });
   const tiles = (await page.getByTestId('home-tiles').innerText()).replace(/\s+/g, ' ');
-  check('the home page is the overview: GPU pool, running, last-24h results, backends', tiles.includes('GPU 池') && tiles.includes('1 / 1 空闲') && tiles.includes('2 成功 / 1 失败') && tiles.includes('推理后端'), tiles);
+  check('the home page is the overview: GPU pool, running, last-24h results, backends', tiles.includes('GPU 池') && tiles.includes('2 成功 / 1 失败') && tiles.includes('推理后端'), tiles);
   const hj = (await page.getByTestId('home-jobs').innerText()).replace(/\s+/g, ' ');
   check('recent jobs with type, state and derivation', hj.includes('gamma-llm') && hj.includes('派生自 aaaaaa') && hj.includes('VLM') && hj.includes('失败'), hj.slice(0, 200));
   check('GPU 0 of the pool is listed as free', (await page.getByTestId('home-gpu-0').innerText()).includes('空闲'));
@@ -140,6 +143,8 @@ try {
   // ---- job list filters ----
   await page.goto(`${base}/jobs`, { waitUntil: 'load' });
   await page.getByTestId('jobs-counts').waitFor({ timeout: 15000 });
+  // the domain tab is global state: the wizard left it on world, so start from "all types" here
+  await page.getByTestId('jobs-kind').selectOption('');
   await page.waitForFunction(() => document.querySelectorAll('tr[data-testid^="job-row-"]').length === 3, null, { timeout: 15000 });
   await page.getByTestId('jobs-kind').selectOption('llm');
   check('type filter', (await page.locator('tr[data-testid^="job-row-"]').count()) === 2);

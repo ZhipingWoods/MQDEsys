@@ -17,7 +17,7 @@ T-0609 要求把 GPTQModel 和/或 llm-compressor 包装成一个注册算法（
 
 现状（2026-10-10）：
 
-- 本项目**已经有自研、已验证的 GPTQ 和 AWQ 实现**（`python/mqde/quant/algorithms.py`，T-0601/T-0602，DONE），在真实模型（Qwen2.5-0.5B 等）上跑通并导出部署过（见 `docs/PROGRESS.md` 多条记录）。T-0609 不是"缺少 GPTQ 能力"，而是"想要一个独立实现做交叉验证/信任背书"。
+- 本项目**已经有自研、已验证的 GPTQ 和 AWQ 实现**（`python/mqde/quant/algorithms.py`，T-0601/T-0602，DONE），在真实模型（Qwen2.5-0.5B 等）上跑通并导出部署过（见 `internal/PROGRESS.md` 多条记录）。T-0609 不是"缺少 GPTQ 能力"，而是"想要一个独立实现做交叉验证/信任背书"。
 - `3rdpart/GPTQModel` 已经作为**只读参考源码的 git 子模块**存在（仅供照抄结构/公式用，见 `docs/REFERENCES.md` §2），从未作为运行时依赖被 import 过。这次要讨论的是另一件事：把它（或 llm-compressor）变成一个**真正在 `mqde` 环境里跑起来的 Python 依赖**。
 - 本项目已经有过一次几乎相同形状的决策（ADR-0002，评测框架 lm-eval/evalscope）：结论是"子进程调用官方产物，不把框架 import 进 `mqde` 环境"，理由是依赖版本冲突（vLLM 固定的 `transformers` 版本与量化主流程环境不一致）。这次的约束非常相似。
 

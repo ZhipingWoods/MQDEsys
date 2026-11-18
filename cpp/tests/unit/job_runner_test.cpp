@@ -297,3 +297,35 @@ TEST(job_runner_module, a_job_that_reuses_an_export_runs_the_deploy_pipeline_wha
   std::getline(f, argv);
   EXPECT_NE(argv.find("-m mqde.pipeline.deploy_job "), std::string::npos) << argv;
 }
+
+TEST(job_runner_module, evaluate_only_of_an_existing_checkpoint_runs_the_eval_pipeline) {
+  auto base = fresh_dir("module_eval_only");
+  const auto script = write_fake_worker(base / "bin");
+  ::setenv("MQDE_TEST_FAIL_UNTIL", "0", 1);
+  JobRunner runner(base / "runs", base, script.string(), {}, 1, 0.05);
+  const auto id = runner.submit(Json{{"deploy", {{"device", "cpu"}}},
+                                     {"model", {{"type", "llm"}, {"path", "/models/base"},
+                                                {"quantized_path", "/models/q4"}}},
+                                     {"stages", Json::array({"evaluate"})}});
+  wait_for_terminal(runner, id);
+  std::ifstream f(base / "runs" / id / ".argv");
+  std::string argv;
+  std::getline(f, argv);
+  EXPECT_NE(argv.find("-m mqde.pipeline.eval_job "), std::string::npos) << argv;
+}
+
+TEST(job_runner_module, an_artifact_without_a_deploy_stage_is_evaluated_not_served) {
+  auto base = fresh_dir("module_artifact_eval");
+  const auto script = write_fake_worker(base / "bin");
+  ::setenv("MQDE_TEST_FAIL_UNTIL", "0", 1);
+  JobRunner runner(base / "runs", base, script.string(), {}, 1, 0.05);
+  const auto id = runner.submit(Json{{"deploy", {{"device", "cpu"}}},
+                                     {"model", {{"type", "llm"}, {"path", "/models/base"}}},
+                                     {"stages", Json::array({"evaluate"})},
+                                     {"artifact", {{"job", "j1"}, {"recipe", "W4A16"}, {"format", "awq"}}}});
+  wait_for_terminal(runner, id);
+  std::ifstream f(base / "runs" / id / ".argv");
+  std::string argv;
+  std::getline(f, argv);
+  EXPECT_NE(argv.find("-m mqde.pipeline.eval_job "), std::string::npos) << argv;
+}

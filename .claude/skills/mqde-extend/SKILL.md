@@ -16,7 +16,7 @@ allowed-tools: Bash(python:*) Bash(python3:*) Bash(build/*:*) Bash(git:*) Read E
 Before anything: read `docs/STRUCTURE.md` §1 (change levels). **L0/L1** (new files under `python/`, new data entries,
 front-end pages, tests) can be done directly. **L2** (public headers `cpp/include/**`, the compatibility and golden data
 directories, build / CI files, AGENTS / ARCHITECTURE / STRUCTURE / REFERENCES docs) needs the maintainer's approval first: write
-the proposal, record it in `docs/PROGRESS.md` under "待人工决策", and stop on that part. **L3** (new third-party
+the proposal, record it in `internal/PROGRESS.md` under "待人工决策", and stop on that part. **L3** (new third-party
 dependency, licence, breaking change) needs an ADR in `docs/adr/` and an explicit decision.
 
 Never edit anything under `3rdpart/` (read-only upstream references), never change golden data to make a test pass,
@@ -82,5 +82,5 @@ golden `ModelSpec` only through the L2 process. Do not publish checkpoint names 
 
 ## Before you finish
 
-Run the local gate (mqde-dev-gate), update `docs/TASKS.md` (status and what is still missing) and add an entry at the
-top of the log in `docs/PROGRESS.md`. Say plainly what was verified and what was not.
+Run the local gate (mqde-dev-gate), update `internal/TASKS.md` (status and what is still missing) and add an entry at the
+top of the log in `internal/PROGRESS.md`. Say plainly what was verified and what was not.
