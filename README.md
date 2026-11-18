@@ -86,36 +86,15 @@ MQDEsys is an integrated platform for large-model quantization, evaluation and d
 
 ## Quick start
 
-### Build
+MQDEsys is built on the user's local toolchain. It does not ship a server environment or model weights. On Linux, macOS, or an active conda environment, install a C++ compiler, Python 3.10+, CMake, Ninja and Node.js, then run:
 
 ```bash
 git clone https://github.com/zhipingwoods/MQDEsys.git
 cd MQDEsys
-
-cmake --preset dev
-cmake --build --preset dev -j 32
-ctest --preset dev
-
-pip install -e "python[dev,quant]"
-PYTHONPATH=python pytest python/tests -q
-
-cd web && npm install && npm run build && cd ..
+bash scripts/dev_setup.sh
 ```
 
-### Start the server
-
-```bash
-build/dev/bin/mqde serve \
-  --repo "$PWD" \
-  --runs "$PWD/runs" \
-  --web "$PWD/web/dist" \
-  --python "$(which python)" \
-  --gpus 0,1 \
-  --allow /path/to/models \
-  --port 18080
-```
-
-The server listens on `127.0.0.1:18080` by default.
+The script uses the local package manager to install native dependencies, creates a local `.venv`, installs the Python and quantization extras, builds the C++ control plane and Web frontend, and starts [http://127.0.0.1:18080](http://127.0.0.1:18080). Put a model in `models/`, or set `MQDE_ALLOW=/data/models MQDE_GPUS=0`. If dependencies are already installed, use `MQDE_INSTALL_SYSTEM_DEPS=0`. See the [installation guide](docs/site/en/get_started/installation.md) for package-manager details.
 
 ### Static showcase and interactive demo
 

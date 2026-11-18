@@ -1,67 +1,83 @@
 #!/usr/bin/env bash
-# One-shot developer environment: optional conda setup -> dependency check -> CMake configure -> web deps.
-# Idempotent: re-running updates the environment and reuses the build directory.
+# Prepare MQDEsys on the user's local device, using its own compiler, Python and package manager.
 #
-#   scripts/dev_setup.sh                 # Linux: conda env `mqde` from the toolchain file, then configure build/dev
-#   ENV_NAME=mqde-ci BUILD_DIR=build/ci scripts/dev_setup.sh
-#   scripts/dev_setup.sh --no-web        # skip `npm ci`
-#   scripts/dev_setup.sh --check         # only report what is present, change nothing
-#
-# macOS: the toolchain file is Linux-only (GCC 12); install the C++ dependencies with brew
-# (see docs/guides/dev-setup.md) and run this script with --no-env.
+#   bash scripts/dev_setup.sh                 # install local prerequisites, build, start
+#   MQDE_ALLOW=/data/models MQDE_GPUS=0 bash scripts/dev_setup.sh
+#   bash scripts/dev_setup.sh --no-start      # prepare and build only
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-ENV_NAME=${ENV_NAME:-mqde}
-ENV_FILE=${ENV_FILE:-}
-BUILD=${BUILD_DIR:-build/dev}
-DO_ENV=1 DO_WEB=1 CHECK=0
-for a in "$@"; do
-  case $a in
-    --no-env) DO_ENV=0 ;;
-    --no-web) DO_WEB=0 ;;
-    --check) CHECK=1 ;;
-    -h|--help) sed -n 2,12p "$0"; exit 0 ;;
-    *) echo "unknown option: $a" >&2; exit 2 ;;
-  esac
-done
+VENV_DIR="${MQDE_VENV_DIR:-$PWD/.venv}"
+BUILD_DIR="${BUILD_DIR:-build/dev}"
+MQDE_PORT="${MQDE_PORT:-18080}"
+MQDE_ALLOW="${MQDE_ALLOW:-$PWD/models}"
+MQDE_RUNS="${MQDE_RUNS:-$PWD/runs}"
+START=1
+[[ "${1:-}" == "--no-start" ]] && START=0
 
 step() { printf '\033[1m==> %s\033[0m\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
-act() { if [[ $CHECK -eq 1 ]]; then echo "(check) would run: $*"; else "$@"; fi; }
+run_root() { if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi; }
 
-if [[ $DO_ENV -eq 1 ]]; then
-  CONDA=$(command -v mamba || command -v conda || true)
-  [[ -n $CONDA ]] || { echo "conda (or mamba) is required: https://github.com/conda-forge/miniforge" >&2; exit 1; }
-  [[ -n "$ENV_FILE" && -f $ENV_FILE ]] || {
-    echo "set ENV_FILE to a conda environment file, or rerun with --no-env" >&2
-    exit 1
-  }
-  if "$CONDA" env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
-    step "conda env '$ENV_NAME' exists: updating from $ENV_FILE"
-    act "$CONDA" env update -n "$ENV_NAME" -f "$ENV_FILE" --prune
+if [[ "${MQDE_INSTALL_SYSTEM_DEPS:-1}" == 1 ]]; then
+  if [[ -n "${CONDA_PREFIX:-}" ]] && have conda; then
+    step "installing native dependencies in the active conda environment"
+    conda install -y -c conda-forge cmake ninja cxx-compiler nlohmann_json yaml-cpp fmt cli11 cpp-httplib gtest pybind11 libcurl openssl sqlite nodejs
+  elif [[ "$(uname -s)" == Darwin ]] && have brew; then
+    step "installing native dependencies with Homebrew"
+    brew install cmake ninja fmt yaml-cpp cli11 cpp-httplib googletest nlohmann-json pybind11 node
+  elif have apt-get; then
+    step "installing native dependencies with apt"
+    run_root apt-get update
+    run_root apt-get install -y build-essential cmake ninja-build pkg-config python3-dev python3-venv nodejs npm \
+      libfmt-dev libyaml-cpp-dev nlohmann-json3-dev libsqlite3-dev libcurl4-openssl-dev libgtest-dev \
+      libcli11-dev libcpp-httplib-dev pybind11-dev
+  elif have dnf; then
+    step "installing native dependencies with dnf"
+    run_root dnf install -y gcc-c++ cmake ninja-build python3-devel nodejs npm \
+      fmt-devel yaml-cpp-devel nlohmann-json-devel sqlite-devel libcurl-devel gtest-devel \
+      cli11-devel cpp-httplib-devel pybind11-devel
   else
-    step "creating conda env '$ENV_NAME' from $ENV_FILE"
-    act "$CONDA" env create -n "$ENV_NAME" -f "$ENV_FILE"
+    echo "No supported local package manager found. Install the dependencies listed in the README, then rerun with MQDE_INSTALL_SYSTEM_DEPS=0." >&2
+    exit 1
   fi
-  echo "activate it:  conda activate $ENV_NAME"
 fi
 
-# the rest uses whatever is on PATH (the activated env, or brew on macOS)
-for t in cmake ninja python3; do have "$t" || { echo "missing: $t (activate the environment first)" >&2; [[ $CHECK -eq 1 ]] || exit 1; }; done
-
-# the Python package is used in place (PYTHONPATH=python, as check_all.sh does); the environment supplies its dependencies
-step "python dependencies"
-PYTHONPATH=python python3 -c "import torch, transformers, pyarrow, yaml, jsonschema, PIL; import mqde" \
-  && echo ok || { echo "python dependencies missing: update the environment" >&2; [[ $CHECK -eq 1 ]] || exit 1; }
-
-step "cmake configure -> $BUILD"
-act cmake -S . -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release
-
-if [[ $DO_WEB -eq 1 ]]; then
-  if have npm; then step "web dependencies"; (cd web && act npm ci --no-audit --no-fund)
-  else echo "npm not found: the web build will be skipped by check_all.sh"; fi
+for tool in cmake ninja npm; do
+  have "$tool" || { echo "missing required tool: $tool" >&2; exit 1; }
+done
+PYTHON="${MQDE_PYTHON:-}"
+if [[ -z "$PYTHON" ]]; then
+  PYTHON="$(command -v python3 || true)"
 fi
+[[ -n "$PYTHON" ]] || { echo "Python 3.10+ is required" >&2; exit 1; }
+if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+  step "creating local Python environment at $VENV_DIR"
+  "$PYTHON" -m venv "$VENV_DIR"
+fi
+PYTHON="$VENV_DIR/bin/python"
 
-step "done"
-echo "next:  BUILD_DIR=$BUILD scripts/check_all.sh"
+mkdir -p "$MQDE_ALLOW" "$MQDE_RUNS"
+step "installing Python executor and quantization dependencies"
+export CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH:-${CONDA_PREFIX:-}}" PYTHONPATH="$PWD/python${PYTHONPATH:+:$PYTHONPATH}"
+"$PYTHON" -m pip install --upgrade pip
+"$PYTHON" -m pip install --upgrade -e "python[dev,quant,export]"
+step "building C++ control plane"
+CMAKE_ARGS=(-DPython_EXECUTABLE="$PYTHON")
+PYBIND11_CMAKE_DIR="$($PYTHON -m pybind11 --cmakedir 2>/dev/null || true)"
+[[ -n "$PYBIND11_CMAKE_DIR" ]] && CMAKE_ARGS+=("-Dpybind11_DIR=$PYBIND11_CMAKE_DIR")
+cmake --preset dev "${CMAKE_ARGS[@]}"
+cmake --build --preset dev -j "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
+step "building Web workspace"
+(cd web && npm ci --no-audit --no-fund && npm run build)
+
+if [[ -z "${MQDE_GPUS+x}" ]]; then MQDE_GPUS=; have nvidia-smi && MQDE_GPUS=0; fi
+export MQDE_ROOT="$PWD" MQDE_BUILD="$BUILD_DIR" MQDE_RUNS MQDE_WEB="$PWD/web/dist"
+export MQDE_PYTHON="$PYTHON" MQDE_PORT MQDE_ALLOW MQDE_GPUS
+if [[ $START -eq 1 ]]; then
+  step "starting MQDEsys on http://127.0.0.1:${MQDE_PORT}"
+  scripts/serve_prod.sh
+  echo "MQDEsys is ready at http://127.0.0.1:${MQDE_PORT}"
+else
+  echo "Build complete. Start with: MQDE_GPUS=${MQDE_GPUS:-} MQDE_ALLOW=$MQDE_ALLOW scripts/serve_prod.sh"
+fi

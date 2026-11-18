@@ -6,11 +6,23 @@ MQDEsys consists of three separately built components: the C++ core (`mqde` CLI,
 The commands below have been verified on macOS (Apple M5, Homebrew dependencies, Python 3.12) and on Linux (conda dependencies). `<REPO>` and `<MODEL_DIR>` are placeholders for the source checkout and a local model directory.
 ```
 
-## 1. Build the C++ core
+## 1. Prepare the local toolchain
+
+MQDEsys uses the tools installed on the target device. It does not require the developer's conda environment and does not include model weights. Install a C++23-capable compiler, CMake 3.25+, Ninja, Python 3.10+, Node.js 18+ and the native libraries listed below with the package manager for your operating system.
+
+The repository includes a one-command setup script for Linux, macOS with Homebrew, and an active conda environment:
+
+```bash
+bash scripts/dev_setup.sh
+```
+
+Set `MQDE_INSTALL_SYSTEM_DEPS=0` when the native libraries are already installed. The script creates `.venv` inside the checkout, installs the Python extras, builds the C++ core and Web frontend, and starts the service. Use `bash scripts/dev_setup.sh --no-start` to stop after building.
+
+## 2. Build the C++ core
 
 Requirements: a C++23 compiler (Apple clang or GCC 12+), CMake 3.25+, Ninja, and nlohmann_json, yaml-cpp, fmt, CLI11 and cpp-httplib. The Python extension additionally requires Python 3.10+ and pybind11; unit tests require GoogleTest. The build enables `-Wall -Wextra -Werror`.
 
-Two CMake presets are provided: `dev` (RelWithDebInfo, tests and Python extension, dependencies resolved from `$CONDA_PREFIX`) and `asan` (Debug with sanitizers).
+Two CMake presets are provided: `dev` (RelWithDebInfo, tests and Python extension, dependencies resolved from the local toolchain or `$CONDA_PREFIX`) and `asan` (Debug with sanitizers).
 
 ```bash
 cd <REPO>
@@ -37,7 +49,7 @@ build/mac/bin/mqde --version      # mqde 0.1.0
 build/mac/bin/mqde probe          # local CPU / GPU information
 ```
 
-## 2. Python environment
+## 3. Python environment
 
 The executor requires Python 3.10+, `numpy` and `pyyaml`. The quantization pipeline requires `torch>=2.4`, `transformers>=4.44`, `safetensors` and `pyarrow` (the `quant` extra in `python/pyproject.toml`); GGUF export requires `gguf` (the `export` extra). Development tools are `pytest`, `ruff` and `mypy` (the `dev` extra).
 
@@ -63,7 +75,7 @@ External tools are optional and only required by their corresponding stages:
 
 When a binary is not found, the stage is marked `skipped` and the reason is recorded in the report; the job still completes.
 
-## 3. Web UI
+## 4. Web UI
 
 ```bash
 cd <REPO>/web
@@ -71,7 +83,7 @@ npm install
 npm run build        # tsc -b && vite build, output in web/dist
 ```
 
-## 4. Start the server
+## 5. Start the server
 
 ```bash
 build/mac/bin/mqde serve --repo <REPO> --runs <REPO>/runs --web <REPO>/web/dist \
