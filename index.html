@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark" data-lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="MQDEsys — 模型量化、数据集评测、硬件适配与推理部署的一体化工作台。">
+  <title>MQDEsys · 模型量化部署评估系统</title>
+  <link rel="icon" href="assets/mqde-mark.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="ambient" aria-hidden="true">
+    <div class="orb orb-a"></div>
+    <div class="orb orb-b"></div>
+    <div class="grid-fade"></div>
+  </div>
+
+  <header class="nav">
+    <a class="brand" href="#top" aria-label="MQDEsys">
+      <img class="brand-mark" src="assets/mqde-mark.svg" alt="" aria-hidden="true">
+      <span class="brand-copy"><b>MQDEsys</b><small data-zh="量化 · 评测 · 部署" data-en="Quantize · Evaluate · Deploy"></small></span>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="#features" data-zh="能力" data-en="Features"></a>
+      <a href="#workspace" data-zh="作业工作台" data-en="Job workspace"></a>
+      <a href="#screens" data-zh="界面" data-en="Screens"></a>
+      <a href="#architecture" data-zh="架构" data-en="Architecture"></a>
+      <a href="#quickstart" data-zh="快速开始" data-en="Quick start"></a>
+    </nav>
+    <div class="nav-actions">
+      <div class="seg lang-switch" aria-label="Language">
+        <button class="on" data-set-lang="zh">中文</button>
+        <button data-set-lang="en">EN</button>
+      </div>
+      <button class="icon-btn" id="theme-btn" aria-label="Toggle theme" title="Theme">
+        <span class="theme-sun">☀</span><span class="theme-moon">◐</span>
+      </button>
+      <a class="icon-btn ghost" href="https://github.com/zhipingwoods/MQDEsys" target="_blank" rel="noreferrer" aria-label="GitHub">↗</a>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero wrap">
+      <div class="hero-copy reveal">
+        <span class="pill"><i></i><span data-zh="从预估到部署的完整闭环" data-en="One closed loop from estimate to deployment"></span></span>
+        <h1>
+          <span data-zh="可复现的" data-en="Reproducible"></span><br>
+          <span class="grad" data-zh="量化与部署评估" data-en="quantization and deployment evaluation"></span>
+        </h1>
+        <p class="lede" data-zh="MQDEsys 把资源预估、量化、数据集评测、真实导出、推理部署和压测放进同一套实验记录。每个数字都能追溯到模型、配方、数据和硬件。" data-en="MQDEsys keeps estimation, quantization, dataset evaluation, real export, serving and load tests in one experiment record. Every number traces back to a model, recipe, dataset and device."></p>
+        <div class="cta-row">
+          <a class="btn primary" href="#quickstart" data-local-href="http://127.0.0.1:18081" data-local-only target="_blank" rel="noreferrer" data-zh="打开控制台" data-en="Open the console"></a>
+          <a class="btn" href="#quickstart" data-local-href="http://127.0.0.1:7860" data-local-only target="_blank" rel="noreferrer" data-zh="交互式演示" data-en="Interactive demo"></a>
+          <a class="btn quiet" href="#workspace" data-zh="看作业工作台" data-en="Explore the job workspace"></a>
+          <a class="btn quiet" href="https://github.com/zhipingwoods/MQDEsys/blob/main/docs/site/zh/index.md" data-doc-link data-zh="阅读文档 →" data-en="Read the docs →"></a>
+        </div>
+        <div class="hero-meta">
+          <span>LLM</span><span>VLM</span><span>VLA</span><span>WM</span><span>EWM</span>
+          <span data-zh="5 类模型领域" data-en="5 model domains"></span>
+        </div>
+      </div>
+      <div class="hero-shot reveal delay-1">
+        <div class="browser">
+          <div class="browser-bar"><i></i><i></i><i></i><span>MQDEsys / jobs</span></div>
+          <button class="shot" data-full="assets/ui-jobs.png" aria-label="Open screenshot"><img src="assets/ui-jobs.png" alt="MQDEsys jobs workspace"></button>
+        </div>
+      </div>
+    </section>
+
+    <section class="stats wrap reveal">
+      <div><b>5</b><span data-zh="模型领域" data-en="model domains"></span></div>
+      <div><b>6+</b><span data-zh="量化配方" data-en="quant recipes"></span></div>
+      <div><b>144</b><span data-zh="EvalScope 数据集目录" data-en="EvalScope datasets"></span></div>
+      <div><b>3</b><span data-zh="推理后端" data-en="serving backends"></span></div>
+      <div><b>13</b><span data-zh="硬件画像" data-en="hardware profiles"></span></div>
+    </section>
+
+    <section class="section wrap" id="features">
+      <div class="section-head reveal">
+        <span class="eyebrow" data-zh="ONE SYSTEM" data-en="ONE SYSTEM"></span>
+        <h2 data-zh="统一的量化、评测与部署流程" data-en="A unified workflow for quantization, evaluation and deployment"></h2>
+        <p data-zh="从 C++ 控制面到 Python 执行器，再到推理框架，全部步骤记录在同一个作业中。" data-en="From the C++ control plane to the Python executor and serving engines, every step is recorded in one job."></p>
+      </div>
+      <div class="feature-grid">
+        <article class="feature reveal">
+          <span class="ico">◫</span>
+          <h3 data-zh="资源预估" data-en="Resource estimate"></h3>
+          <p data-zh="不加载权重即可计算模型占用、KV Cache / 线性注意力状态、激活、并发峰值和 TTFT / TPOT 下界。" data-en="Memory, KV cache / linear-attention state, activation, concurrency peaks and TTFT / TPOT bounds without loading weights."></p>
+          <a href="#screens" data-zh="看预估界面 →" data-en="See the estimate UI →"></a>
+        </article>
+        <article class="feature reveal delay-1">
+          <span class="ico">◧</span>
+          <h3 data-zh="量化算法" data-en="Quantization"></h3>
+          <p data-zh="RTN、GPTQ、AWQ、HQQ、SmoothQuant、FP8、混合精度和 KV Cache 量化；逐层、逐模态追踪误差。" data-en="RTN, GPTQ, AWQ, HQQ, SmoothQuant, FP8, mixed precision and KV-cache quantization, with per-layer and per-modality error tracing."></p>
+          <a href="#workspace" data-zh="看误差分析 →" data-en="See error analysis →"></a>
+        </article>
+        <article class="feature reveal delay-2">
+          <span class="ico">◉</span>
+          <h3 data-zh="数据集评测" data-en="Dataset evaluation"></h3>
+          <p data-zh="离线 PPL / QA / MCQ 直接加载 checkpoint；EvalScope 144 个数据集按套件、类别、任务分组选择。" data-en="Offline PPL / QA / MCQ load a checkpoint directly; 144 EvalScope datasets are grouped by suite, category and task."></p>
+          <a href="#eval" data-zh="看评测流程 →" data-en="See the evaluation flow →"></a>
+        </article>
+        <article class="feature reveal">
+          <span class="ico">▤</span>
+          <h3 data-zh="真实部署" data-en="Real deployment"></h3>
+          <p data-zh="vLLM、SGLang、llama.cpp 起服务，测部署后 PPL、TTFT、TPOT、ITL、吞吐和并发饱和点。" data-en="Serve with vLLM, SGLang or llama.cpp and measure served PPL, TTFT, TPOT, ITL, throughput and saturation."></p>
+          <a href="#screens" data-zh="看部署结果 →" data-en="See serving results →"></a>
+        </article>
+        <article class="feature reveal delay-1">
+          <span class="ico">▦</span>
+          <h3 data-zh="硬件适配" data-en="Hardware fit"></h3>
+          <p data-zh="Jetson Orin / Thor、DGX Spark、RTX、H100、AMD、Intel、Ascend、MetaX；HAL 探针与 FlagTree target。" data-en="Jetson Orin / Thor, DGX Spark, RTX, H100, AMD, Intel, Ascend and MetaX; HAL probes and FlagTree targets."></p>
+          <a href="#hardware" data-zh="看硬件页 →" data-en="See the hardware page →"></a>
+        </article>
+        <article class="feature reveal delay-2">
+          <span class="ico">◇</span>
+          <h3 data-zh="模型库" data-en="Model library"></h3>
+          <p data-zh="本地模型、HF 目录、HuggingFace / ModelScope 在线搜索与断点续传下载。" data-en="Local models, the HF catalogue, and live HuggingFace / ModelScope search with resumable downloads."></p>
+          <a href="#screens" data-zh="看模型库 →" data-en="See the model library →"></a>
+        </article>
+      </div>
+    </section>
+
+    <section class="section wrap split" id="workspace">
+      <div class="split-copy reveal">
+        <span class="eyebrow" data-zh="JOB WORKSPACE" data-en="JOB WORKSPACE"></span>
+        <h2 data-zh="可追踪的作业执行链" data-en="A traceable job execution chain"></h2>
+        <p data-zh="作业列表、进度、阶段、日志、指标与报告集中呈现。运行期间可查看当前 block、进度百分比与最近指标；完成后可直接进入误差分析与部署结果。" data-en="Job list, progress, stages, logs, metrics and reports in one view. During execution the current block, progress and latest metrics are visible; on completion the error analysis and serving results are available directly."></p>
+        <ul class="checks">
+          <li data-zh="全流程 / 仅量化 / 仅评测 / 部署评测统一管理" data-en="Full, quantize-only, evaluate-only and deploy jobs in one list"></li>
+          <li data-zh="阶段流水线 + 进度环 + 实时事件日志" data-en="Stage pipeline, progress ring and live event log"></li>
+          <li data-zh="日志按全部 / 指标 / 错误筛选，可跟随、复制、下载" data-en="Log filters for all / metrics / errors, with follow, copy and download"></li>
+          <li data-zh="中英文 HTML 报告可离线保存" data-en="Bilingual HTML reports that can be saved offline"></li>
+        </ul>
+        <div class="mini-cta"><a class="btn primary" href="#quickstart" data-local-href="http://127.0.0.1:18081/jobs" data-local-only target="_blank" rel="noreferrer" data-zh="打开作业列表" data-en="Open the job list"></a></div>
+      </div>
+      <div class="split-shots reveal delay-1">
+        <div class="browser tall">
+          <div class="browser-bar"><i></i><i></i><i></i><span>/jobs</span></div>
+          <button class="shot" data-full="assets/ui-jobs.png"><img src="assets/ui-jobs.png" alt="Jobs list"></button>
+        </div>
+        <div class="browser overlap">
+          <div class="browser-bar"><i></i><i></i><i></i><span>/jobs/20261008-101629-62da92</span></div>
+          <button class="shot" data-full="assets/ui-job-llm.png"><img src="assets/ui-job-llm.png" alt="Job detail"></button>
+        </div>
+      </div>
+    </section>
+
+    <section class="section wrap" id="screens">
+      <div class="section-head reveal">
+        <span class="eyebrow" data-zh="REAL SCREENS" data-en="REAL SCREENS"></span>
+        <h2 data-zh="界面概览" data-en="Interface overview"></h2>
+        <p data-zh="截图取自 4×RTX 4090 服务实例的实际运行记录。" data-en="Screenshots captured from a live 4×RTX 4090 service instance."></p>
+      </div>
+      <div class="screen-tabs reveal">
+        <button class="on" data-screen="assets/ui-jobs.png" data-caption-zh="作业列表 · 模式、阶段、进度" data-caption-en="Jobs · mode, stage, progress" data-zh="作业列表" data-en="Jobs"></button>
+        <button data-screen="assets/ui-job-llm.png" data-caption-zh="作业详情 · 实时监控与报告" data-caption-en="Job detail · live monitor and report" data-zh="作业详情" data-en="Job detail"></button>
+        <button data-screen="assets/ui-hardware.png" data-caption-zh="硬件 · 后端、探针、画像" data-caption-en="Hardware · backends, probes, profiles" data-zh="硬件与后端" data-en="Hardware"></button>
+        <button data-screen="assets/ui-estimate.png" data-caption-zh="资源预估 · 显存与并发" data-caption-en="Estimate · memory and concurrency" data-zh="资源预估" data-en="Estimate"></button>
+        <button data-screen="assets/ui-new-eval.png" data-caption-zh="评测作业 · 数据集目录" data-caption-en="Evaluate job · dataset catalogue" data-zh="新建评测" data-en="Evaluate job"></button>
+        <button data-screen="assets/ui-modelscope.png" data-caption-zh="模型库 · HF / ModelScope" data-caption-en="Model library · HF / ModelScope" data-zh="模型库" data-en="Model library"></button>
+      </div>
+      <div class="screen-stage reveal delay-1">
+        <div class="browser">
+          <div class="browser-bar"><i></i><i></i><i></i><span id="screen-url">MQDEsys / jobs</span></div>
+          <button class="shot" id="screen-shot" data-full="assets/ui-jobs.png"><img id="screen-img" src="assets/ui-jobs.png" alt="Screenshot"></button>
+        </div>
+        <p class="caption" id="screen-caption" data-zh="作业列表 · 模式、阶段、进度" data-en="Jobs · mode, stage, progress"></p>
+      </div>
+    </section>
+
+    <section class="section wrap split reverse" id="eval">
+      <div class="split-copy reveal">
+        <span class="eyebrow" data-zh="DATASET EVALUATION" data-en="DATASET EVALUATION"></span>
+        <h2 data-zh="结构化的评测数据集选择" data-en="Structured evaluation dataset selection"></h2>
+        <p data-zh="按套件、类别、数据集逐级选择；每个数据集展示任务类型、指标、样本量、语言与文档。离线 benchmark 直接加载 checkpoint，EvalScope 数据集在部署后运行。" data-en="Select by suite, category and dataset; each entry shows task type, metrics, sample count, language and documentation. Offline benchmarks load a checkpoint directly; EvalScope datasets run after deployment."></p>
+        <div class="tag-cloud">
+          <span>WikiText-2 PPL</span><span>Smoke QA</span><span>Smoke MCQ</span><span>GSM8K</span><span>MMLU</span><span>C-Eval</span><span>HumanEval</span><span>MATH-500</span><span>LongBench-v2</span><span>+136</span>
+        </div>
+      </div>
+      <div class="browser tall reveal delay-1">
+        <div class="browser-bar"><i></i><i></i><i></i><span>/new/eval</span></div>
+        <button class="shot" data-full="assets/ui-new-eval.png"><img src="assets/ui-new-eval.png" alt="Evaluate-only job"></button>
+      </div>
+    </section>
+
+    <section class="section wrap split" id="hardware">
+      <div class="split-copy reveal">
+        <span class="eyebrow" data-zh="HARDWARE" data-en="HARDWARE"></span>
+        <h2 data-zh="先看清设备，再决定部署" data-en="Know the device before you deploy to it"></h2>
+        <p data-zh="推理后端环境、目标设备探针、HAL 插件、算力折线图和按形态分组的硬件画像，全部在同一页。" data-en="Backend environments, target-device probes, HAL plugins, capability lines and form-factor-grouped profiles on one page."></p>
+        <ul class="checks">
+          <li data-zh="Jetson Orin / Thor、DGX Spark、RTX、H100、AMD、Intel、Ascend、MetaX" data-en="Jetson Orin / Thor, DGX Spark, RTX, H100, AMD, Intel, Ascend and MetaX"></li>
+          <li data-zh="探针返回 arch、target、显存、驱动和作业池状态" data-en="Probes report arch, target, memory, driver and job-pool state"></li>
+          <li data-zh="算力折线图支持勾选硬件和显示精确数值" data-en="Capability lines let you select devices and show exact values"></li>
+        </ul>
+      </div>
+      <div class="browser tall reveal delay-1">
+        <div class="browser-bar"><i></i><i></i><i></i><span>/hardware</span></div>
+        <button class="shot" data-full="assets/ui-hardware.png"><img src="assets/ui-hardware.png" alt="Hardware page"></button>
+      </div>
+    </section>
+
+    <section class="section wrap" id="workflow">
+      <div class="section-head reveal">
+        <span class="eyebrow" data-zh="WORKFLOW" data-en="WORKFLOW"></span>
+        <h2 data-zh="标准工作流" data-en="Standard workflow"></h2>
+      </div>
+      <div class="flow">
+        <article class="flow-step reveal"><span>01</span><h3 data-zh="选择模型" data-en="Pick model"></h3><p data-zh="本地目录、HF 或 ModelScope" data-en="Local, HF or ModelScope"></p></article>
+        <article class="flow-step reveal delay-1"><span>02</span><h3 data-zh="预估资源" data-en="Estimate"></h3><p data-zh="不加载权重，先判断放不放得下" data-en="Decide fit before loading weights"></p></article>
+        <article class="flow-step reveal delay-2"><span>03</span><h3 data-zh="量化" data-en="Quantize"></h3><p data-zh="配方 + 算法 + 逐层误差" data-en="Recipe, algorithm and layer error"></p></article>
+        <article class="flow-step reveal"><span>04</span><h3 data-zh="评测" data-en="Evaluate"></h3><p data-zh="数据集、PPL、准确率与分类指标" data-en="Datasets, PPL, accuracy and categories"></p></article>
+        <article class="flow-step reveal delay-1"><span>05</span><h3 data-zh="导出" data-en="Export"></h3><p data-zh="GPTQ / AWQ / compressed-tensors / GGUF" data-en="GPTQ / AWQ / compressed-tensors / GGUF"></p></article>
+        <article class="flow-step reveal delay-2"><span>06</span><h3 data-zh="部署压测" data-en="Deploy"></h3><p data-zh="vLLM / SGLang / llama.cpp" data-en="vLLM / SGLang / llama.cpp"></p></article>
+      </div>
+    </section>
+
+    <section class="section wrap" id="architecture">
+      <div class="section-head reveal">
+        <span class="eyebrow" data-zh="ARCHITECTURE" data-en="ARCHITECTURE"></span>
+        <h2 data-zh="控制面与执行器分离" data-en="Control plane and executor stay separate"></h2>
+        <p data-zh="C++ 负责预估、规划、探针、数值核心与 API；Python 负责 Torch 相关的量化算法、评测、导出和作业流水线。" data-en="C++ owns estimation, planning, probes, numerical core and API; Python owns Torch quantization, evaluation, export and pipelines."></p>
+      </div>
+      <div class="arch-grid">
+        <article class="arch reveal"><small>C++20</small><h3 data-zh="控制面" data-en="Control plane"></h3><p data-zh="modelspec / estimator / planner / quant / server / HAL" data-en="modelspec / estimator / planner / quant / server / HAL"></p></article>
+        <article class="arch reveal delay-1"><small>Python</small><h3 data-zh="执行器" data-en="Executor"></h3><p data-zh="算法 / 模型适配 / 数据集 / 导出 / 作业流水线" data-en="algorithms / adapters / datasets / export / pipelines"></p></article>
+        <article class="arch reveal delay-2"><small>Data</small><h3 data-zh="数据驱动" data-en="Data-driven"></h3><p data-zh="配方、硬件画像、后端参数、评测目录" data-en="Recipes, hardware profiles, backend parameters, eval catalogue"></p></article>
+        <article class="arch reveal"><small>React</small><h3 data-zh="Web 工作台" data-en="Web workspace"></h3><p data-zh="作业、预估、对比、硬件、模型库" data-en="Jobs, estimate, compare, hardware, model library"></p></article>
+      </div>
+    </section>
+
+    <section class="section wrap quick" id="quickstart">
+      <div class="quick-copy reveal">
+        <span class="eyebrow" data-zh="QUICK START" data-en="QUICK START"></span>
+        <h2 data-zh="三种作业模式" data-en="Three job modes"></h2>
+        <div class="path-list">
+          <div><b data-zh="只量化" data-en="Quantize only"></b><code>/new/quantize</code><span data-zh="输出可复用 checkpoint，不执行评测与部署" data-en="Produce a reusable checkpoint without evaluation or deployment"></span></div>
+          <div><b data-zh="只评测" data-en="Evaluate only"></b><code>/new/eval</code><span data-zh="加载已有量化模型并执行数据集评测" data-en="Load an existing quantized model and run dataset evaluation"></span></div>
+          <div><b data-zh="全流程" data-en="Full pipeline"></b><code>/new</code><span data-zh="预估 → 量化 → 评测 → 导出 → 部署" data-en="Estimate → quantize → evaluate → export → deploy"></span></div>
+        </div>
+      </div>
+      <div class="code-card reveal delay-1">
+        <div class="code-head"><span>terminal</span><button id="copy-btn" data-zh="复制" data-en="Copy"></button></div>
+        <pre id="code"><code>cmake --preset dev
+cmake --build --preset dev -j 32
+ctest --preset dev
+
+pip install -e "python[dev,quant]"
+PYTHONPATH=python pytest python/tests -q
+
+cd web && npm install && npm run build && cd ..
+
+build/dev/bin/mqde serve \
+  --repo "$PWD" --runs "$PWD/runs" \
+  --web "$PWD/web/dist" \
+  --python "$(which python)" \
+  --gpus 0,1 --allow /path/to/models \
+  --port 18080</code></pre>
+      </div>
+    </section>
+
+    <section class="section wrap" id="system-demo">
+      <div class="section-head reveal">
+        <span class="eyebrow" data-zh="SYSTEM DEMO" data-en="SYSTEM DEMO"></span>
+        <h2 data-zh="系统演示" data-en="System demonstration"></h2>
+        <p data-zh="15 秒主控制台演示，覆盖首页总览、硬件与后端、作业列表、原生视频服务报告与新建评测作业。" data-en="A 15-second tour of the console covering the overview, hardware and backends, job list, native video-serving report and the evaluate-only job form."></p>
+      </div>
+      <div class="split">
+        <div class="reveal">
+          <video class="demo-video" controls preload="metadata" playsinline poster="assets/mqde-system-poster.png">
+            <source src="assets/mqde-system-short.webm" type="video/webm">
+            Your browser does not support WebM video.
+          </video>
+          <p class="caplio muted small" data-zh="15 秒系统演示 · 独立无头浏览器录制" data-en="15-second system demonstration · recorded in an isolated headless browser"></p>
+        </div>
+        <div class="split-copy reveal delay-1">
+          <span class="eyebrow" data-zh="WHAT YOU SEE" data-en="WHAT YOU SEE"></span>
+          <h2 data-zh="界面实录" data-en="Recorded from the live interface"></h2>
+          <ul class="checks">
+            <li data-zh="首页总览：GPU 池、设备、推理后端、最近作业" data-en="Overview: GPU pool, devices, backends and recent jobs"></li>
+            <li data-zh="硬件与后端：Jetson / Thor / DGX Spark / 数据中心 GPU 卡片" data-en="Hardware: Jetson / Thor / DGX Spark / data-centre GPU cards"></li>
+            <li data-zh="作业工作台：状态、阶段流水线、实时日志、进度和原生视频服务" data-en="Job workspace: state, stage pipeline, live log, progress and native video serving"></li>
+            <li data-zh="新建评测作业：checkpoint、数据集、运行参数" data-en="Evaluate-only job: checkpoint, datasets and run settings"></li>
+            <li data-zh="交互式演示：Gradio Demo 调用同一套 REST API" data-en="Interactive demonstration: the Gradio demo uses the same REST API"></li>
+          </ul>
+          <div class="mini-cta" style="display:flex;gap:8px;flex-wrap:wrap">
+            <a class="btn primary" href="#quickstart" data-local-href="http://127.0.0.1:18081" data-local-only target="_blank" rel="noreferrer" data-zh="打开控制台" data-en="Open the console"></a>
+            <a class="btn" href="#quickstart" data-local-href="http://127.0.0.1:7860" data-local-only target="_blank" rel="noreferrer" data-zh="交互式演示" data-en="Interactive demo"></a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="final-cta wrap reveal">
+      <div>
+        <span class="eyebrow" data-zh="READY" data-en="READY"></span>
+        <h2 data-zh="将量化实验纳入统一的记录体系" data-en="Bring the next quantization experiment into one record"></h2>
+        <p data-zh="控制台默认只监听 127.0.0.1；模型权重和 run 目录都在你自己的服务器上。" data-en="The console listens on 127.0.0.1 by default; weights and runs stay on your own server."></p>
+      </div>
+      <div class="cta-row">
+        <a class="btn primary" href="#quickstart" data-local-href="http://127.0.0.1:18081" data-local-only target="_blank" rel="noreferrer" data-zh="打开控制台" data-en="Open the console"></a>
+        <a class="btn" href="https://github.com/zhipingwoods/MQDEsys/blob/main/docs/site/zh/index.md" data-doc-link data-zh="中文文档" data-en="Chinese docs"></a>
+        <a class="btn" href="https://github.com/zhipingwoods/MQDEsys/blob/main/docs/site/en/index.md" data-doc-link-en data-zh="English docs" data-en="English docs"></a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer wrap">
+    <div class="brand"><img class="brand-mark small" src="assets/mqde-mark.svg" alt="" aria-hidden="true"><span><b>MQDEsys</b><small>Model Quantization &amp; Deployment Evaluation System</small></span></div>
+    <p>MQDEsys License · 2026 · <a href="https://github.com/zhipingwoods/MQDEsys" target="_blank" rel="noreferrer">GitHub</a> · <a href="https://github.com/zhipingwoods/MQDEsys/blob/main/docs/site/zh/index.md" data-doc-link data-zh="文档" data-en="Docs"></a></p>
+  </footer>
+
+  <div class="lightbox" id="lightbox" aria-hidden="true">
+    <button class="lightbox-close" aria-label="Close">×</button>
+    <img id="lightbox-img" src="" alt="Screenshot">
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>
