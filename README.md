@@ -1,6 +1,5 @@
 <p align="center">
-  <b>MQDEsys</b><br>
-  Model Quantization &amp; Deployment Evaluation System
+  <img src="site/assets/mqde-logo.svg" alt="MQDEsys — Model Quantization and Deployment Evaluation System" width="420">
 </p>
 
 <p align="center">

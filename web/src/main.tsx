@@ -147,7 +147,7 @@ function App() {
     <div className={`layout ${collapsed ? "collapsed" : ""}`}>
       <aside className="sidebar" data-testid="sidebar" data-collapsed={collapsed ? "1" : "0"}>
         <div className="brand">
-          <div className="brand-mark">MQ</div>
+          <img className="brand-mark" src="/mqde-mark.svg" alt="" aria-hidden="true" />
           <div className="brand-text">
             <div className="brand-name">MQDEsys</div>
             <div className="brand-sub">Quantization operations</div>

@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 610 128" role="img" aria-labelledby="title desc">
+  <title id="title">MQDEsys</title>
+  <desc id="desc">MQDEsys, Model Quantization and Deployment Evaluation System.</desc>
+  <defs>
+    <linearGradient id="bg" x1="16" y1="12" x2="110" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9b91ff"/>
+      <stop offset=".54" stop-color="#6255e8"/>
+      <stop offset="1" stop-color="#19b9a6"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="28" y1="26" x2="94" y2="96" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff"/>
+      <stop offset="1" stop-color="#d9fff7"/>
+    </linearGradient>
+  </defs>
+  <g>
+    <rect x="4" y="4" width="120" height="120" rx="34" fill="url(#bg)"/>
+    <rect x="5" y="5" width="118" height="118" rx="33" fill="none" stroke="#fff" stroke-opacity=".22" stroke-width="2"/>
+    <circle cx="57" cy="56" r="31" fill="none" stroke="url(#ring)" stroke-width="9"/>
+    <path d="M78 78 101 101" fill="none" stroke="url(#ring)" stroke-linecap="round" stroke-width="9"/>
+    <path d="M40 46h28M40 56h20M40 66h12" fill="none" stroke="#fff" stroke-linecap="round" stroke-width="6"/>
+    <circle cx="40" cy="46" r="3" fill="#d9fff7"/>
+    <circle cx="40" cy="56" r="3" fill="#d9fff7"/>
+    <circle cx="40" cy="66" r="3" fill="#d9fff7"/>
+  </g>
+  <text x="153" y="69" fill="#172033" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="52" font-weight="760" letter-spacing="-2.6">MQDEsys</text>
+  <text x="157" y="97" fill="#596780" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" font-weight="650" letter-spacing="2.4">MODEL QUANTIZATION · DEPLOYMENT · EVALUATION</text>
+</svg>

@@ -1,7 +1,5 @@
 <p align="center">
-  <b>MQDEsys</b><br>
-  Model Quantization &amp; Deployment Evaluation System<br>
-  模型量化部署评估系统
+  <img src="site/assets/mqde-logo.svg" alt="MQDEsys — 模型量化部署评估系统" width="420">
 </p>
 
 <p align="center">
