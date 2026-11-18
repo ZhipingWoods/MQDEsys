@@ -2,6 +2,9 @@
 
 A self-contained bilingual product page. No CDN, no build step.
 
+The published version is available at
+`https://zhipingwoods.github.io/MQDEsys/`.
+
 ```bash
 cd /path/to/MQDEsys
 python3 -m http.server 19090
