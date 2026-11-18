@@ -1,5 +1,5 @@
 #pragma once
-// Measured throughput baselines (docs/REFERENCES.md A.8; llmfit benchmarks.rs + share.rs).
+// Measured throughput baselines (the reference notes A.8; llmfit benchmarks.rs + share.rs).
 //
 // Two stores under data/benchmarks/:
 //   local/<hw-slug>/*.json      runs made by `mqde bench` on this machine  -> measured_local

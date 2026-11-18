@@ -1,5 +1,5 @@
 #pragma once
-// Claim-boundary estimation (docs/REFERENCES.md A.10): given a model + system + min_tps,
+// Claim-boundary estimation (the reference notes A.10): given a model + system + min_tps,
 // produce conservative and optimistic throughput bounds and the largest context that still holds.
 
 #include <cstdint>

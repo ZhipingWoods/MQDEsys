@@ -1192,9 +1192,7 @@ export default function NewJobPage() {
         </div>
         {blocked ? (
           <div className="error-box" data-testid="domain-blocked">
-            领域"{currentDomain?.display_name}"目前只在界面上可选，还没有真正的量化流水线（pipeline_status: {currentDomain?.pipeline_status}）。
-            提交作业会被服务端拒绝并给出同样的理由。参考方法（尚未实现，仅作记录）：
-            {currentDomain?.classic_algorithms.map((a) => a.name).join("、") || "—"}。
+            {currentDomain?.display_name}：当前暂不支持提交作业，请返回选择其他可用领域。
           </div>
         ) : (
           <>
@@ -1359,12 +1357,6 @@ export default function NewJobPage() {
                             ? `对以下配方生效：${perGroupPicked.map((r) => `${r.name}（默认 ${r.weight.group_size}）`).join("、")}；非 per-group 配方不受影响。`
                             : "当前所选配方都不是 per-group 粒度（例如 W8A16/FP8 是 per-channel），这个开关对它们没有意义，已禁用。"}
                         </p>
-                      </div>
-                      <div className="field grow">
-                        <label>旋转量化（QuaRot）</label>
-                        <select disabled value="">
-                          <option value="">未实现（T-0610），敬请期待</option>
-                        </select>
                       </div>
                     </div>
                   )}
@@ -1837,7 +1829,7 @@ export default function NewJobPage() {
           {JSON.stringify(job, null, 2)}
         </pre>
         <button disabled={busy || blocked || (!evalOnly && picked.length === 0) || (evalOnly && !quantizedPath) || (useSweep && !levelsOk) || !dataOk} onClick={submit} title={useSweep && !levelsOk ? "并发档格式不对" : !dataOk ? "校准 / 评估数据的路径还不能用（见第④步）" : evalOnly && !quantizedPath ? "请填写已量化模型路径" : undefined}>
-          {busy ? "提交中…" : blocked ? "该领域尚未支持提交" : "提交作业"}
+          {busy ? "提交中…" : blocked ? "当前领域暂不可用" : "提交作业"}
         </button>
       </div>
       {!singlePage && (

@@ -11,7 +11,7 @@ export interface PplVerdict {
 }
 
 /**
- * docs/ARCHITECTURE.md section 11.4: how much wikitext-2 PPL a recipe may lose against the unquantized model.
+ * the architecture specification section 11.4: how much wikitext-2 PPL a recipe may lose against the unquantized model.
  * `null` = recorded only (experimental, no gate). A recipe the table does not name has no rule at all.
  */
 export function pplBudget(recipe: string): number | null | undefined {

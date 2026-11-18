@@ -1,5 +1,5 @@
 #pragma once
-// Installed runtime detection (docs/REFERENCES.md A.11).
+// Installed runtime detection (the reference notes A.11).
 // Probes 8 sources in parallel: HTTP-based (ollama, LM Studio, vLLM) and
 // filesystem-based (llama.cpp, MLX, RamaLama, HF cache, Docker Model Runner).
 // Single-source HTTP timeout: 400 ms. Overall deadline: 2 s.

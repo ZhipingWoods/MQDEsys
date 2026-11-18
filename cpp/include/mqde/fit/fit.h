@@ -1,6 +1,6 @@
 #pragma once
 // Deployment pre-evaluation ("will it run, how fast, with which quant") — a C++ port of llmfit's
-// fit/score engine (docs/REFERENCES.md §1), extended with our exact per-recipe memory model
+// fit/score engine (the reference notes §1), extended with our exact per-recipe memory model
 // (group metadata, linear-attention state, vision/action components) from mqde::estimator.
 
 #include <map>
@@ -31,7 +31,7 @@ struct UseCase {
   int64_t context_target = 4096;
 };
 
-// MoE two-tier decode model (docs/REFERENCES.md A.5).
+// MoE two-tier decode model (the reference notes A.5).
 struct MoeConfig {
   double tier1_fixed_bpp = 3.2;
   std::map<std::string, double> tier1_fixed_bpp_by_arch;             // model_type prefix -> bpp
@@ -64,7 +64,7 @@ struct FitConfig {
   double bw_efficiency = 0.55, prefill_util = 0.35, ddr_bw_gbps = 50;
   std::map<std::string, UseCase> use_cases;
   std::vector<std::pair<double, double>> quality_tiers;  // (upper bound B, score)
-  // Quality adjustments (see docs/REFERENCES.md A.1).
+  // Quality adjustments (see the reference notes A.1).
   std::map<std::string, double> family_bonus;            // family substring -> bonus
   std::vector<std::pair<double, double>> recency_bonus;  // (age months upper bound, bonus)
   std::map<std::string, double> task_bonus;  // coding_name_match | reasoning_large | vision_multimodal
@@ -101,7 +101,7 @@ struct Request {
   std::string force_quant;     // empty = choose the best that fits
   std::string force_run_mode;  // empty = auto
   // Measured baselines for THIS machine (nullptr = none / evaluating other hardware). Looked up by
-  // model path + chosen quant; a hit replaces the estimate (docs/REFERENCES.md A.8).
+  // model path + chosen quant; a hit replaces the estimate (the reference notes A.8).
   const BenchmarkIndex* bench = nullptr;
   std::optional<MeasuredTps> measured;  // explicit override (tests / API); wins over `bench`
 };
@@ -136,7 +136,7 @@ struct ModelFit {
   double formula_tps = 0;  // the formula estimate, always kept (T-R19 calibrates against it)
   std::optional<MeasuredTps> measured_tps;
   // Null when the hardware profile has no compute figure, or on CPU-only: llmfit reports no TTFT
-  // rather than a fabricated one (docs/REFERENCES.md A.6).
+  // rather than a fabricated one (the reference notes A.6).
   std::optional<double> prefill_tps, ttft_ms;
   std::string speed_unit = "tok/s";
   // True when `estimated_tps` is an unreachable roofline ceiling rather than a prediction, i.e. a

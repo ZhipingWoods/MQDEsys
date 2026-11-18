@@ -1,4 +1,4 @@
-"""Throughput benchmark for one model on one GPU (driven by `mqde bench`, docs/REFERENCES.md A.8).
+"""Throughput benchmark for one model on one GPU (driven by `mqde bench`, the reference notes A.8).
 
 Prints exactly one JSON object on the LAST stdout line; everything else goes to stderr.
 

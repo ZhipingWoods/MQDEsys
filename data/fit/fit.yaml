@@ -1,5 +1,5 @@
 # Deployment pre-evaluation constants — ported from llmfit (3rdpart/llmfit/llmfit-core/src/{fit,models}.rs).
-# Changing a value here changes every fit verdict; treat as L2 (see docs/REFERENCES.md §1).
+# Changing a value here changes every fit verdict; treat as L2 (see the reference notes §1).
 
 # Bytes per parameter for MEMORY (llmfit models.rs quant_bpp), keyed by our quant labels.
 memory_bpp:
@@ -43,7 +43,7 @@ speed_bpp:
 quant_hierarchy: [bf16, fp8, w8a16, w4a16, w4a8, w2a16]
 
 # Quality penalty per quant (added to the quality score; llmfit quant_quality_penalty,
-# see docs/REFERENCES.md A.2). llmfit's 4-bit GPTQ/AWQ is -3 and its Q4_K_M is -5; our W4A16
+# see the reference notes A.2). llmfit's 4-bit GPTQ/AWQ is -3 and its Q4_K_M is -5; our W4A16
 # means GPTQ/AWQ-style group quantization, but we keep -5 as the conservative value because
 # our recipes also cover activation quantization. W2 follows llmfit's Q2_K at -12.
 quant_quality_penalty:
@@ -146,7 +146,7 @@ reasoning_large_min_b: 13
 many_cores_threshold: 8
 many_cores_speed_bonus: 1.1
 
-# MoE two-tier decode model (docs/REFERENCES.md A.5; llmfit fit.rs:1360-1510 and 1720-1845).
+# MoE two-tier decode model (the reference notes A.5; llmfit fit.rs:1360-1510 and 1720-1845).
 # Applies in GPU and MoE-offload run modes only (tensor-parallel MoE uses the dense formula, as llmfit).
 moe:
   # Tier 1 (expert geometry known): tps = bw / (active_ffn_B * memory_bpp + fixed_B * fixed_bpp).

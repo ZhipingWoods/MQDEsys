@@ -1,4 +1,4 @@
-"""Fake-quantization engine with per-layer error tracing (docs/ARCHITECTURE.md §6.7, §10).
+"""Fake-quantization engine with per-layer error tracing (the architecture specification §6.7, §10).
 
 Algorithm
 ---------

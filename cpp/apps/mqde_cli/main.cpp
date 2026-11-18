@@ -1,4 +1,4 @@
-// mqde - command line entry point (docs/ARCHITECTURE.md §6.16).
+// mqde - command line entry point (the architecture specification §6.16).
 // stdout carries command output (tables or --json); diagnostics go to stderr.
 
 #include <sys/wait.h>

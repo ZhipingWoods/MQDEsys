@@ -8,7 +8,11 @@
 #   GPU_LAYERS=99 tests/integration/deploy_llamacpp_cpu.sh   # same check with Metal / CUDA offload
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-TOK=${MQDE_TEST_TOKENIZER:-/cache/wuzhiping/hub/Qwen2.5-0.5B-Instruct}
+TOK=${MQDE_TEST_TOKENIZER:-}
+if [[ -z "$TOK" ]]; then
+  echo "set MQDE_TEST_TOKENIZER to an offline tokenizer directory" >&2
+  exit 77
+fi
 WD=$(mktemp -d "${TMPDIR:-/tmp}/mqde-llamacpp-XXXXXX")
 trap 'rm -rf "$WD"' EXIT
 python tests/integration/deploy_llamacpp.py --tokenizer "$TOK" --type q4_k \

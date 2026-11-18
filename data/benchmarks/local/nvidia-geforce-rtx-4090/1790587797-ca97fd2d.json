@@ -14,7 +14,7 @@
       "contextTokens": 157,
       "maxTps": 4.465704616321455,
       "minTps": 4.260499442243802,
-      "model": "/cache/wuzhiping/hub/MiniCPM-RobotManip",
+      "model": "MiniCPM-RobotManip",
       "numRuns": 20,
       "peakMemBytes": 3778429952,
       "quant": "bf16",

@@ -1,4 +1,4 @@
-# Runtime detection configuration (docs/REFERENCES.md A.11).
+# Runtime detection configuration (the reference notes A.11).
 # Paths and ports are user-configurable; detection logic is in cpp/src/fit/installed.cpp.
 
 http_timeout_ms: 400

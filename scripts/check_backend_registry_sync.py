@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Checks that python/mqde/backend/registry.py's registered backend ids and
-data/domains/*.yaml deploy_backends lists stay in sync (T-E).
+data/domains/*.yaml deploy_backends lists stay in sync.
 
 Each backend id that any domain declares in its deploy_backends must be registered in
 BACKEND_REGISTRY; any backend in the registry that no domain declares is a warning, not

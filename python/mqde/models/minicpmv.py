@@ -46,8 +46,8 @@ class HFVLM:
             cfg = {}
         self.family = family_for_model_type(str(cfg.get("model_type", "")))
         self.family_name = str(self.family.get("family", "generic_decoder"))
-        # Off unless asked for (AGENTS.md section 6): it runs the Python files the model directory ships. MiniCPM-V 4.6 is a native
-        # transformers architecture and needs none.
+        # Off unless explicitly requested: this option can execute Python files shipped with a model.
+        # MiniCPM-V 4.6 is a native transformers architecture and needs none.
         self.processor = AutoProcessor.from_pretrained(self.path, trust_remote_code=trust_remote_code)
         self.tokenizer = self.processor.tokenizer
         # Any: the HF stubs reject both `.to(device)` and `generate(**inputs)` on this class

@@ -161,7 +161,7 @@ std::string infer_category(const std::string& pipeline_tag) {
 // collapse to one group ("Qwen2.5") by cutting the repo name (without org) at its first "<digits>[BMK]"
 // size token and keeping everything before it. A name with no such token is its own singleton group.
 // Deterministic string splitting, not ML; imperfect on names that encode size differently is expected and
-// acceptable (documented in docs/TASKS.md T-1303).
+// acceptable for catalogue grouping.
 std::string infer_family_group(const std::string& name) {
   static const std::regex size_token(R"(^\d+(\.\d+)?[BMKbmk]$)");
   const auto slash = name.rfind('/');

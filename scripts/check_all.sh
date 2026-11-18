@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local gate, equivalent to CI (T-0005). Runs every check, reports a summary, exits non-zero if any failed.
+# Local quality gate. Runs available checks, reports a summary, and exits non-zero if any check fails.
 #
 #   scripts/check_all.sh              # everything that is available in this environment
 #   scripts/check_all.sh --fast       # skip the C++ build and the Python test suite

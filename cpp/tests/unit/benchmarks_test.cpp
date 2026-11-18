@@ -39,8 +39,8 @@ Json submission(const std::string& gpu, const std::string& cpu, Json results) {
 
 TEST(benchmarks, canonical_slug_matches_llmfit) {
   EXPECT_EQ(canonical_slug("openbmb/MiniCPM-RobotManip"), "minicpmrobotmanip");
-  EXPECT_EQ(canonical_slug("/cache/wuzhiping/hub/MiniCPM-RobotManip"), "minicpmrobotmanip");
-  EXPECT_EQ(canonical_slug("/cache/wuzhiping/hub/MiniCPM-RobotManip/"), "minicpmrobotmanip");
+  EXPECT_EQ(canonical_slug("MiniCPM-RobotManip"), "minicpmrobotmanip");
+  EXPECT_EQ(canonical_slug("MiniCPM-RobotManip/"), "minicpmrobotmanip");
   EXPECT_EQ(canonical_slug("Qwen3.8-27B_FP8"), "qwen3827bfp8");
 }
 

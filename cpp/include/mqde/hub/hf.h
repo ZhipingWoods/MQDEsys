@@ -1,5 +1,5 @@
 #pragma once
-// Minimal Hugging Face Hub client (docs/REFERENCES.md A.12-A.13, T-0204): model listing, config fetch,
+// Minimal Hugging Face Hub client (the reference notes A.12-A.13, T-0204): model listing, config fetch,
 // repo file listing, safetensors headers over HTTP Range (tensor shapes without downloading weights)
 // and resumable-by-restart file download.
 //

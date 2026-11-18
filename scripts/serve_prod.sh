@@ -1,17 +1,38 @@
 #!/usr/bin/env bash
-# Production mqde serve on 4090 (port 18080). Single source of truth for the flags; see docs/DEVELOPMENT.md section 4.
-set -u
-cd /cache/wuzhiping/MQDEsys
-pkill -x mqde 2>/dev/null; sleep 1
-export MQDE_ENVS_DIR=/cache/wuzhiping/envs            # vllm / sglang / lmeval live here
-export MQDE_LM_EVAL_BIN=/cache/wuzhiping/envs/lmeval/bin/lm_eval
-nohup build/dev/bin/mqde serve \
-  --repo /cache/wuzhiping/MQDEsys \
-  --runs /cache/wuzhiping/MQDEsys/runs \
-  --web /cache/wuzhiping/MQDEsys/web/dist \
-  --python /root/miniconda3/envs/mqde/bin/python \
-  --gpus "${MQDE_GPUS:-4,5,6,7}" \
-  --allow /cache/wuzhiping/hub --allow /cache/wuzhiping/models \
-  --port 18080 > /tmp/mqde_server.log 2>&1 &
+# Start a local MQDEsys service. Every path can be overridden for the target machine.
+set -euo pipefail
+
+MQDE_ROOT="${MQDE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+MQDE_BUILD="${MQDE_BUILD:-$MQDE_ROOT/build/dev}"
+MQDE_RUNS="${MQDE_RUNS:-$MQDE_ROOT/runs}"
+MQDE_WEB="${MQDE_WEB:-$MQDE_ROOT/web/dist}"
+MQDE_PYTHON="${MQDE_PYTHON:-python}"
+MQDE_PORT="${MQDE_PORT:-18080}"
+MQDE_ENVS_DIR="${MQDE_ENVS_DIR:-}"
+MQDE_LM_EVAL_BIN="${MQDE_LM_EVAL_BIN:-}"
+MQDE_ALLOW="${MQDE_ALLOW:-}"
+MQDE_EXTRA_ALLOW="${MQDE_EXTRA_ALLOW:-}"
+
+cd "$MQDE_ROOT"
+pkill -x mqde 2>/dev/null || true
+sleep 1
+
+args=(
+  "$MQDE_BUILD/bin/mqde" serve
+  --repo "$MQDE_ROOT"
+  --runs "$MQDE_RUNS"
+  --web "$MQDE_WEB"
+  --python "$MQDE_PYTHON"
+  --port "$MQDE_PORT"
+)
+
+[[ -n "${MQDE_GPUS:-}" ]] && args+=(--gpus "$MQDE_GPUS")
+[[ -n "$MQDE_ALLOW" ]] && args+=(--allow "$MQDE_ALLOW")
+[[ -n "$MQDE_EXTRA_ALLOW" ]] && args+=(--allow "$MQDE_EXTRA_ALLOW")
+
+[[ -n "$MQDE_ENVS_DIR" ]] && export MQDE_ENVS_DIR
+[[ -n "$MQDE_LM_EVAL_BIN" ]] && export MQDE_LM_EVAL_BIN
+
+nohup "${args[@]}" > "${MQDE_LOG:-/tmp/mqde-server.log}" 2>&1 &
 sleep 5
-curl -s http://127.0.0.1:18080/api/v1/health; echo
+curl -fsS "http://127.0.0.1:${MQDE_PORT}/api/v1/health"; echo

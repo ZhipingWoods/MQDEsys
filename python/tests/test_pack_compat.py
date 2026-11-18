@@ -29,7 +29,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def _ggml() -> ctypes.CDLL | None:
-    cands = [os.environ.get("MQDE_GGML_LIB", ""), *sorted(glob.glob("/cache/wuzhiping/llama.cpp*/build*/bin/libggml-base.so"))]
+    cands = [os.environ.get("MQDE_GGML_LIB", "")]
     for c in cands:
         if c and Path(c).is_file():
             return ctypes.CDLL(c)
@@ -95,7 +95,7 @@ def test_gguf_file_readable_by_gguf_py(t: str, tmp_path: Path) -> None:
 
 def test_gguf_dequant_real_file() -> None:
     gguf = pytest.importorskip("gguf")
-    files = glob.glob("/cache/wuzhiping/hub/*GGUF*/*.gguf")
+    files = glob.glob(os.environ.get("MQDE_TEST_GGUF_GLOB", ""))
     if not files:
         pytest.skip("no local GGUF file")
     r = gguf.GGUFReader(files[0])

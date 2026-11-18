@@ -1,5 +1,5 @@
 #pragma once
-// HF model catalog (docs/REFERENCES.md A.12; llmfit hf_models.json).
+// HF model catalog (the reference notes A.12; llmfit hf_models.json).
 // Lives in data/models/catalog.json. Each entry keeps the config.json fields the estimator needs,
 // so catalog models can be evaluated by /fit without downloading weights.
 

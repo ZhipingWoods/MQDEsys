@@ -1,5 +1,13 @@
 # internal planning and hand-off notes (not part of the public distribution)
 internal/
+AGENTS.md
+.claude/
+docs/ARCHITECTURE.md
+docs/DEVELOPMENT.md
+docs/REFERENCES.md
+docs/STRUCTURE.md
+docs/adr/
+docs/guides/
 
 # build
 build/

@@ -1,5 +1,5 @@
 #pragma once
-// mqde-server: REST API + Server-Sent Events over cpp-httplib (docs/ARCHITECTURE.md §6.14).
+// mqde-server: REST API + Server-Sent Events over cpp-httplib (the architecture specification §6.14).
 // The filesystem (runs/<job_id>/{job.yaml, events.jsonl, report.json}) is the source of truth for
 // jobs, so the server is restartable and the CLI and server see the same jobs.
 

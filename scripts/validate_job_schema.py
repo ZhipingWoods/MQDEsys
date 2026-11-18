@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validates examples/jobs/*.yaml against schemas/job_spec.schema.json (T-1305, T-0007's documented method).
+"""Validates examples/jobs/*.yaml against schemas/job_spec.schema.json.
 
 This checks structural correctness only (types, the handful of truly required fields); it is not a
 substitute for mqde::planner::validate_jobspec, which checks things (recipe/algorithm names, calibration
