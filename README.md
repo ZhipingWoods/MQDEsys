@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus" alt="C++20">
   <img src="https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB?logo=python" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react" alt="React 18">
-  <img src="https://img.shields.io/badge/License-MQDEsys%20Covenant-6C5CE7" alt="MQDEsys License">
+  <img src="https://img.shields.io/badge/License-Apache%202.0-6C5CE7" alt="Apache License 2.0">
   <a href="docs/site/en/index.md"><img src="https://img.shields.io/badge/Docs-English-1D5EFF" alt="English docs"></a>
 </p>
 
@@ -168,8 +168,5 @@ These projects live under `3rdpart/` as git submodules; their source is not dist
 
 ## License
 
-MQDEsys uses the MIT terms together with an additional commercial contribution
-covenant. Commercial users must allocate 20% of attributable gross revenue to
-the project; 40% of that contribution is distributed among recognized
-contributors and 60% funds project maintenance and development. See
+MQDEsys is licensed under the Apache License, Version 2.0. See
 [LICENSE](LICENSE) for the complete terms.
